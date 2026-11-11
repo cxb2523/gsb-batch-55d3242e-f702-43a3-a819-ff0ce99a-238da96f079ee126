@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 from enum import Enum
 from threading import BoundedSemaphore
 from time import time
@@ -58,8 +58,37 @@ def _alert_signed_message(
     return timestamp.encode('utf-8') + b'.' + body
 
 
+SigningSecrets = Union[str, Tuple[str, ...], List[str]]
+
+
+def _normalize_signing_secrets(signing_secrets: SigningSecrets) -> Tuple[str, ...]:
+    """
+    Normalize the configured secrets to a non-empty tuple.
+
+    A bare string is one secret, not an iterable of single-character keys. A
+    tuple or list holds the secrets of a rotation: Scrapfly signs with either
+    the old or the new key while they are both listed in the dashboard, so both
+    have to be accepted until the old one is retired.
+    """
+    if not signing_secrets:
+        raise ValueError('create_server requires the webhook signing secret(s) from your Scrapfly dashboard')
+
+    if isinstance(signing_secrets, str):
+        return (signing_secrets,)
+
+    try:
+        secrets = tuple(signing_secrets)
+    except TypeError:
+        raise ValueError('signing_secrets must be a string or a tuple/list of strings')
+
+    if not secrets:
+        raise ValueError('create_server requires the webhook signing secret(s) from your Scrapfly dashboard')
+
+    return secrets
+
+
 def create_server(
-    signing_secrets: Union[str, Tuple[str, ...]],
+    signing_secrets: SigningSecrets,
     callback: Callable,
     app: Optional['flask.Flask'] = None,
     max_body_size: int = MAX_DECOMPRESSED_SIZE,
@@ -72,15 +101,16 @@ def create_server(
     Every request must be signed. A body with no `X-Scrapfly-Webhook-Signature`
     is answered with 401 rather than delivered.
 
-    :param signing_secrets: signing secret(s) from your webhook settings.
+    :param signing_secrets: signing secret(s) from your webhook settings: one string,
+        or a tuple/list of strings. During a key rotation both the old and the new
+        secret are listed in the dashboard; a request signed with either is accepted.
     :param callback: receives the verified body, its resource type, and the request.
     :param app: optional Flask app to mount the route on.
     :param max_body_size: reject bodies larger than this, before and after decompression.
     :param max_concurrent_decodes: bodies decoded at once. A body is decoded before its
         signature is checked, so each can cost max_body_size to any sender.
     """
-    if not signing_secrets:
-        raise ValueError('create_server requires the webhook signing secret(s) from your Scrapfly dashboard')
+    signing_secrets = _normalize_signing_secrets(signing_secrets)
 
     try:
         import flask

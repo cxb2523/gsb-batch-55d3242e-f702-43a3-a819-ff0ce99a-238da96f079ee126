@@ -443,7 +443,7 @@ _DISPATCH = {
 
 def webhook_from_payload(
     payload: Optional[Dict[str, Any]] = None,
-    signing_secrets: Optional[Tuple[str, ...]] = None,
+    signing_secrets: Optional[Union[str, Tuple[str, ...], List[str]]] = None,
     signature: Optional[str] = None,
     raw_body: Optional[bytes] = None,
     content_encoding: Optional[str] = None,
@@ -462,9 +462,11 @@ def webhook_from_payload(
             the envelope is then re-read from the verified bytes instead —
             returning an object built from an unverified dict would make the
             verification decorative.
-        signing_secrets: Optional tuple of signing secrets for signature
-            verification. Pass each secret as it appears in the webhook
-            dashboard (UTF-8 string, not hex-encoded).
+        signing_secrets: Optional signing secret(s) for signature
+            verification: one string, or a tuple/list of strings (for example
+            the old and new keys while a rotation is in progress). Pass each
+            secret as it appears in the webhook dashboard (UTF-8 string, not
+            hex-encoded).
         signature: Optional webhook signature header value
             (``X-Scrapfly-Webhook-Signature``).
         raw_body: The exact request bytes (``request.get_data()``). Required

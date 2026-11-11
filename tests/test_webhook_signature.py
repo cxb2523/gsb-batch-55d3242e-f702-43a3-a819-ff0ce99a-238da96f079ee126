@@ -353,7 +353,7 @@ def test_create_server_refuses_to_run_unverified():
     """A falsy secret must not silently degrade to an unauthenticated endpoint."""
     pytest.importorskip('flask')
 
-    for secrets in ((), None, ''):
+    for secrets in ((), [], None, ''):
         with pytest.raises(ValueError):
             create_server(signing_secrets=secrets, callback=lambda *args: None)
 
@@ -463,3 +463,157 @@ def test_alert_replay_or_garbage_timestamp_is_rejected(alert_client, timestamp):
     body = wire(ALERT_BODY)
 
     assert alert_client(alert_headers(timestamp, body), body) == (401, False)
+
+
+# --- Signing-key rotation -------------------------------------------------
+#
+# The dashboard lists the old and the new secret together during a rotation,
+# and Scrapfly may sign with either. Accepting both must not relax any of the
+# checks that apply to a single secret.
+
+OLD_SECRET = 'retiring-signing-secret'
+NEW_SECRET = 'current-signing-secret'
+
+
+def sign_with(secret: str, body: bytes) -> str:
+    return hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest().upper()
+
+
+@pytest.fixture(params=[(OLD_SECRET, NEW_SECRET), [OLD_SECRET, NEW_SECRET]])
+def rotation_client(request):
+    """A server configured with both keys, passed as a tuple or as a list."""
+    pytest.importorskip('flask')
+
+    received = []
+    app = create_server(signing_secrets=request.param, callback=lambda data, kind, req: received.append(data))
+
+    def post(body: bytes, secret: str = OLD_SECRET, resource_type: str = 'scrape', signature: str = 'auto'):
+        headers = {'X-Scrapfly-Webhook-Resource-Type': resource_type, 'Content-Type': 'application/json'}
+
+        if signature == 'auto':
+            headers['X-Scrapfly-Webhook-Signature'] = sign_with(secret, body)
+        elif signature is not None:
+            headers['X-Scrapfly-Webhook-Signature'] = signature
+
+        before = len(received)
+        response = app.test_client().post('/webhook', data=body, headers=headers)
+
+        return response.status_code, len(received) > before
+
+    return post
+
+
+@pytest.mark.parametrize('secret', [OLD_SECRET, NEW_SECRET])
+def test_rotation_accepts_a_signature_from_either_secret(rotation_client, secret):
+    """Both keys are live during the switch-over, whichever one signed."""
+    assert rotation_client(wire({'result': {'content': 'legit'}}), secret) == (200, True)
+
+
+def test_rotation_rejects_a_signature_from_none_of_the_secrets(rotation_client):
+    """A set of keys must stay a set of exact keys, not become a wildcard."""
+    assert rotation_client(wire({'result': {'content': 'forged'}}), 'not-a-configured-secret') == (401, False)
+
+
+def test_rotation_still_requires_a_signature(rotation_client):
+    """Additional keys do not make an unsigned body acceptable."""
+    assert rotation_client(wire({'result': {'content': 'forged'}}), signature=None) == (401, False)
+
+
+def test_a_bare_string_is_accepted_as_a_single_secret():
+    """The backwards-compatible case: one secret, not one key per character."""
+    pytest.importorskip('flask')
+
+    body = wire({'result': {'content': 'legit'}})
+    received = []
+    app = create_server(signing_secrets=OLD_SECRET, callback=lambda data, kind, req: received.append(data))
+    headers = {'X-Scrapfly-Webhook-Resource-Type': 'scrape', 'Content-Type': 'application/json',
+               'X-Scrapfly-Webhook-Signature': sign_with(OLD_SECRET, body)}
+
+    assert app.test_client().post('/webhook', data=body, headers=headers).status_code == 200
+    assert len(received) == 1
+
+
+@pytest.fixture(params=[(OLD_SECRET, NEW_SECRET), [OLD_SECRET, NEW_SECRET]])
+def rotating_alert_client(request):
+    pytest.importorskip('flask')
+
+    received = []
+    app = create_server(signing_secrets=request.param, callback=lambda data, kind, req: received.append(data))
+
+    def post(timestamp, body: bytes, secret: str = OLD_SECRET, sign_body_alone: bool = False):
+        message = body if sign_body_alone else ('%s.' % timestamp).encode('utf-8') + body
+        headers = {
+            'X-Scrapfly-Webhook-Resource-Type': 'alert',
+            'Content-Type': 'application/json',
+            'X-Scrapfly-Webhook-Timestamp': str(timestamp),
+            'X-Scrapfly-Webhook-Signature': sign_with(secret, message),
+        }
+
+        before = len(received)
+        response = app.test_client().post('/webhook', data=body, headers=headers)
+
+        return response.status_code, len(received) > before
+
+    return post
+
+
+@pytest.mark.parametrize('secret', [OLD_SECRET, NEW_SECRET])
+def test_alert_accepts_a_fresh_delivery_signed_by_either_key(rotating_alert_client, secret):
+    body = wire(ALERT_BODY)
+
+    assert rotating_alert_client(int(time.time()), body, secret) == (200, True)
+
+
+def test_alert_with_the_old_key_but_a_stale_timestamp_is_still_rejected(rotating_alert_client):
+    """Rotation widens which key matches, never the replay window."""
+    body = wire(ALERT_BODY)
+
+    assert rotating_alert_client(0, body, OLD_SECRET) == (401, False)
+
+
+def test_alert_signed_by_the_old_key_over_the_body_alone_is_rejected(rotating_alert_client):
+    """The alert message is still `<timestamp>.<body>`, whichever key signed it."""
+    body = wire(ALERT_BODY)
+
+    assert rotating_alert_client(int(time.time()), body, OLD_SECRET, sign_body_alone=True) == (401, False)
+
+
+@pytest.mark.parametrize('outcome', ['success', 'mis-signed', 'undecodable'])
+def test_decode_slot_is_released_after_every_outcome(monkeypatch, outcome):
+    """
+    One decode slot, so a leak serializes every later delivery: the request that
+    follows would wait DECODE_WAIT_SECONDS and get a 503 instead of a 200.
+    """
+    pytest.importorskip('flask')
+    from scrapfly import webhook
+
+    monkeypatch.setattr(webhook, 'DECODE_WAIT_SECONDS', 0.1)
+
+    body = wire({'result': {'content': 'legit'}})
+    received = []
+    app = create_server(
+        signing_secrets=[OLD_SECRET, NEW_SECRET],
+        callback=lambda data, kind, req: received.append(data),
+        max_concurrent_decodes=1,
+    )
+
+    first_headers = {'X-Scrapfly-Webhook-Resource-Type': 'scrape', 'Content-Type': 'application/json'}
+
+    if outcome == 'success':
+        first_headers['X-Scrapfly-Webhook-Signature'] = sign_with(NEW_SECRET, body)
+        expected_first, first_body = 200, body
+    elif outcome == 'mis-signed':
+        first_headers['X-Scrapfly-Webhook-Signature'] = 'DEAD'
+        expected_first, first_body = 401, body
+    else:
+        first_headers['Content-Encoding'] = 'gzip'
+        first_headers['X-Scrapfly-Webhook-Signature'] = 'DEAD'
+        expected_first, first_body = 400, b'not-gzip-at-all'
+
+    assert app.test_client().post('/webhook', data=first_body, headers=first_headers).status_code == expected_first
+    assert len(received) == (1 if outcome == 'success' else 0)
+
+    second_headers = {'X-Scrapfly-Webhook-Resource-Type': 'scrape', 'Content-Type': 'application/json',
+                      'X-Scrapfly-Webhook-Signature': sign_with(OLD_SECRET, body)}
+    assert app.test_client().post('/webhook', data=body, headers=second_headers).status_code == 200
+    assert len(received) == (2 if outcome == 'success' else 1)
