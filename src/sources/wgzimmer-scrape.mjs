@@ -73,11 +73,13 @@ async function fetchResultsPage(maxPrice, region, page) {
 /** Every listing in the region up to maxPrice. */
 export async function scrapeWgzimmer(maxPrice, region = "zuerich") {
   const byUrl = new Map();
-  let lastPage = 1;
-  for (let page = 1; page <= Math.min(lastPage, MAX_PAGES); page++) {
-    if (page > 1) await delay(REQUEST_DELAY_MS);
+  // The first page also tells us how many pages there are.
+  const first = await fetchResultsPage(maxPrice, region, 1);
+  for (const listing of first.listings) byUrl.set(listing.url, listing);
+  const lastPage = Math.min(first.lastPage, MAX_PAGES);
+  for (let page = 2; page <= lastPage; page++) {
+    await delay(REQUEST_DELAY_MS);
     const result = await fetchResultsPage(maxPrice, region, page);
-    lastPage = Math.max(lastPage, result.lastPage);
     for (const listing of result.listings) byUrl.set(listing.url, listing);
   }
   return [...byUrl.values()];

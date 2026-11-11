@@ -73,38 +73,50 @@ async function scanFlatfox() {
     console.log(`flatfox details unavailable (${e.message})`);
   }
   fs.writeFileSync(FLATFOX_CACHE_FILE, JSON.stringify(pins, null, 2));
-  return pins.map((p) => ({ id: `flatfox-${p.pk}`, price: p.price_display }));
+  // The pin API already applies max_price, so every pin counts.
+  return {
+    fetched: pins.length,
+    listings: pins.map((p) => ({ id: `flatfox-${p.pk}`, price: p.price_display })),
+  };
 }
 
 async function scanWgzimmer() {
   const listings = await scrapeWgzimmer(MAX_PRICE);
-  if (listings.length === 0) throw new Error("0 listings returned");
   fs.writeFileSync(WGZIMMER_LISTINGS_FILE, JSON.stringify(listings, null, 2));
-  return listings
-    .filter((l) => l.price && l.price <= MAX_PRICE)
-    .map((l) => ({
-      id: `wgzimmer-${l.url.match(/([a-f0-9-]{36})/)?.[1] || l.url.slice(-30)}`,
-      price: l.price,
-    }));
+  return {
+    fetched: listings.length,
+    listings: listings
+      .filter((l) => l.price && l.price <= MAX_PRICE)
+      .map((l) => ({
+        id: `wgzimmer-${l.url.match(/([a-f0-9-]{36})/)?.[1] || l.url.slice(-30)}`,
+        price: l.price,
+      })),
+  };
 }
 
 async function scanRonorp() {
   const listings = await scrapeRonorp();
   fs.writeFileSync(RONORP_CACHE_FILE, JSON.stringify(listings, null, 2));
-  return listings
-    .filter((l) => l.price && l.price <= MAX_PRICE)
-    .map((l) => ({ id: `ronorp-${l.url.split("/").pop()}`, price: l.price }));
+  return {
+    fetched: listings.length,
+    listings: listings
+      .filter((l) => l.price && l.price <= MAX_PRICE)
+      .map((l) => ({ id: `ronorp-${l.url.split("/").pop()}`, price: l.price })),
+  };
 }
 
 async function scanStudents() {
   const listings = await scrapeStudents();
   fs.writeFileSync(STUDENTS_CACHE_FILE, JSON.stringify(listings, null, 2));
-  return listings
-    .filter((l) => l.price && l.price <= MAX_PRICE)
-    .map((l) => ({
-      id: `students-${l.url.match(/details\/(\d+)/)[1]}`,
-      price: l.price,
-    }));
+  return {
+    fetched: listings.length,
+    listings: listings
+      .filter((l) => l.price && l.price <= MAX_PRICE)
+      .map((l) => ({
+        id: `students-${l.url.match(/details\/(\d+)/)[1]}`,
+        price: l.price,
+      })),
+  };
 }
 
 const SOURCES = {
@@ -114,24 +126,43 @@ const SOURCES = {
   students: scanStudents,
 };
 
-/** Scan every source and return the scan status that was written. */
-export async function scan() {
+/**
+ * Scan every source and return the scan status that was written.
+ * Each source gets a reviewable status: "ok", "error" (the request failed),
+ * "empty" (nothing was parsed) or "filtered" (everything was over the price
+ * limit). A failing source never stops the others, and only listings that
+ * were actually counted are recorded in seen.json.
+ */
+export async function scan(sources = SOURCES) {
   ensureDataDir();
-  const sources = {};
+  const sourceStatus = {};
   const found = [];
-  for (const [name, scanSource] of Object.entries(SOURCES)) {
+  for (const [name, scanSource] of Object.entries(sources)) {
     try {
-      const listings = await scanSource();
-      console.log(`${name}: ${listings.length} listings`);
+      const { fetched, listings } = await scanSource();
       found.push(...listings);
-      sources[name] = { ok: true, count: listings.length };
+      const status =
+        fetched === 0 ? "empty" : listings.length === 0 ? "filtered" : "ok";
+      sourceStatus[name] = {
+        ok: status === "ok",
+        status,
+        fetched,
+        count: listings.length,
+      };
+      console.log(
+        `${name}: ${status} (${listings.length}/${fetched} listings counted)`,
+      );
     } catch (e) {
       console.log(`${name}: ${e.message}`);
-      sources[name] = { ok: false, error: e.message.split("\n")[0] };
+      sourceStatus[name] = {
+        ok: false,
+        status: "error",
+        error: e.message.split("\n")[0],
+      };
     }
   }
 
-  const status = { finishedAt: new Date().toISOString(), sources };
+  const status = { finishedAt: new Date().toISOString(), sources: sourceStatus };
   fs.writeFileSync(SCAN_STATUS_FILE, JSON.stringify(status, null, 2));
 
   const seen = loadSeen();

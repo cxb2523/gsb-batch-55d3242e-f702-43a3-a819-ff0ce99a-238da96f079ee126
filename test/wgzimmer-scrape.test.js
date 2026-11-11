@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseResultRow,
   parseResultsPage,
+  scrapeWgzimmer,
 } from "../src/sources/wgzimmer-scrape.mjs";
 
 const row = ({ id, title, rent, meta, badges = [] }) => `
@@ -73,4 +74,56 @@ test("a page without results has one page and no listings", () => {
 
 test("a row without an ad id is skipped", () => {
   assert.equal(parseResultRow("<div>advert</div>"), null);
+});
+
+const page = (rows, links = "") => `<ul class="results">${rows}</ul><nav>${links}</nav>`;
+
+const PAGE_ONE = page(
+  row({
+    id: "aaaaaaaa-1111-4111-8111-111111111111",
+    title: "8050 Zürich",
+    rent: "CHF 1190 per month",
+    meta: "Available now",
+  }),
+  '<a href="?seite=2#sortierung">2</a>',
+);
+
+// Page two repeats one listing from page one and adds a new one.
+const PAGE_TWO = page(
+  row({
+    id: "aaaaaaaa-1111-4111-8111-111111111111",
+    title: "8050 Zürich",
+    rent: "CHF 1190 per month",
+    meta: "Available now",
+  }) +
+    row({
+      id: "cccccccc-3333-4333-8333-333333333333",
+      title: "8004 Zürich",
+      rent: "CHF 980 per month",
+      meta: "Available from 1.12.2026",
+    }),
+);
+
+test("scrapeWgzimmer follows the pages and dedupes by url", async () => {
+  const realFetch = globalThis.fetch;
+  const requested = [];
+  globalThis.fetch = async (url) => {
+    const seite = new URL(url).searchParams.get("seite") || "1";
+    requested.push(seite);
+    const body = seite === "1" ? PAGE_ONE : PAGE_TWO;
+    return { ok: true, text: async () => body };
+  };
+  try {
+    const listings = await scrapeWgzimmer(3000);
+    assert.deepEqual(requested, ["1", "2"]);
+    assert.deepEqual(
+      listings.map((l) => l.url),
+      [
+        "https://www.wgzimmer.ch/wglink/en/aaaaaaaa-1111-4111-8111-111111111111/",
+        "https://www.wgzimmer.ch/wglink/en/cccccccc-3333-4333-8333-333333333333/",
+      ],
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
