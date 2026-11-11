@@ -86,6 +86,16 @@ export class OutputRouter {
     return outputs
   }
 
+  /**
+   * Read-only diagnostic: true while the master output is routed through
+   * the selectable media element (a named device), false while it goes
+   * straight to the AudioContext destination. It only reads state and
+   * never selects, pauses, or plays a device.
+   */
+  get isMasterMediaElementRoute(): boolean {
+    return this.masterRoute === 'media-element'
+  }
+
   async setMasterDevice(deviceId: string): Promise<void> {
     const operationId = ++this.masterRouteOperationId
 

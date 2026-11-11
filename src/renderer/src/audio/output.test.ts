@@ -126,4 +126,49 @@ describe('OutputRouter', () => {
 
     expect(masterInput.connections).toEqual([destination])
   })
+
+  it('reports the current master route without touching the device', async () => {
+    const { context } = createContext()
+    const router = new OutputRouter(context)
+    const [masterAudio] = getAudioElements()
+
+    expect(router.isMasterMediaElementRoute).toBe(false)
+
+    await router.setMasterDevice('default')
+    expect(router.isMasterMediaElementRoute).toBe(false)
+
+    await router.setMasterDevice('external-speakers')
+    expect(router.isMasterMediaElementRoute).toBe(true)
+
+    masterAudio.setSinkId.mockClear()
+    masterAudio.play.mockClear()
+    masterAudio.pause.mockClear()
+
+    expect(router.isMasterMediaElementRoute).toBe(true)
+    expect(masterAudio.setSinkId).not.toHaveBeenCalled()
+    expect(masterAudio.play).not.toHaveBeenCalled()
+    expect(masterAudio.pause).not.toHaveBeenCalled()
+
+    await router.setMasterDevice('default')
+    expect(router.isMasterMediaElementRoute).toBe(false)
+    expect(masterAudio.setSinkId).not.toHaveBeenCalled()
+  })
+
+  it('keeps the previous route when a master device switch fails', async () => {
+    const { context, destination, mediaDestinations } = createContext()
+    const router = new OutputRouter(context)
+    const masterInput = router.masterInput as unknown as FakeNode
+    const [masterAudio] = getAudioElements()
+
+    expect(router.isMasterMediaElementRoute).toBe(false)
+    expect(masterInput.connections).toEqual([destination])
+
+    masterAudio.setSinkId.mockRejectedValueOnce(new Error('device unavailable'))
+
+    await expect(router.setMasterDevice('missing-speakers')).rejects.toThrow('device unavailable')
+
+    expect(router.isMasterMediaElementRoute).toBe(false)
+    expect(masterInput.connections).toEqual([destination])
+    expect(masterInput.connections).not.toContain(mediaDestinations[0])
+  })
 })

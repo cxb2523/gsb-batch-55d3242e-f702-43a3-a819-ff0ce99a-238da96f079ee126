@@ -28,6 +28,9 @@ export class Mixer {
   // output router, so output-device switches never touch it.
   private readonly recordBus: GainNode
   private readonly recordDestination: MediaStreamAudioDestinationNode
+  // Capture the stream once so output-device changes can never cause callers
+  // (the recorder) to observe a rebuilt or interrupted recording stream.
+  private readonly recordStreamValue: MediaStream
 
   private readonly channelACrossfadeGain: GainNode
   private readonly channelBCrossfadeGain: GainNode
@@ -59,6 +62,7 @@ export class Mixer {
     this.cueOutputGain = context.createGain()
     this.recordBus = context.createGain()
     this.recordDestination = context.createMediaStreamDestination()
+    this.recordStreamValue = this.recordDestination.stream
 
     this.configureAnalyser(this.channelAAnalyser)
     this.configureAnalyser(this.channelBAnalyser)
@@ -94,7 +98,7 @@ export class Mixer {
   }
 
   get recordStream(): MediaStream {
-    return this.recordDestination.stream
+    return this.recordStreamValue
   }
 
   setCrossfade(x: number): void {
