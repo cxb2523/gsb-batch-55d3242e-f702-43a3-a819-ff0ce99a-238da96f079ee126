@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@trawl/types": ["../../packages/types/src/index.ts"],
+      "@trawl/browser": ["../../packages/browser/src/index.ts"],
+      "@trawl/tiers": ["../../packages/tiers/src/index.ts"]
+    }
+  },
+  "include": ["src", "../../packages/types/src", "../../packages/browser/src", "../../packages/tiers/src"]
+}

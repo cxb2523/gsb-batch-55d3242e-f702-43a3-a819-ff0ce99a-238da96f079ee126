@@ -1,0 +1,25 @@
+{
+  "private": true,
+  "name": "trawl",
+  "version": "1.11.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "bun --cwd apps/api dev",
+    "dev:web": "bun --cwd apps/web dev",
+    "dev:docs": "bun --cwd apps/docs dev",
+    "lint": "biome lint .",
+    "format": "biome format . --write",
+    "check": "biome check .",
+    "fix": "biome check . --write",
+    "typecheck": "bun --filter '*' typecheck",
+    "test": "bun test",
+    "build": "bun --cwd packages/client build && bun --cwd apps/web build && bun --cwd apps/docs build",
+    "verify": "bun run check && bun run typecheck && bun run test && bun run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6"
+  }
+}

@@ -1,0 +1,3 @@
+# Application runtime logs
+logs/
+*.log

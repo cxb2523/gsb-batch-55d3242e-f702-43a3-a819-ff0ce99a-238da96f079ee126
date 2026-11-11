@@ -1,0 +1,176 @@
+name: Publish Baseline
+
+# Builds the `:baseline` (or versioned `*-baseline`) tag of `ghcr.io/.../trawl`
+# from `apps/api/Dockerfile.baseline` (Bun baseline runtime - pre-2013-CPU
+# compatible). Same GHCR package as `:latest`, just a different tag.
+#
+# Triggers:
+#   - workflow_dispatch: run manually from any branch; pick a tag via the input
+#     (default: "baseline") e.g. "baseline", "1.0.0-baseline"
+#   - push of `v*` tags (e.g., `v1.0.1`) -> docker tag derived as `1.0.1-baseline`.
+#     publish.yml handles `:1.0.1`/`:latest` for the same push (it excludes
+#     `v*-baseline` so this workflow owns the baseline half of every release).
+#     This workflow also moves the rolling `:baseline` pointer.
+#   - push of `v*-baseline` or `*-baseline` tags (e.g., `v1.0.1-baseline`,
+#     `1.0.1-baseline`) -> docker tag mirrors the git tag (v stripped).
+#     publish.yml explicitly excludes `v*-baseline` so a baseline-only release
+#     does not also push `:X.Y.Z` or `:latest`. Rolling `:baseline` is moved.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Docker tag to push (e.g. "baseline", "1.0.0-baseline")'
+        required: false
+        default: "baseline"
+  push:
+    tags:
+      - "v*"
+      - "*-baseline"
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/trawl
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      resource_tests: true
+
+  build:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Normalize GHCR image name
+        shell: bash
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/trawl" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Sanitize platform name
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          file: apps/api/Dockerfile.baseline
+          platforms: ${{ matrix.platform }}
+          push: true
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.title=trawl (baseline)
+            org.opencontainers.image.description=TRAWL API on Bun baseline runtime (pre-AVX2 compatible)
+          cache-from: type=gha,scope=trawl-baseline-${{ matrix.platform }}
+          cache-to: type=gha,scope=trawl-baseline-${{ matrix.platform }},mode=max
+          secrets: |
+            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-baseline-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Normalize GHCR image name
+        shell: bash
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/trawl" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-baseline-*
+          merge-multiple: true
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Compute tags
+        id: tags
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            REF="${GITHUB_REF_NAME}"
+            if [[ "${REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              # Versioned release tag (e.g., v1.0.1) -> derive `1.0.1-baseline`.
+              # publish.yml handles `:1.0.1`/`:latest` for the same push.
+              TAG="${REF#v}-baseline"
+            elif [[ "${REF}" =~ ^v.*-baseline$ ]]; then
+              # v-prefixed baseline tag (e.g., v1.0.1-baseline) -> strip the `v`,
+              # use the bare form. This is a baseline-only release: push ONLY
+              # `:X.Y.Z-baseline` + `:baseline`, never `:X.Y.Z`/`:latest`
+              # (publish.yml explicitly excludes `v*-baseline` so it never fires
+              # for this case, leaving the baseline path exclusive to this workflow).
+              TAG="${REF#v}"
+            else
+              # Bare baseline tag push (e.g., `1.0.1-baseline`) -> use as-is
+              TAG="${REF}"
+            fi
+          else
+            TAG="${{ inputs.tag }}"
+          fi
+          # Safety: baseline workflow must never push :latest
+          if [[ "${TAG}" == "latest" ]]; then
+            echo "::error::Baseline workflow must not push :latest - use publish.yml instead"
+            exit 1
+          fi
+          # Build the -t args. Every baseline build also moves the rolling :baseline
+          # pointer (mirrors how main pushes move :nightly) - unless the computed tag
+          # already IS "baseline" (manual dispatch default), in which case dedupe.
+          TAGS="-t ${IMAGE}:${TAG}"
+          if [[ "${TAG}" != "baseline" ]]; then
+            TAGS="${TAGS} -t ${IMAGE}:baseline"
+          fi
+          echo "versioned=${IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            ${{ steps.tags.outputs.tags }} \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect ${{ steps.tags.outputs.versioned }}

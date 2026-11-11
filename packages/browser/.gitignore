@@ -1,0 +1,4 @@
+# Playwright / Patchright downloaded browser binaries (installed via bunx patchright install)
+.local-chromium/
+.local-firefox/
+.local-webkit/

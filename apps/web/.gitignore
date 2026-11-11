@@ -1,0 +1,5 @@
+# Nuxt 4 server-side data and KV storage
+.data/
+
+# Nuxt creates a dist -> .output/public symlink; root dist/ only matches directories
+dist

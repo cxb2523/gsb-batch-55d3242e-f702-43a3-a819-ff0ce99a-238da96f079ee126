@@ -1,0 +1,3 @@
+# VitePress build cache and output (config.ts lives here too, so don't ignore .vitepress entirely)
+.vitepress/cache/
+.vitepress/dist/

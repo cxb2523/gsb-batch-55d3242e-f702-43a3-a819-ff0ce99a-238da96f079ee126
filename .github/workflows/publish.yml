@@ -1,0 +1,167 @@
+name: Publish
+
+# Builds `:X.Y.Z` and `:latest` tags of `ghcr.io/.../trawl` from
+# `apps/api/Dockerfile` on `v*` release tag pushes. The `v` prefix is stripped
+# per Docker convention (git tag `v1.0.0` -> docker tag `1.0.0`); `:latest`
+# auto-attaches via the default `latest=auto` flavor of `type=semver`.
+#
+# Compact release images omit the optional Windows/macOS font bundles and use
+# Linux fingerprints only. Users who need the complete fingerprint pool can
+# build it explicitly with `CAMOUFOX_KEEP_SPOOFED_OS_FONTS=1`.
+#
+# Lives separately from publish-nightly.yml (dev branch pushes) and
+# publish-baseline.yml (baseline runtime pushes). `v*-baseline` is
+# intentionally excluded so a baseline-only release doesn't also push
+# `:X.Y.Z`/`:latest` - publish-baseline.yml owns that path.
+#
+# Tag contract:
+#   - push `v*` -> :X.Y.Z + :latest
+#   - push `v*-baseline` -> nothing here (excluded)
+#   - branch pushes -> nothing here
+
+on:
+  push:
+    tags:
+      # Release tags - pure semver only. `v*-baseline` is intentionally excluded
+      # so a baseline-only release (e.g., `v1.0.0-baseline`) does NOT push `:X.Y.Z`
+      # or `:latest` from this workflow; publish-baseline.yml owns that path.
+      - "v*"
+      - "!v*-baseline"
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/trawl
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      resource_tests: true
+
+  build:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Normalize GHCR image name
+        shell: bash
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/trawl" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Sanitize platform name
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true
+          cache-from: type=gha,scope=trawl-release-default-${{ matrix.platform }}
+          cache-to: type=gha,scope=trawl-release-default-${{ matrix.platform }},mode=max
+          secrets: |
+            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-release-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Normalize GHCR image name
+        shell: bash
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/trawl" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-release-*
+          merge-multiple: true
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            # Versioned release tag: git tag v1.0.0 → docker tag 1.0.0 (strips the v prefix,
+            # per Docker convention; type=ref would mirror the v through). type=semver also
+            # auto-attaches :latest via the default latest=auto flavor.
+            type=semver,pattern={{version}}
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=("-t" "$tag")
+          done
+
+          sources=()
+          for digest in *; do
+            sources+=("${{ env.IMAGE }}@sha256:$digest")
+          done
+
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+
+      - name: Inspect manifest
+        run: |
+          # Pull the first tag actually pushed by docker/metadata-action in the previous
+          # step. DOCKER_METADATA_OUTPUT_JSON.tags[] is already fully-qualified
+          # ("ghcr.io/germondai/trawl:1.0.0" / ":latest") so no $IMAGE prefix needed.
+          tag=$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools inspect "$tag"

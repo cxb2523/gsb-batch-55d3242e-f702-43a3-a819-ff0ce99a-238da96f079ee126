@@ -1,0 +1,36 @@
+**/node_modules
+**/.nuxt
+**/.output
+**/.vitepress/dist
+**/.vitepress/cache
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+**/*.md
+!apps/docs/**/*.md
+.github/
+docker-compose*.yml
+native/*/target/
+
+# Local agent / IDE state - not needed at build or runtime
+.git/
+.claude/
+.gitignore
+.gitattributes
+.editorconfig
+.idea/
+.vscode/
+.dockerignore
+
+# Shared fallback for every image. Web/docs sources must remain available when
+# deployment tools relocate Dockerfiles and do not use Dockerfile.dockerignore.
+# Per-Dockerfile ignore files can narrow the context for normal local builds.
+
+# Local scripts used for human-in-the-loop testing (e2e probe, soak test); not used in image.
+scripts/
+
+# Test sources are mounted read-only for smoke tests; exclude them from shipped images.
+**/*.test.ts
+**/__tests__/
+**/tests/

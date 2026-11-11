@@ -1,0 +1,119 @@
+import { defineConfig } from "vitepress"
+
+export default defineConfig({
+  title: "TRAWL",
+  description:
+    "Self-hosted Scraping-as-a-Service - FlareSolverr drop-in with a persistent browser pool and domain session cache.",
+  lang: "en-US",
+
+  cleanUrls: true,
+  lastUpdated: true,
+
+  transformPageData(pageData) {
+    if (pageData.relativePath === "index.md") {
+      pageData.frontmatter.head ??= []
+      pageData.frontmatter.head.push([
+        "meta",
+        { "http-equiv": "refresh", content: "0;url=/getting-started/quick-start" },
+      ])
+    }
+  },
+
+  head: [
+    ["link", { rel: "icon", type: "image/png", sizes: "512x512", href: "/favicon.png" }],
+    ["meta", { name: "theme-color", content: "#00e87a" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:site_name", content: "TRAWL Docs" }],
+  ],
+
+  themeConfig: {
+    logo: { light: "/logo-light.svg", dark: "/logo-dark.svg", alt: "TRAWL" },
+    siteTitle: "TRAWL",
+
+    nav: [
+      { text: "Docs", link: "/getting-started/quick-start" },
+      { text: "API", link: "/api-reference/overview" },
+      { text: "GitHub", link: "https://github.com/germondai/trawl" },
+    ],
+
+    sidebar: [
+      {
+        text: "Getting Started",
+        items: [
+          { text: "Quick Start", link: "/getting-started/quick-start" },
+          { text: "Configuration", link: "/getting-started/configuration" },
+          { text: "Challenge & CAPTCHA Support", link: "/getting-started/challenge-support" },
+          { text: "Performance & Benchmarks", link: "/getting-started/performance" },
+          { text: "Low-resource Setup", link: "/getting-started/low-resource" },
+          { text: "Local Development", link: "/getting-started/local-development" },
+        ],
+      },
+      {
+        text: "Integrations",
+        items: [
+          { text: "Prowlarr", link: "/integrations/prowlarr" },
+          { text: "Jackett", link: "/integrations/jackett" },
+          { text: "*arr Apps", link: "/integrations/arr-apps" },
+          { text: "MCP", link: "/integrations/mcp" },
+          { text: "JavaScript Client", link: "/integrations/javascript-client" },
+        ],
+      },
+      {
+        text: "Forward Proxy",
+        items: [
+          { text: "Overview & Traffic Flow", link: "/proxy/overview" },
+          { text: "Configuration", link: "/proxy/configuration" },
+          { text: "Install the CA", link: "/proxy/ca-installation" },
+          { text: "Client Setup", link: "/proxy/client-setup" },
+        ],
+      },
+      {
+        text: "API Reference",
+        items: [
+          { text: "Overview", link: "/api-reference/overview" },
+          { text: "FlareSolverr Compat", link: "/api-reference/flaresolvr-compat" },
+          { text: "Browser Sessions", link: "/api-reference/browser-sessions" },
+          { text: "Native API", link: "/api-reference/native-api" },
+          { text: "Read and Extract", link: "/api-reference/page-content" },
+          { text: "Custom Headers", link: "/api-reference/custom-headers" },
+          { text: "Health & Stats", link: "/api-reference/health-stats" },
+        ],
+      },
+      {
+        text: "Architecture",
+        items: [
+          { text: "Overview", link: "/architecture/overview" },
+          { text: "Tiered Execution", link: "/architecture/tiered-execution" },
+          { text: "Browser Pool", link: "/architecture/browser-pool" },
+          { text: "Session Cache", link: "/architecture/session-cache" },
+        ],
+      },
+      {
+        text: "Deployment",
+        items: [
+          { text: "Docker Compose", link: "/deployment/docker-compose" },
+          { text: "Standalone Containers", link: "/deployment/standalone" },
+          { text: "Configuration Migration", link: "/deployment/configuration-migration" },
+          { text: "Troubleshooting", link: "/deployment/troubleshooting" },
+        ],
+      },
+    ],
+
+    socialLinks: [{ icon: "github", link: "https://github.com/germondai/trawl" }],
+
+    footer: {
+      message:
+        'Released under the <a href="https://github.com/germondai/trawl/blob/main/LICENSE" target="_blank">AGPL-3.0 License</a>.',
+      copyright: 'TRAWL - built by <a href="https://github.com/germondai" target="_blank">@germondai</a>',
+    },
+
+    search: {
+      provider: "local",
+    },
+
+    editLink: {
+      pattern: "https://github.com/germondai/trawl/edit/main/apps/docs/:path",
+      text: "Edit this page on GitHub",
+    },
+  },
+})
