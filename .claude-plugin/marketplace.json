@@ -1,0 +1,16 @@
+{
+  "name": "thrixel",
+  "description": "Official Thrixel plugin: AI-generated 3D game assets for your coding agent.",
+  "owner": {
+    "name": "Thrixel",
+    "email": "support@thrixel.com",
+    "url": "https://thrixel.com"
+  },
+  "plugins": [
+    {
+      "name": "thrixel",
+      "source": "./",
+      "description": "Build playable 3D games with AI-generated assets. Bundles the build-world skill and the Thrixel connector: generate, refine and texture game-ready .glb models, then build the game around them in Three.js, Unity, Unreal or Roblox."
+    }
+  ]
+}

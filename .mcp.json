@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "thrixel": {
+      "command": "uvx",
+      "args": ["thrixel-mcp@latest"]
+    }
+  }
+}
