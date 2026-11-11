@@ -113,6 +113,7 @@
 			</div>
 			<div id="wav-link-container">
 				<a id="link-wav-download">Download WAV</a>
+				<div id="wav-export-summary" class="dim-text"></div>
 			</div>
 		</div>
 	</div>
@@ -192,8 +193,9 @@
 				let renderLengthInput = document.getElementById("input-render-length");
 				let renderLength = Number(renderLengthInput.value);
 
-				if (renderLength <= 0) {
-					showAlert("Duration should be greater than 0.")
+				// non-finite / NaN / <= 0 are all rejected before any work starts
+				if (!Number.isFinite(renderLength) || renderLength <= 0) {
+					showAlert("Duration should be a finite number greater than 0.")
 					renderLengthInput.value = songObj.getSongDuration();
 					return;
 				}
@@ -220,19 +222,45 @@
 					//player.start();
 					console.log("Render buffer length:", buffer.length);
 
-					let expData = bufferToWave(buffer, buffer.length);
+					// observable normalization: validates duration, counts clipping,
+					// clamps to the real buffer and encodes the WAV in one step
+					let result;
+					try {
+						result = normalizeAudioBuffer(buffer, renderLength);
+					} catch (error) {
+						console.error("WAV export failed:", error);
+						updateUiOnExport(false);
+						showAlert("导出失败：时长参数非法，未生成文件。");
+						return;
+					}
 
 					// check convert time
 					let convertTime = Date.now() - timer - renderTime;
 					console.log("render time: " + (renderTime / 1000).toFixed(2)
 						+ "  convert time: " + (convertTime / 1000).toFixed(2)
 						+ "  total: " + ((Date.now() - timer) / 1000).toFixed(2));
+					console.log("WAV written:", result.frameCount, "frames,",
+						result.numberOfChannels, "channels,",
+						result.clippedSamples, "clipped samples,",
+						"truncated:", result.truncated);
 
-					let newFile = URL.createObjectURL(expData);
+					let summaryText = "已写入 " + result.frameCount + " 帧、"
+						+ result.numberOfChannels + " 声道、裁剪 "
+						+ result.clippedSamples + " 个采样、"
+						+ (result.truncated ? "已截断（请求时长超过缓冲区）" : "未截断");
+
+					document.getElementById("wav-export-summary").textContent = summaryText;
+					showToast(summaryText);
+
+					let newFile = URL.createObjectURL(result.blob);
 					downloadLink.href = newFile;
 					let name = songObj.title || "export";
 					downloadLink.download = name + ".wav";
 					updateUiOnExport(false);
+				}).catch(error => {
+					console.error("Render failed:", error);
+					updateUiOnExport(false);
+					showAlert("导出失败：渲染出错，未生成文件。");
 				})
 			};
 

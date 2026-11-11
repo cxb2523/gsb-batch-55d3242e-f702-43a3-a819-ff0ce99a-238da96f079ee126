@@ -1,0 +1,9 @@
+{
+  "name": "pulsequaver",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimalistic web application for creating electronic music",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  }
+}
