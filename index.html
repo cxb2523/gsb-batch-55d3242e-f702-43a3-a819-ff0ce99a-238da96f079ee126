@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>PulseQuaver</title>
+
+	<link rel="manifest" href="manifest.json">
+
+	<link rel="apple-touch-icon" type="image/png" href="img/icon.png">
+	<link rel="icon" type="image/png" href="img/icon.png">
+	<link rel="icon" type="image/svg+xml" href="img/icon.svg">
+
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no">
+	<meta name="theme-color" content="#111111">
+	<meta name="description" content="Minimalistic application for creating electronic music. Boost your creativity!">
+
+	<meta property="og:title" content="PulseQuaver - minimalistic web-app for creating electronic music">
+	<meta property="og:type" content="website">
+	<meta property="og:description"
+		content="Simple and easy to use application for creating electronic music. Boost your creativity!">
+	<meta property="og:url" content="https://valent-in.github.io/pulseq/">
+	<meta property="og:image" content="https://valent-in.github.io/pulseq/refcards/refcard-overview.png">
+	<meta property="og:image:type" content="image/png">
+	<meta property="og:image:width" content="1710">
+	<meta property="og:image:height" content="873">
+
+	<style>
+		* {
+			padding: 0;
+			margin: 0;
+			color: #aaa;
+			font-family: sans-serif;
+		}
+	</style>
+	<style id="bar-separator-style">
+		/* update on bar length set */
+	</style>
+	<style id="colored-rows-style">
+		/* fill from js */
+	</style>
+	<link rel="stylesheet" href="css/elements.css">
+	<link rel="stylesheet" href="css/style.css">
+	<link rel="stylesheet" href="css/table-arrange.css">
+	<link rel="stylesheet" href="css/table-pattern.css">
+
+	<script defer src="js/settings.js"></script>
+
+	<script defer src="lib/Tone.js"></script>
+	<script defer src="lib/midi-writer.js"></script>
+
+	<script defer src="js/ui-helper.js"></script>
+	<script defer src="js/alerts.js"></script>
+
+	<script defer src="js/defaults.js"></script>
+	<script defer src="js/loader.js"></script>
+
+	<script defer src="js/synth-param-apply.js"></script>
+	<script defer src="js/synth-proto.js"></script>
+	<script defer src="js/synth.js"></script>
+	<script defer src="js/synth-ui.js"></script>
+	<script defer src="js/synth-presets.js"></script>
+	<script defer src="js/synth-helper.js"></script>
+	<script defer src="js/waveform-editor.js"></script>
+
+	<script defer src="js/pattern.js"></script>
+	<script defer src="js/pattern-ui.js"></script>
+	<script defer src="js/arrange-ui.js"></script>
+
+	<script defer src="js/mid-synth.js"></script>
+	<script defer src="js/scheduler.js"></script>
+	<script defer src="js/scheduler-ui.js"></script>
+
+	<script defer src="js/wam-init.js"></script>
+	<script defer src="js/wam-ui.js"></script>
+	<script defer src="js/wam-synth.js"></script>
+
+	<script defer src="js/song-object.js"></script>
+
+	<script defer src="js/reorder-menu.js"></script>
+	<script defer src="js/menu-init.js"></script>
+	<script defer src="js/main.js"></script>
+</head>
+
+<body>
+	<div id="container">
+		<div id="header" class="focus-lock-area">
+			<div id="header-tabs">
+				<div id="arrange-tab" class="js-tab tab tab--active">
+					<span>Arrange</span>
+				</div>
+				<div id="pattern-tab" class="js-tab tab">
+					<span>Pattern</span>
+				</div>
+
+				<div class="combined-tabs">
+					<div id="synth-tab" class="js-tab tab">
+						Synth
+					</div>
+					<div id="synth-list-tab" class="js-tab tab">
+						List
+					</div>
+				</div>
+			</div>
+
+			<div id="header-spacer"></div>
+
+			<div id="header-controls">
+				<button id="button-settings-open">C</button>
+				<button id="button-fullscreen">F</button>
+			</div>
+		</div>
+		<div id="main">
+			<div id="arrange-view" class="js-view-container view-container focus-lock-area">
+				<div id="arrange-container">
+					<div class="notranslate" translate="no" id="arrange-main"></div>
+				</div>
+				<div id="arrange-footer" class="footer notranslate" translate="no">
+					<button id="button-add-pattern">+</button>
+					<div class="footer-menu">
+						<button id="button-arrange-play" class="button--play bg-play">L</button>
+						<button id="button-arrange-menu-open">•••</button>
+						<div id="song-title-area">
+							[untitled]
+						</div>
+					</div>
+				</div>
+			</div>
+			<div id="pattern-view" class="js-view-container view-container view--hidden focus-lock-area">
+
+				<div id="pattern-container">
+					<div class="notranslate" translate="no" id="pattern-main">
+					</div>
+				</div>
+
+				<div id="pattern-footer" class="footer notranslate" translate="no">
+					<button id="button-add-pattern-layer">+</button>
+
+					<div class="footer-menu">
+						<button id="button-pattern-play" class="button--play bg-play">P</button>
+						<button id="button-pattern-menu-open">•••</button>
+						<div id="pattern-name-area"></div>
+					</div>
+				</div>
+			</div>
+
+			<div id="synth-view" class="js-view-container view-container view--hidden focus-lock-area">
+				<div id="synth-main" class="js-synth-mode-normal">
+					<div id="synth-grouping" class="synth-ungroup">
+						<div class="tab group-tab" data-group="js-osc1-group">OSC 1</div>
+						<div class="tab group-tab" data-group="js-osc2-group">OSC 2</div>
+						<div class="tab group-tab" data-group="js-osc3-group">OSC 3</div>
+						<div class="tab group-tab" data-group="js-adsr-group">ADSR</div>
+						<br>
+						<div class="tab group-tab" data-group="js-filt-group">Filter</div>
+						<div class="tab group-tab" data-group="js-amp-group">AMP</div>
+						<div class="tab group-tab" data-group="js-fx-group">FX</div>
+						<div class="tab group-tab" data-group="js-oth-group">Oth.</div>
+						<span id="button-toggle-group" class="button button--small">Group</span>
+					</div>
+					<div id="synth-plugin-edit" class="js-plugin-group">
+						<button id="button-i-plugin-menu-open">Plugin settings</button>
+					</div>
+					<div class="bg-oscillator border-osc js-osc1-group">
+						<span class="caption-text highlight-bluelight">OSC 1</span>
+						<select class="notranslate" translate="no" id="synth-osc1-type" data-block="js-osc1-block"
+							data-edit="osc1-menu-open">
+							<option>[none]</option>
+							<option>sine</option>
+							<option>triangle</option>
+							<option>sawtooth</option>
+							<option>square</option>
+							<option>custom</option>
+						</select>
+						<button id="osc1-menu-open">Edit</button>
+						<div class="js-osc1-block">
+							<span>Octave</span>
+							<br>
+							<input type="range" id="synth-osc1-octave" min=-5 max=5 step=1 class="range--10-marks">
+							<br>
+							<span>Detune</span>
+							<button id="synth-osc1-reset-detune" class="button--small">Reset</button>
+							<br>
+							<input type="range" id="synth-osc1-detune" min=-600 max=600 step=5 class="range--12-marks">
+							<br>
+							<span>Level</span>
+							<br>
+							<input type="range" id="synth-osc1-level" min=0 max=1 step=0.01 class="range--4-marks">
+						</div>
+					</div>
+					<div class="bg-oscillator border-osc js-osc2-group">
+						<span class="caption-text highlight-violetlight">OSC 2</span>
+						<select class="notranslate" translate="no" id="synth-osc2-type" data-block="js-osc2-block"
+							data-edit="osc2-menu-open">
+							<option>[none]</option>
+							<option>sine</option>
+							<option>triangle</option>
+							<option>sawtooth</option>
+							<option>square</option>
+							<option>custom</option>
+						</select>
+						<button id="osc2-menu-open">Edit</button>
+						<div class="js-osc2-block">
+							<span>Octave</span>
+							<br>
+							<input type="range" id="synth-osc2-octave" min=-5 max=5 step=1 class="range--10-marks">
+							<br>
+							<span>Detune</span>
+							<button id="synth-osc2-reset-detune" class="button--small">Reset</button>
+							<br>
+							<input type="range" id="synth-osc2-detune" min=-600 max=600 step=5 class="range--12-marks">
+							<br>
+							<span>Level</span>
+							<br>
+							<input type="range" id="synth-osc2-level" min=0 max=1 step=0.01 class="range--4-marks">
+						</div>
+					</div>
+					<div class="bg-oscillator border-osc-third js-osc3-group">
+						<span class="caption-text highlight-yellowlight">OSC 3</span>
+						<select class="notranslate" translate="no" id="synth-osc3-type" data-block="js-osc3-block"
+							data-edit="osc3-menu-open">
+							<option>[none]</option>
+							<option>sine</option>
+							<option>triangle</option>
+							<option>sawtooth</option>
+							<option>square</option>
+							<option>custom</option>
+						</select>
+						<button id="osc3-menu-open">Edit</button>
+						<div class="js-osc3-block">
+							<span>Octave</span>
+							<br>
+							<input type="range" id="synth-osc3-octave" min=-5 max=5 step=1 class="range--10-marks">
+							<br>
+							<span>Detune</span>
+							<button id="synth-osc3-reset-detune" class="button--small">Reset</button>
+							<br>
+							<input type="range" id="synth-osc3-detune" min=-600 max=600 step=5 class="range--12-marks">
+							<br>
+							<span>Level</span>
+							<br>
+							<input type="range" id="synth-osc3-level" min=0 max=1 step=0.01 class="range--4-marks">
+						</div>
+					</div>
+					<div class="border-envelope js-adsr-group">
+						<select class="notranslate" translate="no" id="synth-envelope-type">
+							<option>exponential</option>
+							<option>linear</option>
+						</select>
+						<span class="envelope-caption">Amplitude Envelope</span>
+						<span>Attack</span>
+						<br>
+						<input type="range" id="synth-envelope-attack" min=0 max=12 step=0.1 class="range--4-marks">
+						<br>
+						<span>Decay</span>
+						<br>
+						<input type="range" id="synth-envelope-decay" min=0 max=12 step=0.1 class="range--4-marks">
+						<br>
+						<span>Sustain</span>
+						<br>
+						<input type="range" id="synth-envelope-sustain" min=0 max=1 step=0.01 class="range--4-marks">
+						<br>
+						<span>Release</span>
+						<br>
+						<input type="range" id="synth-envelope-release" min=0 max=12 step=0.1 class="range--4-marks">
+					</div>
+					<div class="js-oth-group js-plugin-group">
+						<span class="caption-text">Glide</span>
+						<input type="checkbox" id="synth-porta">
+						<label for="synth-porta">Porta</label>
+						<br>
+						<input type="range" id="synth-glide" min=0 max=1 step=0.01 class="range--4-marks">
+						<br>
+						<span class="caption-text">Pan</span>
+						<button id="synth-pan-reset" class="button--small">Reset</button>
+						<br>
+						<input type="range" id="synth-pan" min=-1 max=1 step=0.02 class="range--10-marks">
+					</div>
+					<div class="bg-filter border-filter js-filt-group">
+						<span class="caption-text">Filter</span>
+						<select class="notranslate" translate="no" id="synth-filter-type" data-block="js-filter-block">
+							<option>[none]</option>
+							<option>lowpass</option>
+							<option>highpass</option>
+							<option>bandpass</option>
+						</select>
+						<div class="js-filter-block">
+							<span>Frequency</span>
+							<br>
+							<input type="range" id="synth-filter-frequency" min=0 max=5 step=0.02
+								class="range--5-marks">
+							<br>
+							<span>Peak</span>
+							<br>
+							<input type="range" id="synth-filter-quality" min=0 max=50 step=0.2 class="range--4-marks">
+						</div>
+					</div>
+					<div class="bg-noise js-oth-group">
+						<span class="caption-text highlight-pinklight">Noise</span>
+						<select class="notranslate" translate="no" id="synth-noise-type" data-block="js-noise-block">
+							<option>[none]</option>
+							<option>white</option>
+							<option>pink</option>
+							<option>brown</option>
+						</select>
+						<div class="js-noise-block">
+							<span>Level</span>
+							<br>
+							<input type="range" id="synth-noise-level" min=0 max=2 step=0.02 class="range--4-marks">
+						</div>
+					</div>
+					<div class="js-amp-group js-plugin-group">
+						<span class="caption-text">Amplifier</span>
+						<br>
+						<span>Gain</span>
+						<br>
+						<input type="range" id="synth-amplifier-gain" min=0 max=1.2 step=0.01 class="range--volume">
+					</div>
+
+					<div class="block-spacer">
+						Modulation
+					</div>
+
+					<div class="bg-modulation-osc border-osc-mod js-osc1-group">
+						<span class="caption-text">OSC 1 mod. input</span>
+						<select class="notranslate" translate="no" id="synth-osc1-mod-input"
+							data-block="js-modosc1-block">
+							<option>[none]</option>
+							<option>lfo1</option>
+							<option>lfo2</option>
+							<option>envelopeMod</option>
+							<option>osc2</option>
+							<option>osc3</option>
+							<option>noise</option>
+						</select>
+						<div class="js-modosc1-block">
+							<span>Intensity</span>
+							<br>
+							<input type="range" id="synth-osc1-mod-value" min=-6 max=6 step=0.04 class="range--8-marks">
+						</div>
+					</div>
+					<div class="bg-modulation-osc border-osc-mod js-osc2-group">
+						<span class="caption-text">OSC 2 mod. input</span>
+						<select class="notranslate" translate="no" id="synth-osc2-mod-input"
+							data-block="js-modosc2-block">
+							<option>[none]</option>
+							<option>lfo1</option>
+							<option>lfo2</option>
+							<option>envelopeMod</option>
+							<option>osc3</option>
+							<option>noise</option>
+						</select>
+						<div class="js-modosc2-block">
+							<span>Intensity</span>
+							<br>
+							<input type="range" id="synth-osc2-mod-value" min=-6 max=6 step=0.04 class="range--8-marks">
+						</div>
+					</div>
+					<div class="bg-modulation-filt border-filter-mod js-filt-group">
+						<span class="caption-text">Filter mod. input</span>
+						<select class="notranslate" translate="no" id="synth-filter-mod-input"
+							data-block="js-modfilt-block">
+							<option>[none]</option>
+							<option>lfo1</option>
+							<option>lfo2</option>
+							<option>envelopeMod</option>
+						</select>
+						<div class="js-modfilt-block">
+							<span>Intensity</span>
+							<br>
+							<input type="range" id="synth-filter-mod-value" min=-5 max=5 step=0.04
+								class="range--10-marks">
+						</div>
+					</div>
+					<div class="bg-modulation-amp border-amp-mod js-amp-group">
+						<span class="caption-text">AMP mod. input</span>
+						<select class="notranslate" translate="no" id="synth-amplifier-mod-input"
+							data-block="js-modamp-block">
+							<option>[none]</option>
+							<option>lfo1</option>
+							<option>lfo2</option>
+							<option>envelopeMod</option>
+							<option>osc1</option>
+							<option>osc2</option>
+							<option>noise</option>
+						</select>
+						<div class="js-modamp-block">
+							<span>Intensity</span>
+							<br>
+							<input type="range" id="synth-amplifier-mod-value" min=-2 max=2 step=0.02
+								class="range--8-marks-amp">
+						</div>
+					</div>
+					<div class="bg-lfo js-oth-group">
+						<span class="caption-text">LFO 1</span>
+						<select class="notranslate" translate="no" id="synth-lfo1-type" data-block="js-lfo1-block"
+							data-edit="lfo1-menu-open">
+							<option>[none]</option>
+							<option>sine</option>
+							<option>triangle</option>
+							<option>sawtooth</option>
+							<option>square</option>
+							<option>custom</option>
+						</select>
+						<button id="lfo1-menu-open">Edit</button>
+						<div class="checkbox-wrapper">
+							<input type="checkbox" id="synth-lfo1-sync" class="js-lfo1-block">
+							<label for="synth-lfo1-sync" class="js-lfo1-block">BPM sync</label>
+						</div>
+						<div class="js-lfo1-block">
+							<span>Frequency</span>
+							<br>
+							<input type="range" id="synth-lfo1-frequency" min=0 max=12 step=0.05 class="range--4-marks">
+						</div>
+						<span class="caption-text">LFO 2</span>
+						<select class="notranslate" translate="no" id="synth-lfo2-type" data-block="js-lfo2-block"
+							data-edit="lfo2-menu-open">
+							<option>[none]</option>
+							<option>sine</option>
+							<option>triangle</option>
+							<option>sawtooth</option>
+							<option>square</option>
+							<option>custom</option>
+						</select>
+						<button id="lfo2-menu-open">Edit</button>
+						<div class="checkbox-wrapper">
+							<input type="checkbox" id="synth-lfo2-retrig" class="js-lfo2-block">
+							<label for="synth-lfo2-retrig" class="js-lfo2-block">Re-trig</label>
+						</div>
+						<div class="js-lfo2-block">
+							<span>Frequency</span>
+							<br>
+							<input type="range" id="synth-lfo2-frequency" min=0 max=12 step=0.05 class="range--4-marks">
+						</div>
+					</div>
+					<div class="bg-adsr border-mod-envelope js-adsr-group">
+						<select class="notranslate" translate="no" id="synth-mod-envelope-type"
+							data-block="js-modenv-block">
+							<option>[none]</option>
+							<option>exponential</option>
+							<option>linear</option>
+						</select>
+						<span class="envelope-caption">Modulation Envelope</span>
+						<span class="js-modenv-block">Attack</span>
+						<div class="js-modenv-block">
+							<input type="range" id="synth-mod-envelope-attack" min=0 max=12 step=0.1
+								class="range--4-marks">
+							<br>
+							<span>Decay</span>
+							<br>
+							<input type="range" id="synth-mod-envelope-decay" min=0 max=12 step=0.1
+								class="range--4-marks">
+							<br>
+							<span>Sustain</span>
+							<br>
+							<input type="range" id="synth-mod-envelope-sustain" min=0 max=1 step=0.01
+								class="range--4-marks">
+							<br>
+							<span>Release</span>
+							<br>
+							<input type="range" id="synth-mod-envelope-release" min=0 max=12 step=0.1
+								class="range--4-marks">
+						</div>
+					</div>
+
+					<div class="block-spacer fx-spacer">
+						FX
+					</div>
+
+					<div class="bg-effect js-fx-group js-plugin-group">
+						<span class="caption-text">Effect</span>
+						<select class="notranslate" translate="no" id="synth-fx-type" data-block="js-fx-block">
+							<option>[none]</option>
+							<option>chorus</option>
+							<option>delay</option>
+							<option>distort</option>
+							<option>panner</option>
+							<option>phaser</option>
+							<option>pingpong</option>
+							<option>reverb</option>
+							<option>tremolo</option>
+							<option>vibrato</option>
+							<option disabled hidden>stereo</option>
+						</select>
+						<span id="cpu-warning-span">High CPU</span>
+						<div class="js-fx-block">
+							<span>Amount (Depth)</span>
+							<br>
+							<input type="range" id="synth-fx-amount" min=0 max=1 step=0.005 class="range--4-marks">
+							<br>
+							<span id="synth-fx-rate-span">Delay (Speed)</span>
+							<input type="checkbox" id="synth-fx-sync">
+							<label id="synth-fx-sync-label" for="synth-fx-sync">BPM sync</label>
+							<input type="range" id="synth-fx-rate" min=0 max=1 step=0.005 class="range--5-marks">
+							<br>
+							<span>Dry-Wet</span>
+							<br>
+							<input type="range" id="synth-fx-wet" min=0 max=1 step=0.01 class="range--4-marks">
+						</div>
+					</div>
+				</div>
+
+				<div id="synth-footer">
+					<div id="piano-container-outer">
+						<div class="notranslate" translate="no" id="piano-container"></div>
+					</div>
+					<div id="synth-footer-controls">
+						<div class="div-mute-controls">
+							<button id="button-synth-mute" class="button--small">Mute</button>
+						</div>
+						<button id="button-piano-show">^</button>
+						<button id="button-synth-menu-open">•••</button>
+						<div class="notranslate" translate="no" id="synth-name-area"></div>
+					</div>
+				</div>
+			</div>
+
+			<div id="synth-list-view" class="js-view-container view-container view--hidden focus-lock-area">
+				<div class="notranslate" translate="no" id="synth-list-main"></div>
+				<div id="synth-list-footer" class="footer">
+					<button id="button-add-synth">+</button>
+					<button id="button-mixer-menu-open">Mixer</button>
+					<button id="button-fx-plugin-menu-open">Effect</button>
+					<div id="synth-list-caption-area"></div>
+				</div>
+			</div>
+		</div>
+
+		<div id="loading-plugins-indicator" class="nodisplay">Loading plugins...</div>
+
+		<div id="startup-modal-menu" class="modal-container js-noskip force-centered">
+			<div class="modal-box" id="startup-menu-box">
+				<div class="modal-box-block notranslate" translate="no">
+					<span class="app-title-pulseq">PulseQ</span>
+					<span class="app-title-ueue">uaver</span>
+					<div id="app-icons">
+						<div class="bg-stop"></div>
+						<div class="bg-icon"></div>
+						<div class="bg-stopg"></div>
+					</div>
+					<div id="samplerate-box"></div>
+				</div>
+
+				<div class="modal-box-block" id="startup-loading-title">
+					Loading...
+				</div>
+
+				<div class="modal-box-block nodisplay" id="startup-menu">
+					<div class="startup-menu-entry" id="button-new-track">New Track</div>
+					<div class="startup-menu-entry" id="button-import-track">
+						<input type="file" accept=".json, .txt, application/json, text/json, text/plain"
+							id="input-import-track" class="js-request-focus">
+						<span>Open</span>
+						<div class="dragshade"></div>
+					</div>
+					<div class="startup-menu-entry highlight-violet" id="button-demo-track">Demo</div>
+					<div class="startup-menu-entry" id="button-continue-session">Restore</div>
+				</div>
+			</div>
+		</div>
+
+		<div id="demo-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block" id="demo-list-header">Select track</div>
+				<div class="modal-box-block modal-box-block--dense notranslate" translate="no" id="demo-list-container">
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-demo-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="loading-modal" class="modal-container force-centered nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					Loading...
+				</div>
+			</div>
+		</div>
+
+		<div id="settings-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block modal-box-header notranslate" translate="no">
+					<span class="app-title-pulseq">PulseQ</span>
+					<span class="app-title-ueue">uaver</span>
+					<span style="margin-left:12px;color:#555;">music creation app</span>
+					<a href="https://github.com/valent-in/pulseq#pulsequaver" target="_blank" rel="noopener"
+						title="GitHub" style="font-weight:bold;padding:0 6px;">?</a>
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-fullscreen" autocomplete="off">
+					<label for="input-fullscreen">Fullscreen</label>
+					<input type="checkbox" id="input-fullscreen-padding" style="margin-left: 8px" autocomplete="off">
+					<label for="input-fullscreen-padding">Camera notch</label>
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-more-velosteps" autocomplete="off">
+					<label for="input-more-velosteps">More velocity steps</label>
+				</div>
+				<div class="modal-box-block">
+					<span class="dialog-caption">Show scale</span>
+					<select id="select-root-highlight" disabled></select>
+					<select id="select-scale-highlight"></select>
+				</div>
+				<div class="modal-box-block">
+					<button id="button-cleanup-menu-open">Cleanup</button>
+				</div>
+				<div class="modal-box-block">
+					<button id="button-context-resume">Sound Fix</button>
+					<button id="button-advanced-open">Advanced</button>
+				</div>
+				<div class="modal-box-block">
+					<span class="dialog-caption">Zoom</span>
+					<input type="number" id="input-zoom-value">
+					<span class="dim-text dialog-caption">&percnt;</span>
+					<button id="button-zoom-set">Set</button>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-reset-app" class="highlight-pink">Title&sol;Reset</button>
+					<button id="button-settings-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="advanced-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<table>
+					<tr>
+						<td>
+							Lookahead
+						</td>
+						<td>
+							<select id="select-lookahead">
+								<option value="0.15">0.15s</option>
+								<option value="0.2">0.2s</option>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<td>
+							Sample rate
+						</td>
+						<td>
+							<select id="select-samplerate">
+								<option value="">auto</option>
+								<option>48000</option>
+								<option>44100</option>
+								<option>24000</option>
+								<option>22050</option>
+								<option>12000</option>
+								<option>11025</option>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<td>
+							Latency
+						</td>
+						<td>
+							<select id="select-latency">
+								<option value="">[default]</option>
+								<option value="interactive">interactive</option>
+								<option value="balanced">balanced</option>
+								<option value="playback">playback</option>
+							</select>
+						</td>
+					</tr>
+				</table>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-advanced-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="arrange-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<table>
+					<tr>
+						<td>
+							Song title
+						</td>
+						<td>
+							<input type="text" id="input-song-title">
+						</td>
+					</tr>
+					<tr>
+						<td>
+							BPM
+						</td>
+						<td>
+							<input type="number" id="input-bpm-value">
+							<button id="button-bpm-set" tabindex="-1">Set</button>
+						</td>
+					</tr>
+					<tr>
+						<td>
+							Steps in bar
+						</td>
+						<td>
+							<input type="number" id="input-steps-value">
+							<button id="button-steps-set" tabindex="-1">Set</button>
+						</td>
+					</tr>
+					<tr>
+						<td>
+							Additional
+						</td>
+						<td>
+							<button id="button-additional-menu-open">Edit...</button>
+						</td>
+					</tr>
+					<tr>
+						<td>
+							<!--spacer-->
+						</td>
+					</tr>
+					<tr>
+						<td style="font-weight:bold">
+							Project file:
+						</td>
+						<td>
+							<a href="" id="link-song-download">Download JSON</a>
+						</td>
+					</tr>
+				</table>
+
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-export-menu-open">Export WAV</button>
+					<button id="button-midi-menu-open">MIDI</button>
+					<button id="button-arrange-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="export-modal-menu" class="modal-container shiftdialog nodisplay js-noskip">
+			<div class="modal-box">
+				<div class="modal-box-block" id="export-iframe-container"></div>
+				<div class="modal-box-block modal-box-footer" id="export-menu-close-container">
+					<button id="button-export-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="midi-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block modal-box-header">
+					<span>Export MIDI:</span>
+					<a id="link-midi-download" href="">Download file</a>
+				</div>
+				<div class="modal-box-block">
+					<span class="dialog-caption">Velocity curve</span>
+					<select id="select-velocity-scale" autocomplete="off">
+						<option>Exponential</option>
+						<option>Linear</option>
+						<option>Flat (127)</option>
+					</select>
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-export-glide" autocomplete="off" checked>
+					<label for="input-export-glide">Note overlap for glide&sol;legato</label>
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-export-expand" autocomplete="off">
+					<label for="input-export-expand">Expand short notes to 16th</label>
+					<div></div>
+				</div>
+				<div class="modal-box-block modal-box-footer" id="export-menu-close-container">
+					<button id="button-midi-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="additional-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<table id="additional-table">
+					<tr>
+						<td>
+							Swing
+						</td>
+						<td id="swing-value-cell" class="values-cell">
+						</td>
+					</tr>
+					<tr>
+						<td></td>
+						<td>
+							<input id="range-swing-amount" type="range" min=0 max=100 step=5 class="range--4-marks">
+						</td>
+					</tr>
+					<tr>
+						<td>
+							<!--spacer-->
+						</td>
+					</tr>
+					<tr>
+						<td>
+							Compressor
+						</td>
+						<td id="compressor-values-cell" class="values-cell">
+						</td>
+					</tr>
+					<tr>
+						<td class="dim-text">
+							Threshold
+						</td>
+						<td>
+							<input id="range-compressor-threshold" type="range" min=0 max=100 step=1
+								class="range--4-marks">
+						</td>
+					</tr>
+					<tr>
+						<td class="dim-text">
+							Ratio
+						</td>
+						<td>
+							<input id="range-compressor-ratio" type="range" min=1 max=19 step=1 class="range--3-marks">
+						</td>
+					</tr>
+				</table>
+
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-reset-additional" class="button--small">Reset</button>
+					<button id="button-additional-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="column-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<div id="timers-area" class="modal-box-block">
+				</div>
+				<div class="modal-box-block">
+					<button id="button-insert-columns">Insert columns</button>
+					<button id="button-remove-columns">Delete columns</button>
+				</div>
+				<div class="modal-box-block">
+					<div class="modal-box-inline">
+						<input type=number id="input-loop-bars" autocomplete="off" value="1">
+						<span style="margin-right:6px">bar loop</span>
+						<button id="button-loop-play">Play</button>
+					</div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-column-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="pattern-reorder-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box scrollable-modal narrow-modal">
+				<div class="modal-box-block">
+					<div class="scrollable-modal-header">Reorder patterns
+						<span id="span-pattern-count"></span>
+					</div>
+					<div id="pattern-list-container" class="notranslate" translate="no"></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-sort-patterns-asc" class="button--small">Asc.</button>
+					<button id="button-sort-patterns-desc" class="button--small">Desc.</button>
+					<button id="button-reorder-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="pattern-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<table>
+					<tr>
+						<td>
+							Pattern name
+						</td>
+						<td>
+							<input type="text" id="input-pattern-name">
+						</td>
+						<td>
+							<button class="button--shadowed notranslate" translate="no"
+								id="button-color-select">color</button>
+						</td>
+					</tr>
+					<tr>
+						<td>
+							Length (bars)
+						</td>
+						<td colspan="2">
+							<input type="number" id="input-pattern-length">
+							<button id="button-pattern-length-set" tabindex="-1">Set</button>
+						</td>
+					</tr>
+					<tr>
+						<td colspan="3">
+							<button id="button-copy-pattern">Copy Pattern</button>
+							<button id="button-delete-pattern">Delete Pattern</button>
+						</td>
+					</tr>
+				</table>
+				<div class="layer-dialog-block">
+					<table>
+						<tr>
+							<td style="text-align:right">
+								<span id="layer-block-title">Synth&sol;Layer</span>
+							</td>
+							<td>
+								<button id="button-synth-select" class="button-select notranslate"
+									translate="no">[none]</button>
+							</td>
+						</tr>
+						<tr>
+							<td style="padding:0;visibility:hidden" class="notranslate" translate="no">
+								<!--placeholder-->
+								tame Panther
+							</td>
+							<td>
+								<button id="button-layer-edit-open">Edit...</button>
+								<button id="button-delete-layer">Delete Layer</button>
+							</td>
+						</tr>
+					</table>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-pattern-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="synth-select-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box scrollable-modal narrow-modal">
+				<div class="modal-box-block">
+					<div class="scrollable-modal-header">Select Instrument</div>
+					<div id="menu-synth-list-container" class="notranslate" translate="no"></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-synth-select-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="color-select-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					Select pattern color
+				</div>
+				<div class="modal-box-block notranslate" translate="no" id="color-list-container">
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-color-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="layer-edit-modal-menu" class="modal-container shiftdialog nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">Modify layer</div>
+				<div class="modal-box-block">
+					<button id="button-fade-layer">Fade</button>
+					<button id="button-shift-layer">Shift</button>
+					<button id="button-transpose-layer">Transpose</button>
+				</div>
+				<div class="modal-box-block">
+					<button id="button-invert-layer">Invert</button>
+					<button id="button-reverse-layer">Reverse</button>
+				</div>
+				<div class="modal-box-block">
+					<button id="button-copy-layer">Copy</button>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-layer-edit-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="layer-fade-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					Modify layer volumes
+				</div>
+				<div class="modal-box-block">
+					<div class="fade-dialog-block">
+						<input type="radio" id="input-fade-type-set" name="fade-type" autocomplete="off" checked>
+						<label for="input-fade-type-set">Set values</label>
+						<br>
+						<span class="dialog-caption">Start</span>
+						<input type="number" id="input-fade-start" class="js-request-focus">
+						<span class="dim-text">&percnt;</span>
+
+						<span style="margin-left:1rem" class="dialog-caption">End</span>
+						<input type="number" id="input-fade-end">
+						<span class="dim-text">&percnt;</span>
+
+					</div>
+				</div>
+				<div class="modal-box-block modal-box-block--dense">
+					<div class="fade-dialog-block">
+						<input type="radio" id="input-fade-type-add" name="fade-type" autocomplete="off">
+						<label for="input-fade-type-add">Add value</label>
+						<br>
+						<span class="dialog-caption">Modifier</span>
+						<input type="number" id="input-fade-add" class="js-request-focus" autocomplete="off" value="12">
+						<span class="dim-text">&percnt;</span>
+					</div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-apply-fade" class="button-modal-bottom notranslate" translate="no">OK</button>
+					<button id="button-fade-menu-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="layer-shift-modal-menu" class="modal-container shiftdialog nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					<span>Shift layer by</span>
+					<input type="number" id="input-shift-value" class="js-request-focus" value="1" autocomplete="off">
+					<span>steps</span>
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-shift-automation" autocomplete="off" checked>
+					<label for="input-shift-automation">Shift automation</label>
+					<div></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-apply-shift" class="button-modal-bottom notranslate" translate="no">OK</button>
+					<button id="button-shift-menu-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="layer-transpose-modal-menu" class="modal-container shiftdialog nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					<span>Transpose layer by</span>
+					<input type="number" id="input-transpose-value" class="js-request-focus" value="1"
+						autocomplete="off">
+					<span>smt.</span>
+					<div></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-apply-transpose" class="button-modal-bottom notranslate"
+						translate="no">OK</button>
+					<button id="button-transpose-menu-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="layer-reverse-modal-menu" class="modal-container shiftdialog nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					<span>Reverse layer</span>
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-reverse-automation" autocomplete="off" checked>
+					<label for="input-reverse-automation">Reverse automation</label>
+					<div></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-apply-reverse" class="button-modal-bottom notranslate" translate="no">OK</button>
+					<button id="button-reverse-menu-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="layer-invert-modal-menu" class="modal-container shiftdialog nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					<span>Invert layer</span>
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-invert-keepscale" autocomplete="off" checked>
+					<label for="input-invert-keepscale">Keep scale</label>
+					<div></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-apply-invert" class="button-modal-bottom notranslate" translate="no">OK</button>
+					<button id="button-invert-menu-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="pattern-copy-modal-menu" class="modal-container shiftdialog nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					<span>Copy pattern</span>
+					<span id="span-pattern-for-copy"></span>
+					<span>to</span>
+				</div>
+				<div class="modal-box-block">
+					<input type="text" id="input-pattern-copy-name" class="js-request-focus">
+				</div>
+				<div class="modal-box-block">
+					<input type="checkbox" id="input-copy-pattern-under" autocomplete="off">
+					<label for="input-copy-pattern-under">Place under source</label>
+					<div></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-create-pattern" class="button-modal-bottom notranslate"
+						translate="no">OK</button>
+					<button id="button-pattern-copy-menu-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="oscillator-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box">
+				<div class="modal-box-block">
+					<div>
+						<canvas id="canvas-osc-editor" width="440" height="440"></canvas>
+					</div>
+					<div>
+						<label for="select-osc-harmonics">Harmonics</label>
+						<select id="select-osc-harmonics">
+							<option disabled hidden value=""></option>
+							<option>8</option>
+							<option>12</option>
+							<option>16</option>
+							<option>20</option>
+							<option>24</option>
+							<option>28</option>
+							<option>32</option>
+						</select>
+						<select id="select-harmonics-templates" class="notranslate" translate="no" autocomplete="off">
+							<option selected disabled hidden value="template">template</option>
+							<option id="opt-copy-osc1" value="osc1">OSC 1</option>
+							<option id="opt-copy-osc2" value="osc2">OSC 2</option>
+							<option id="opt-copy-osc3" value="osc3">OSC 3</option>
+							<option id="opt-copy-lfo1" value="lfo1">LFO 1</option>
+							<option id="opt-copy-lfo2" value="lfo2">LFO 2</option>
+							<option value="sine">sine</option>
+							<option value="square">square</option>
+							<option value="pulse33">pulse 33%</option>
+							<option value="pulse25">pulse 25%</option>
+							<option value="pulse20">pulse 20%</option>
+							<option value="sawtooth">sawtooth</option>
+							<option value="softsaw">soft saw</option>
+							<option value="triangle">triangle?</option>
+							<option value="strings1">strings 1</option>
+							<option value="strings2">strings 2</option>
+							<option value="linear">linear</option>
+						</select>
+					</div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-osc-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="synth-modal-menu" class="modal-container nodisplay">
+			<div class="modal-box">
+				<div id="synth-name-container" class="modal-box-block">
+					<span class="dialog-caption">Synth name</span>
+					<input type="text" id="input-synth-name">
+				</div>
+				<div class="modal-box-block">
+					<span class="dialog-caption">Send to effect</span>
+					<select id="select-send-effect"></select>
+				</div>
+				<div class="modal-box-block">
+					<span class="dialog-caption">Plugin</span>
+					<button id="button-i-plugin-select" class="button-select">plugin</button>
+				</div>
+				<div class="modal-box-block">
+					<select id="select-synth-preset" class="notranslate" translate="no">
+						<option disabled hidden value="Preset">Preset...</option>
+					</select>
+					<button id="button-copy-synth">Copy Synth</button>
+					<button id="button-delete-synth">Delete Synth</button>
+				</div>
+				<div class="modal-box-block">
+					<div id="button-import-synth" class="button">
+						<input type="file" accept=".json, .txt, application/json, text/json, text/plain"
+							id="input-import-synth">
+						<span>Import</span>
+						<div class="dragshade"></div>
+					</div>
+					<a id="link-synth-export" href="">Export</a>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-synth-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="i-plugin-select-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box scrollable-modal narrow-modal">
+				<div class="modal-box-block">
+					<div class="scrollable-modal-header">Select instrument plugin</div>
+					<div id="i-plugin-list-container" class="notranslate" translate="no"></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-i-plugin-select-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="i-plugin-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box scrollable-modal">
+				<div class="modal-box-block">
+					<div id="i-plugin-name" class="scrollable-modal-header">Instrument plugin</div>
+					<div id="i-plugin-outer-container">
+						<div id="i-plugin-loading" class="nodisplay">Loading...</div>
+						<div id="i-plugin-error" class="nodisplay">Error</div>
+					</div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-i-plugin-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="fx-plugin-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box scrollable-modal">
+				<div class="modal-box-block">
+					<div class="scrollable-modal-header">Effect plugins</div>
+					<div class="effect-outer-container">
+						<div class="effect-wrap-container">
+							<button class="js-button-effect-select">+</button>
+							<div class="js-plugin-mount"></div>
+						</div>
+
+						<div class="effect-wrap-container">
+							<button class="js-button-effect-select">+</button>
+							<div class="js-plugin-mount"></div>
+						</div>
+
+						<div class="effect-wrap-container">
+							<button class="js-button-effect-select">+</button>
+							<div class="js-plugin-mount"></div>
+						</div>
+
+						<div class="effect-wrap-container">
+							<button class="js-button-effect-select">+</button>
+							<div class="js-plugin-mount"></div>
+						</div>
+					</div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-fx-plugin-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="fx-plugin-select-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box scrollable-modal narrow-modal">
+				<div class="modal-box-block">
+					<div class="scrollable-modal-header">Select effect plugin</div>
+					<div id="fx-plugin-list-container" class="notranslate" translate="no"></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-fx-plugin-select-close" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="mixer-modal-menu" class="modal-container force-centered nodisplay">
+			<div class="modal-box scrollable-modal">
+				<div class="modal-box-block">
+					<div class="scrollable-modal-header">Mixer</div>
+					<div id="mixer-list-container" class="notranslate" translate="no"></div>
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<div class="div-mute-controls-modal">
+						<button id="button-mute-all" class="button--small">Mute all</button>
+						<button id="button-unmute-all" class="button--small">Unmute</button>
+					</div>
+					<button id="button-mixer-menu-close" class="button-modal-bottom">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="modal-alert" class="modal-container shiftdialog nodisplay">
+			<div class="modal-box modal-alert-box">
+				<div class="modal-box-block" id="modal-alert-message">
+				</div>
+				<div class="modal-box-block" id="input-area-modal-alert">
+					<input type="text" id="input-modal-alert" class="js-request-focus">
+				</div>
+				<div class="modal-box-block modal-box-footer">
+					<button id="button-alert-ok" class="button-modal-bottom js-request-focus notranslate"
+						translate="no">OK</button>
+					<button id="button-alert-cancel" class="button-modal-bottom">Cancel</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="toast-alert" class="toast-container nodisplay">
+			<div id="toast-box"></div>
+		</div>
+
+	</div>
+
+</body>
+
+</html>

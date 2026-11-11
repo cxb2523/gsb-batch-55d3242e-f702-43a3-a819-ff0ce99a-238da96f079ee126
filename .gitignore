@@ -1,0 +1,3 @@
+lib/Tone.js.map
+wam-plugins/*
+!wam-plugins/README-PLUGINS.md
