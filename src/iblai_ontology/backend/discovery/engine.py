@@ -172,9 +172,14 @@ class DiscoveryEngine:
                 service.safety_status = safety.overall_status.value
                 store.save(service, ["last_safety_check_at", "safety_status"])
                 if not safety.all_passed:
+                    guidance = (
+                        f"\n\n{safety.remediation_sql}"
+                        if safety.remediation_sql
+                        else (f"\n\n{safety.message}" if safety.message else "")
+                    )
                     raise SafetyError(
                         f"Safety verification failed: {safety.summary}\n"
-                        f"Refusing to proceed.\n\n{safety.remediation_sql}"
+                        f"Refusing to proceed.{guidance}"
                     )
 
             # Step 2 — introspect

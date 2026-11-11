@@ -2,9 +2,22 @@
 
 Before iblai-ontology touches a single row, it must prove the supplied
 credentials are read-only by attempting a comprehensive suite of write
-operations. Every one must FAIL. ``PASSED`` therefore means "the write was
-correctly denied". If ANY write succeeds, the overall result is ``FAILED`` and
-nothing else runs.
+operations. Every one must be *denied*. ``PASSED`` therefore means "the write
+was correctly refused". If ANY write succeeds, the overall result is ``FAILED``
+and nothing else runs.
+
+Evidence discipline — a verdict is only ever built on explainable evidence:
+
+* A single probe is ``PASSED`` only when the database rejects it with a
+  recognisable permission error (or the DROP probe finds no probe table, which
+  proves CREATE never succeeded). Every other exception is ``ERROR``
+  (inconclusive) — a network glitch, a syntax problem or an unknown driver
+  message must never be mistaken for a refusal.
+* The suite only returns ``PASSED`` when all seven probes are ``PASSED``.
+  Any ``ERROR`` makes the overall verdict ``ERROR``; any successful write makes
+  it ``FAILED`` with the dialect's remediation SQL.
+* With no probeable table the verdict is ``ERROR`` (not ``PASSED`` — there is
+  no evidence either way), and no unhandled exception escapes the verifier.
 
 This module is intentionally Django-free: it operates on any DB-API 2.0
 connection (oracledb, psycopg2, pymysql, pyodbc) or the auto-ontology connector
@@ -26,7 +39,7 @@ _UNPROBED = object()
 class TestResult(Enum):
     PASSED = "passed"  # write correctly DENIED (what we want)
     FAILED = "failed"  # write SUCCEEDED (dangerous)
-    ERROR = "error"  # could not run the test (inconclusive)
+    ERROR = "error"  # could not interpret the outcome (inconclusive)
 
 
 @dataclass
@@ -44,6 +57,7 @@ class SafetyVerificationResult:
     db_type: str
     tests: list[SafetyTestResult] = field(default_factory=list)
     remediation_sql: Optional[str] = None
+    message: Optional[str] = None
 
     @property
     def all_passed(self) -> bool:
@@ -59,30 +73,66 @@ class SafetyVerificationResult:
         return f"{passed} passed, {failed} FAILED, {errors} errors out of {len(self.tests)} tests"
 
 
-# Substrings that indicate a write was *correctly* refused.
+# Substrings that indicate a write was *correctly* refused. These are kept
+# specific: a bare word like "permission" could appear in an unrelated driver
+# message, which would turn an inconclusive error into a false PASS.
 PERMISSION_INDICATORS = (
+    # PostgreSQL / psycopg
     "permission denied",
-    "insufficient privileges",
-    "ora-01031",  # Oracle: insufficient privileges
-    "ora-01950",  # Oracle: no privileges on tablespace
-    "ora-00942",  # Oracle: table or view does not exist (DROP on our temp table)
-    "access denied",
-    "not allowed",
-    "permission",
-    "privilege",
-    "read-only",
-    "readonly",
-    "denied to user",
     "must be owner",
+    "must be superuser",
+    "must have",
+    "is not permitted",
+    # Oracle / oracledb
+    "ora-01031",  # insufficient privileges
+    "ora-01950",  # no privileges on tablespace
+    "ora-01749",  # may not access table
+    "ora-20000",  # custom security-policy rejection prefix
+    "insufficient privileges",
+    # MySQL / pymysql
+    "access denied",
+    "command denied",
+    "denied to user",
+    "super privilege",
+    "read-only",
+    "readonly mode",  # ClickHouse rejects writes while readonly settings apply
+    # SQL Server / pyodbc
+    "the select permission",
+    "the insert permission",
+    "the update permission",
+    "the delete permission",
+    "the alter permission",
+    "the drop permission",
+    "create table permission",
+    "alter table permission",
+    "database is read-only",
+    # Snowflake / Trino (auto-ontology connectors)
+    "sql access control error",
+    "access control",
+    "access control denied",
+    "not authorized",
+    "authorization denied",
+    "user does not have privilege",
+    "does not have privilege",
+    "privilege not granted",
+    # Generic wording kept only where the phrase is unambiguously an RDBMS refusal
+    "not allowed",
+    "operation not allowed",
+    "statement not allowed",
 )
 
-# Dropping our probe table after CREATE was denied: nothing to drop is a denial too
-# (the Oracle branch already treats ORA-00942 this way).
+# The DROP probe targets a probe table that CREATE was supposed to make.
+# "Nothing to drop" is itself evidence that CREATE never succeeded — but this
+# excuse applies to the DROP probe only; any other probe hitting a missing
+# table stays inconclusive.
 MISSING_TABLE_INDICATORS = (
     "does not exist",
     "doesn't exist",
     "unknown table",
     "no such table",
+    "ora-00942",  # Oracle: table or view does not exist
+    "cannot drop",
+    "not found",
 )
 
 
@@ -219,18 +269,56 @@ class SafetyVerifier:
     # -- runner ----------------------------------------------------------
     def run_all_tests(self) -> SafetyVerificationResult:
         logger.info("Starting safety verification for %s database", self.db_type)
-        existing_table = self._find_existing_table()
-        if not existing_table:
+        try:
+            existing_table = self._find_existing_table()
+        except Exception as exc:  # metadata read itself is broken: no evidence at all
+            logger.warning(
+                "Safety verification could not locate a probe table: %s", exc
+            )
+            self._safe_rollback()
             return SafetyVerificationResult(
                 overall_status=TestResult.ERROR,
                 db_type=self.db_type,
                 tests=[],
-                remediation_sql=self.remediation_sql(),
+                message=(
+                    "Could not locate a probe table to test against "
+                    f"({str(exc)[:200]}); read-only status is unverified."
+                ),
+            )
+
+        if not existing_table:
+            # No table means no write was ever attempted: there is zero evidence
+            # about the account's privileges. ERROR (inconclusive), never PASSED.
+            logger.warning(
+                "Safety verification inconclusive: no probeable table found for %s",
+                self.db_type,
+            )
+            self._safe_rollback()
+            return SafetyVerificationResult(
+                overall_status=TestResult.ERROR,
+                db_type=self.db_type,
+                tests=[],
+                message=(
+                    "No probeable table was found, so the write probes could not "
+                    "run; read-only status is unverified."
+                ),
             )
 
         results: list[SafetyTestResult] = []
         for test in self.WRITE_TESTS:
-            result = self._run_single_test(test["name"], existing_table)
+            # All seven probes run and each leaves its own result, even if one
+            # probe (or the harness around it) misbehaves unexpectedly.
+            try:
+                result = self._run_single_test(test["name"], existing_table)
+            except Exception as exc:  # defensive: an escape must not kill the suite
+                logger.exception("Safety probe %s raised unexpectedly", test["name"])
+                result = SafetyTestResult(
+                    test_name=test["name"],
+                    sql_attempted="",
+                    result=TestResult.ERROR,
+                    error_message=str(exc)[:500],
+                    detail="Probe crashed before producing a verdict — inconclusive",
+                )
             results.append(result)
             if result.result == TestResult.FAILED:
                 logger.critical(
@@ -240,12 +328,40 @@ class SafetyVerifier:
                     self.db_type,
                 )
 
-        all_passed = all(r.result == TestResult.PASSED for r in results)
+        # Leave the connection exactly as we found it.
+        self._safe_rollback()
+
+        any_failed = any(r.result == TestResult.FAILED for r in results)
+        all_passed = bool(results) and all(
+            r.result == TestResult.PASSED for r in results
+        )
+        if any_failed:
+            # A single successful write proves the account is writable.
+            overall = TestResult.FAILED
+            remediation: Optional[str] = self.remediation_sql()
+            message = (
+                "At least one write operation succeeded — credentials are writable."
+            )
+        elif all_passed:
+            overall = TestResult.PASSED
+            remediation = None
+            message = None
+        else:
+            # No write succeeded, but at least one probe was inconclusive.
+            # ERROR must never be silently promoted to PASSED (or FAILED).
+            overall = TestResult.ERROR
+            remediation = None
+            message = (
+                "No write succeeded, but one or more probes were inconclusive; "
+                "read-only status is not proven."
+            )
+
         verification = SafetyVerificationResult(
-            overall_status=TestResult.PASSED if all_passed else TestResult.FAILED,
+            overall_status=overall,
             db_type=self.db_type,
             tests=results,
-            remediation_sql=None if all_passed else self.remediation_sql(),
+            remediation_sql=remediation,
+            message=message,
         )
         logger.info("Safety verification complete: %s", verification.summary)
         return verification
@@ -258,32 +374,26 @@ class SafetyVerifier:
                 test_name, "", TestResult.ERROR, error_message=str(exc)[:500]
             )
 
-        cursor = self.connection.cursor()
         try:
-            cursor.execute(sql)
-            # If we reach here, the write SUCCEEDED — dangerous. Undo it.
-            try:
-                self.connection.rollback()
-            except Exception:
-                pass
-            if test_name == "CREATE TABLE":
-                try:
-                    cursor.execute("DROP TABLE __iblai_safety_test")
-                    self.connection.commit()
-                except Exception:
-                    pass
+            cursor = self.connection.cursor()
+        except Exception as exc:
             return SafetyTestResult(
                 test_name=test_name,
                 sql_attempted=sql,
-                result=TestResult.FAILED,
-                detail=f"DANGEROUS: {test_name} succeeded — user has write access.",
+                result=TestResult.ERROR,
+                error_message=str(exc)[:500],
+                detail="Could not open a cursor — test inconclusive",
             )
+
+        try:
+            cursor.execute(sql)
         except Exception as exc:
             error_str = str(exc).lower()
             denied = any(ind in error_str for ind in PERMISSION_INDICATORS) or (
                 test_name == "DROP TABLE"
                 and any(ind in error_str for ind in MISSING_TABLE_INDICATORS)
             )
+            self._safe_rollback()
             if denied:
                 return SafetyTestResult(
                     test_name=test_name,
@@ -291,6 +401,7 @@ class SafetyVerifier:
                     result=TestResult.PASSED,
                     detail=f"Correctly denied: {str(exc)[:200]}",
                 )
+            # An unexplainable error proves nothing either way.
             return SafetyTestResult(
                 test_name=test_name,
                 sql_attempted=sql,
@@ -298,11 +409,42 @@ class SafetyVerifier:
                 error_message=str(exc)[:500],
                 detail="Non-permission error — test inconclusive",
             )
-        finally:
+
+        # If we reach here, the write SUCCEEDED — dangerous. Undo it.
+        logger.critical(
+            "Safety probe %s executed successfully on %s; the credentials can write.",
+            test_name,
+            self.db_type,
+        )
+        self._safe_rollback()
+        if test_name == "CREATE TABLE":
+            # DDL often auto-commits, so a rollback may not undo the probe table:
+            # make a best effort to drop it and never let cleanup mask the verdict.
             try:
-                self.connection.rollback()
+                cursor.execute("DROP TABLE __iblai_safety_test")
+                try:
+                    self.connection.commit()
+                except Exception:
+                    pass
             except Exception:
-                pass
+                logger.warning(
+                    "Could not clean up probe table __iblai_safety_test; "
+                    "manual removal may be required."
+                )
+        self._safe_rollback()
+        return SafetyTestResult(
+            test_name=test_name,
+            sql_attempted=sql,
+            result=TestResult.FAILED,
+            detail=f"DANGEROUS: {test_name} succeeded — user has write access.",
+        )
+
+    def _safe_rollback(self) -> None:
+        """Roll back whatever the last probe left behind; never raise."""
+        try:
+            self.connection.rollback()
+        except Exception:
+            pass
 
     # -- remediation -----------------------------------------------------
     def remediation_sql(self) -> str:
