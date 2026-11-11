@@ -130,17 +130,34 @@ const Agent3D = forwardRef(function Agent3D(
   onLoadRef.current = onLoad;
   onErrorRef.current = onError;
 
+  // The iframe window that already delivered `walk:ready` for the current
+  // embed URL. Keyed by window so a stale/duplicate ready from an iframe we
+  // already handled (or from a previous iframe instance) is ignored.
+  const readyWindowRef = useRef(null);
+
+  // A new embed URL means a fresh player: the next walk:ready must be honored
+  // again (speed re-applied, onLoad re-fired) even if the origin — and in
+  // real browsers the iframe's window — stayed the same.
+  useEffect(() => {
+    readyWindowRef.current = null;
+  }, [src]);
+
   useEffect(() => {
     function handleMessage(event) {
       // Strictly reject any origin that isn't the embed origin (XSS guard), and
-      // ignore messages that didn't come from our own iframe.
+      // ignore messages that didn't come from our own iframe's current window.
       if (event.origin !== targetOrigin) return;
-      if (iframeRef.current && event.source !== iframeRef.current.contentWindow) return;
+      const win = iframeRef.current?.contentWindow;
+      if (!win || event.source !== win) return;
 
       const data = event.data;
       if (!data || typeof data !== 'object') return;
 
       if (data.type === 'walk:ready') {
+        // Only the first ready per iframe load applies the speed config and
+        // fires onLoad; repeats from the same window are duplicates.
+        if (readyWindowRef.current === win) return;
+        readyWindowRef.current = win;
         if (typeof speed === 'number') post({ type: 'walk:config', speed });
         onLoadRef.current?.();
       } else if (data.type === 'walk:error') {
@@ -162,6 +179,11 @@ const Agent3D = forwardRef(function Agent3D(
   return (
     <div className={className} style={wrapperStyle} {...rest}>
       <iframe
+        // Remount on origin change so a stale iframe's window can never alias
+        // the new embed's window during inbound-message validation. Same-origin
+        // URL changes (e.g. a different path) keep the element — and player
+        // state — intact.
+        key={targetOrigin}
         ref={iframeRef}
         src={src}
         title={title}
