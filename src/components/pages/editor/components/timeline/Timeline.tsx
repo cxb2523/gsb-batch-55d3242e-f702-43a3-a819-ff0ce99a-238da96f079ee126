@@ -27,6 +27,10 @@ import { Playhead } from "./Playhead";
 import { useSpeechTakes } from "../../../../../hooks/useSpeechTakes";
 import { useAppDispatch } from "../../../../../hooks/useAppDispatch";
 import { addToast } from "../../../../../store/toastSlice";
+import {
+  speechBatchSummary,
+  SpeechBatchError,
+} from "../../../../../utils/speech/speechBatch";
 import { isSpeakAction } from "../../utils/actionFamilies";
 const xCollision: CollisionDetection = ({
   droppableContainers,
@@ -118,6 +122,20 @@ export function Timeline({
         .map((a) => a.value),
     ),
   ].length;
+  const batchFailures = speech.batchResults.filter(
+    (result) => result.status !== "success",
+  );
+  const batchDisabled =
+    !missing || speech.batchRunning || speech.pending.length > 0;
+  const generateMissing = () =>
+    speech.generateMissing(actions).catch((e) => {
+      // The hook already shows a detailed summary for batch failures.
+      if (!(e instanceof SpeechBatchError))
+        dispatch(addToast(e instanceof Error ? e.message : String(e)));
+    });
+  const batchTitle = batchFailures.length
+    ? speechBatchSummary(speech.batchResults)
+    : undefined;
   const fit = () => {
     const width = scrollRef.current?.clientWidth ?? 800;
     let low = 0.01,
@@ -168,15 +186,37 @@ export function Timeline({
               <span>Audio</span>
             </div>
             <button
-              disabled={!missing || speech.pending.length > 0}
-              onClick={() =>
-                speech
-                  .generateMissing(actions)
-                  .catch((e) => dispatch(addToast(e.message)))
-              }
+              disabled={batchDisabled}
+              title={batchTitle}
+              onClick={generateMissing}
             >
               Generate missing ({missing})
             </button>
+            {batchFailures.length > 0 && (
+              <ul
+                className="cv-speech-batch-results"
+                aria-label="Speech lines that were not generated"
+              >
+                {batchFailures.map((result, index) => (
+                  <li
+                    key={`${result.status}-${index}`}
+                    className={`cv-speech-batch-result cv-speech-batch-result--${result.status}`}
+                    title={result.error}
+                  >
+                    <span>
+                      {result.status === "skipped" ? "Skipped" : "Failed"}
+                    </span>{" "}
+                    {result.text.trim()
+                      ? `“${
+                          result.text.length > 24
+                            ? `${result.text.slice(0, 24)}…`
+                            : result.text
+                        }”`
+                      : "(empty line)"}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
         <div ref={scrollRef} className="cv-timeline-scroll">
@@ -263,13 +303,16 @@ export function Timeline({
         <span>
           {actions.length} actions · {(layout.durationMs / 1000).toFixed(1)} s
         </span>
+        {batchFailures.length > 0 && (
+          <span className="cv-speech-batch-footer" title={batchTitle}>
+            {batchFailures.length} speech line
+            {batchFailures.length === 1 ? "" : "s"} not generated
+          </span>
+        )}
         <button
-          disabled={!missing || speech.pending.length > 0}
-          onClick={() =>
-            speech
-              .generateMissing(actions)
-              .catch((e) => dispatch(addToast(e.message)))
-          }
+          disabled={batchDisabled}
+          title={batchTitle}
+          onClick={generateMissing}
         >
           Generate missing ({missing})
         </button>

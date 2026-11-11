@@ -18,10 +18,21 @@ export interface SpeechSettings {
   kokoroSpeed: number;
   elevenLabsVoiceId: string;
 }
+export type SpeechBatchStatus = "success" | "failed" | "skipped";
+export interface SpeechBatchResult {
+  text: string;
+  status: SpeechBatchStatus;
+  error?: string;
+}
+export interface SpeechBatchState {
+  running: boolean;
+  results: SpeechBatchResult[];
+}
 export interface SpeechState {
   takesByText: Record<string, SpeechLine>;
   settings: SpeechSettings;
   pending: string[];
+  batch: SpeechBatchState;
   hydrated: boolean;
 }
 export const initialSpeechState: SpeechState = {
@@ -33,6 +44,7 @@ export const initialSpeechState: SpeechState = {
     elevenLabsVoiceId: "",
   },
   pending: [],
+  batch: { running: false, results: [] },
   hydrated: false,
 };
 const slice = createSlice({
@@ -81,6 +93,17 @@ const slice = createSlice({
       if (line?.takes?.some((t) => t.assetId === action.payload.assetId))
         line.activeAssetId = action.payload.assetId;
     },
+    setSpeechBatchRunning(state, action: PayloadAction<boolean>) {
+      state.batch.running = action.payload;
+      if (action.payload) state.batch.results = [];
+    },
+    setSpeechBatchResults(
+      state,
+      action: PayloadAction<SpeechBatchResult[]>,
+    ) {
+      state.batch.results = action.payload;
+      state.batch.running = false;
+    },
   },
 });
 export const {
@@ -89,5 +112,7 @@ export const {
   setSpeechPending,
   addSpeechTake,
   selectSpeechTake,
+  setSpeechBatchRunning,
+  setSpeechBatchResults,
 } = slice.actions;
 export default slice.reducer;

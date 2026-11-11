@@ -7,17 +7,25 @@ import { RootState } from "../store";
 import {
   addSpeechTake,
   selectSpeechTake,
+  setSpeechBatchResults,
+  setSpeechBatchRunning,
   setSpeechPending,
   SpeechSettings,
 } from "../store/speechSlice";
+import { activeTake, buildSpeakActionAudios } from "../utils/speech/speechAudio";
 import {
-  activeTake,
-  buildSpeakActionAudios,
-} from "../utils/speech/speechAudio";
+  createSingleFlight,
+  generateSpeechBatch,
+  missingSpeechTexts,
+  speechBatchFailures,
+  speechBatchSummary,
+  SpeechBatchError,
+  speechTextError,
+} from "../utils/speech/speechBatch";
 import { getElevenLabsKey } from "../utils/persistence/speechPersistence";
 import { textToSpeech, measureAudioDuration } from "../utils/api/textToSpeech";
 import { addToast } from "../store/toastSlice";
-const inFlight = new Map<string, Promise<void>>();
+const singleFlight = createSingleFlight<void>();
 export function useSpeechTakes() {
   const state = useAppSelector((s) => s.speech);
   const store = useStore<RootState>();
@@ -27,12 +35,11 @@ export function useSpeechTakes() {
     text: string,
     overrides: Partial<SpeechSettings> = {},
   ) {
-    if (inFlight.has(text)) return inFlight.get(text)!;
-    const task = (async () => {
+    return singleFlight(text, async () => {
       dispatch(setSpeechPending({ text, pending: true }));
       try {
-        if (!text.trim() || text.length > 1000)
-          throw new Error("Speech needs 1–1000 characters.");
+        const textError = speechTextError(text);
+        if (textError) throw new Error(textError);
         const settings = { ...store.getState().speech.settings, ...overrides };
         const token = await getToken();
         if (!token) throw new Error("Sign in to generate speech.");
@@ -68,48 +75,50 @@ export function useSpeechTakes() {
       } finally {
         dispatch(setSpeechPending({ text, pending: false }));
       }
-    })();
-    inFlight.set(text, task);
-    try {
-      await task;
-    } finally {
-      inFlight.delete(text);
-    }
+    });
   }
   async function generateMissing(actions: IAction[]) {
-    const texts = [
-      ...new Set(
-        actions
-          .filter((a) => a.name.startsWith("author-speak-"))
-          .map((a) => a.value),
-      ),
-    ].filter((t) => !activeTake(t, store.getState().speech.takesByText));
+    const texts = missingSpeechTexts(
+      actions,
+      store.getState().speech.takesByText,
+    );
     const settings = { ...store.getState().speech.settings };
-    let next = 0,
-      done = 0;
-    const errors: unknown[] = [];
-    dispatch(addToast(`Generating ${texts.length} missing speech lines…`));
-    async function worker() {
-      while (next < texts.length) {
-        const text = texts[next++]!;
-        try {
-          await generateTake(text, settings);
-        } catch (e) {
-          errors.push(e);
-        }
-        done++;
-        dispatch(addToast(`Speech: ${done} / ${texts.length} processed`));
-      }
-    }
-    await Promise.all([worker(), worker()]);
-    if (errors.length)
-      throw new Error(
-        `${errors.length} speech lines could not be generated. ${errors[0] instanceof Error ? errors[0].message : ""}`,
+    if (!texts.length) {
+      dispatch(setSpeechBatchResults([]));
+      return buildSpeakActionAudios(
+        actions,
+        store.getState().speech.takesByText,
       );
-    return buildSpeakActionAudios(actions, store.getState().speech.takesByText);
+    }
+    dispatch(setSpeechBatchRunning(true));
+    dispatch(addToast(`Generating ${texts.length} missing speech lines…`));
+    try {
+      const results = await generateSpeechBatch(
+        texts,
+        (text) => generateTake(text, settings),
+        {
+          concurrency: 2,
+          onResult: (_result, done, total) =>
+            dispatch(addToast(`Speech: ${done} / ${total} processed`)),
+        },
+      );
+      dispatch(setSpeechBatchResults(results));
+      if (speechBatchFailures(results).length) {
+        dispatch(addToast(speechBatchSummary(results)));
+        throw new SpeechBatchError(results);
+      }
+      return buildSpeakActionAudios(
+        actions,
+        store.getState().speech.takesByText,
+      );
+    } finally {
+      dispatch(setSpeechBatchRunning(false));
+    }
   }
   return {
     ...state,
+    batchResults: state.batch?.results ?? [],
+    batchRunning: state.batch?.running ?? false,
     generateTake,
     generateMissing,
     takeFor: (text: string) => activeTake(text, state.takesByText),

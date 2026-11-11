@@ -556,6 +556,29 @@
 .cv-audio-header button:disabled {
   opacity: 0.4;
 }
+.cv-speech-batch-results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 48px;
+  overflow: auto;
+  font-size: 9px;
+  line-height: 1.35;
+  color: var(--gray-11);
+}
+.cv-speech-batch-result span {
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.cv-speech-batch-result--failed span {
+  color: var(--red-11);
+}
+.cv-speech-batch-result--skipped span {
+  color: var(--amber-11);
+}
+.cv-speech-batch-footer {
+  color: var(--red-11);
+}
 .cv-timeline-footer > button {
   display: none;
 }

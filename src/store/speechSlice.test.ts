@@ -2,6 +2,8 @@ import { it, expect } from "vitest";
 import reducer, {
   addSpeechTake,
   selectSpeechTake,
+  setSpeechBatchResults,
+  setSpeechBatchRunning,
   initialSpeechState,
   ISpeechTake,
 } from "./speechSlice";
@@ -41,4 +43,24 @@ it("handles speech text that matches an object prototype key", () => {
     addSpeechTake({ text: "__proto__", take }),
   );
   expect(state.takesByText["__proto__"]?.activeAssetId).toBe("safe");
+});
+
+it("tracks a batch run and keeps its per-line results", () => {
+  let state = reducer(
+    initialSpeechState,
+    setSpeechBatchResults([
+      { text: "Old", status: "failed", error: "Old error" },
+    ]),
+  );
+  state = reducer(state, setSpeechBatchRunning(true));
+  expect(state.batch.running).toBe(true);
+  expect(state.batch.results).toEqual([]);
+
+  const results = [
+    { text: "Hello", status: "success" as const },
+    { text: "Bad", status: "failed" as const, error: "No voice" },
+  ];
+  state = reducer(state, setSpeechBatchResults(results));
+  expect(state.batch.running).toBe(false);
+  expect(state.batch.results).toEqual(results);
 });
