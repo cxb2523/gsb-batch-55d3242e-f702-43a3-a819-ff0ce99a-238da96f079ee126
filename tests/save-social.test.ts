@@ -66,7 +66,7 @@ describe('好友码', () => {
     plant(state, state.plots[0].uid, 'crop_carrot', NOW);
     const snap = takeSnapshot(state, beautyScore(state), NOW);
     const code = encodeFriendCode(snap);
-    expect(code).toMatch(/^PI[01]\.[A-Za-z0-9_-]+$/); // base64url 安全字符
+    expect(code).toMatch(/^PI[0-3]\.[A-Za-z0-9_-]+$/); // base64url 安全字符
     const decoded = decodeFriendCode(code);
     expect(decoded.name).toBe('海边的卡夫卡');
     expect(decoded.seed).toBe(state.seed);
@@ -88,7 +88,7 @@ describe('好友码', () => {
     }
     const snap = takeSnapshot(state, 0, NOW);
     const code = encodeFriendCode(snap);
-    expect(code.startsWith('PI1.')).toBe(true); // 大负载走 LZW
+    expect(code.startsWith('PI3.')).toBe(true); // v2 大负载走 LZW（新标记）
     expect(code.length).toBeLessThan(JSON.stringify(snap).length);
     const decoded = decodeFriendCode(code);
     expect(decoded.plots.length).toBe(snap.plots.length);
