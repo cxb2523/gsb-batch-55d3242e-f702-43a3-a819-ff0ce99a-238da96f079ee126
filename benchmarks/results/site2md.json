@@ -1,0 +1,71 @@
+{
+  "version": "0.6.0",
+  "date": "2026-11-10",
+  "environment": {
+    "os": "Windows 11",
+    "python": "3.12.14",
+    "hyperfine": "2.0.0",
+    "uv": "0.12.21",
+    "ruff": "0.17.4"
+  },
+  "install": {
+    "size_bytes": 11536091,
+    "packages": {
+      "attrs": "26.1.0",
+      "beautifulsoup4": "4.15.0",
+      "cyclopts": "5.4.0",
+      "docstring_parser": "0.18.0",
+      "jsonschema": "4.26.0",
+      "jsonschema_specifications": "2025.9.1",
+      "markdown_it_py": "4.2.0",
+      "markdownify": "1.2.3",
+      "marko": "2.2.5",
+      "mdurl": "0.1.2",
+      "packaging": "26.3",
+      "pygments": "2.21.0",
+      "referencing": "0.37.0",
+      "rich": "15.0.0",
+      "rich_rst": "2.2.0",
+      "rpds_py": "2026.9.1",
+      "site2md": "0.6.0",
+      "six": "1.17.0",
+      "soupsieve": "4.1",
+      "typing_extensions": "4.16.0"
+    }
+  },
+  "page": {
+    "matches": true,
+    "time": {
+      "mean": 0.349063,
+      "stddev": 0.008019,
+      "median": 0.348357,
+      "min": 0.337195,
+      "max": 0.364693,
+      "times": [
+        0.351465,
+        0.337195,
+        0.343828,
+        0.345249,
+        0.353125,
+        0.353004,
+        0.355508,
+        0.341638,
+        0.344925,
+        0.364693
+      ]
+    },
+    "lines": {
+      "counted": 49,
+      "local_only": []
+    }
+  },
+  "crawl": {
+    "matches": true,
+    "extra_pages": [],
+    "shortest_gap": 1.012526,
+    "lines": {
+      "counted": 49,
+      "local_only": []
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "version": "0.6.0",
+  "date": "2026-11-10",
+  "environment": {
+    "os": "Windows 11",
+    "python": "3.12.14",
+    "hyperfine": "2.0.0",
+    "uv": "0.12.21",
+    "ruff": "0.17.4"
+  },
+  "install": {
+    "size_bytes": 27228997,
+    "packages": {}
+  },
+  "page": {
+    "matches": true,
+    "time": {
+      "mean": 0.264457,
+      "stddev": 0.008106,
+      "median": 0.262778,
+      "min": 0.258217,
+      "max": 0.287793,
+      "times": [
+        0.259525,
+        0.263849,
+        0.26372,
+        0.261937,
+        0.287793,
+        0.26669,
+        0.258217,
+        0.259326,
+        0.262778,
+        0.263254,
+        0.261935
+      ]
+    },
+    "lines": {
+      "counted": 49,
+      "local_only": []
+    }
+  },
+  "crawl": {
+    "matches": true,
+    "extra_pages": [],
+    "shortest_gap": 1.002911,
+    "lines": {
+      "counted": 49,
+      "local_only": []
+    }
+  }
+}

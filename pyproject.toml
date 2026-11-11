@@ -1,0 +1,99 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "site2md"
+version = "0.7.0"
+description = "A CLI tool that converts local HTML or bounded remote web content to Markdown."
+authors = [{ name = "Camilo Martínez M.", email = "cama00005@uni-saarland.de" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cyclopts>=4.4.0",
+    "markdownify>=1.0.0",
+    "beautifulsoup4>=4.12.0",
+    "soupsieve>=2.0",
+    "rich>=13.6.0",
+    "marko>=2.2.4,<3",
+    "packaging>=20",
+    "jsonschema>=4.18,<5",
+]
+
+[project.entry-points."site2md.extractors.v1"]
+"site2md.scrapethissite.countries" = "site2md.extractors.countries:create_extractor"
+
+[project.scripts]
+site2md = "site2md.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/site2md"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/site2md/extractors/provider-manifest-v1.json" = "site2md/extractors/provider-manifest-v1.json"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/LICENSE",
+    "/README.md",
+    "/docs",
+    "/install.sh",
+    "/pyproject.toml",
+    "/src",
+    "/tests",
+]
+# The benchmark tests import /benchmarks, which isn't packaged, and the benchmark's minimal Extractor must never ship.
+# The executable tests likewise use /executable.
+exclude = [
+    "/tests/test_benchmark_*.py",
+    "/tests/benchmark_test_support.py",
+    "/tests/test_executable_*.py",
+]
+
+[tool.uv]
+# Without these, uv reuses its cached build of this folder until pyproject.toml changes, so
+# `uv run --with .` and `uv pip install .` would install stale code after a source file changes.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "src/**/*.py" },
+    { file = "src/**/*.json" },
+]
+
+[tool.ruff.lint]
+ignore = [
+    "D413",
+    "UP040",   # Do not use TypeAlias
+    "TRY003",  # Avoid specifying long messages outside the exception class
+    "EM102",   # Exception must not use an f-string literal, assign to variable first
+    "SIM108",  # Use a ternary expression instead of an if-else block
+    "PLR5501", # Use elif instead of else then if, to reduce indentation
+    "ERA001",  # Found commented-out code
+    "T201",    # print found
+    "BLE001",  # Do not catch blind exception: Exception
+    "C901",    # Function is too complex
+    "PLR0912", # Too many branches
+    "UP031",   # Use format specifiers instead of percent formatting
+    "EM101",   # Exception must not use a string literal, assign to variable first
+    "PLR0913", # Too many arguments in function definition
+    "PLR0915", # Too many statements
+    "TRY301",  # Abstract raise to an inner function
+    "PLR2004", # Magic value used in comparison; consider replacing it with a constant
+    "N803",    # Argument name should be lowercase
+    "N806",    # Variable name should be lowercase
+    "COM812",  # Trailing comma missing
+    "ANN003",  # Missing type annotation for **kwargs
+    "B006",    # Do not use mutable data structures for argument defaults
+    "ANN401",  # Dynamically typed expressions using typing.Any are disallowed
+    "PLR0911", # Too many return statements
+    "UP047",   # Generic function should use type parameters
+]
+
+[tool.mypy]
+# A type: ignore that is no longer needed hides nothing and should go.
+warn_unused_ignores = true
+
+[tool.coverage.run]
+source_pkgs = ["site2md"]
+# Measure the installed site2md commands that the CLI tests run as subprocesses.
+patch = ["subprocess"]

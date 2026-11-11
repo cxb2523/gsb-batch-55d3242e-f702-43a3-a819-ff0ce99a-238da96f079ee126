@@ -1,0 +1,78 @@
+{
+  "version": "0.5.1",
+  "date": "2026-11-09",
+  "environment": {
+    "os": "Windows 11",
+    "python": "3.12.14",
+    "hyperfine": "2.0.0",
+    "uv": "0.12.21",
+    "ruff": "0.17.4"
+  },
+  "install": {
+    "size_bytes": 242840618,
+    "packages": {
+      "anyio": "4.16.0",
+      "apify_fingerprint_datapoints": "0.16.0",
+      "browserforge": "1.2.4",
+      "certifi": "2026.10.23",
+      "cffi": "2.1.1",
+      "click": "8.5.1",
+      "cssselect": "1.6.0",
+      "curl_cffi": "0.17.0",
+      "frostwork": "0.2.2",
+      "greenlet": "3.5.6",
+      "idna": "3.20",
+      "lxml": "6.1.3",
+      "msgspec": "0.22.0",
+      "orjson": "3.13.0",
+      "patchright": "1.64.4",
+      "playwright": "1.64.1",
+      "protego": "0.7.0",
+      "pycparser": "3.12",
+      "pyee": "14.0.0",
+      "scrapling": "0.5.1",
+      "tld": "0.13.2",
+      "typing_extensions": "4.16.0",
+      "w3lib": "2.6.0"
+    }
+  },
+  "page": {
+    "matches": true,
+    "time": {
+      "mean": 0.33441,
+      "stddev": 0.006324,
+      "median": 0.331699,
+      "min": 0.32849,
+      "max": 0.348425,
+      "times": [
+        0.32849,
+        0.3399,
+        0.335568,
+        0.330583,
+        0.338648,
+        0.328657,
+        0.332291,
+        0.348425,
+        0.33043,
+        0.331107
+      ]
+    },
+    "lines": {
+      "counted": 12,
+      "local_only": [
+        "import sys"
+      ]
+    }
+  },
+  "crawl": {
+    "matches": true,
+    "extra_pages": [],
+    "shortest_gap": 0.000258,
+    "lines": {
+      "counted": 19,
+      "local_only": [
+        "import sys"
+      ]
+    }
+  }
+}

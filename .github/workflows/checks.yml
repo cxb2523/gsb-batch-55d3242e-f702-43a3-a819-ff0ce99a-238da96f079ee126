@@ -1,0 +1,113 @@
+name: Checks
+
+on:
+    push:
+        branches:
+            - main
+    pull_request:
+        branches:
+            - main
+
+permissions:
+    contents: read
+
+jobs:
+    lint:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            # The importlib.metadata stubs for 3.10 to 3.13 are narrower than the runtime objects
+            # (PackageMetadata.get, read_text(encoding=...)), so type checking uses Python 3.14.
+            - name: Set up uv
+              uses: astral-sh/setup-uv@v10.3.0
+              with:
+                  python-version: "3.14"
+                  activate-environment: true
+
+            - name: Install dependencies
+              run: uv pip install -e . ruff mypy
+
+            - name: Ruff check
+              run: ruff check
+
+            - name: Mypy
+              run: mypy src tests
+
+    tests:
+        runs-on: ${{ matrix.os }}
+        # A hung test would otherwise hold the runner for the six-hour default.
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    # The oldest supported Python with the lowest declared dependency versions,
+                    # so a floor in pyproject.toml that the code has outgrown fails here.
+                    - os: ubuntu-latest
+                      python-version: "3.10"
+                      resolution: lowest-direct
+                    - os: ubuntu-latest
+                      python-version: "3.14"
+                      resolution: highest
+                    # Windows-only failures (#19, #23) shipped in releases before this job existed.
+                    - os: windows-latest
+                      python-version: "3.14"
+                      resolution: highest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up uv
+              uses: astral-sh/setup-uv@v10.3.0
+              with:
+                  python-version: ${{ matrix.python-version }}
+                  activate-environment: true
+
+            - name: Install the package
+              run: uv pip install --resolution ${{ matrix.resolution }} -e .
+
+            - name: Unittest
+              run: python -m unittest discover -s tests
+
+            # On the Ubuntu runner Edge can't start its sandbox: AppArmor blocks the user namespaces it needs,
+            # and its setuid fallback isn't set up, so it aborts. Fix the runner; site2md keeps the sandbox on.
+            - name: Allow the user namespaces that Edge's sandbox needs
+              if: matrix.python-version == '3.14' && runner.os == 'Linux'
+              run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+            # The run above uses Chrome. The runners have Edge as well, so this one checks that the
+            # browser tests also pass with it.
+            - name: Unittest the browser tests with Edge
+              if: matrix.python-version == '3.14'
+              run: python -m unittest tests.test_browser_build tests.test_browser_profile tests.test_executable_smoke
+              env:
+                  SITE2MD_BROWSER: ${{ runner.os == 'Windows' && 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' || '/opt/microsoft/msedge/msedge' }}
+
+    executable:
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                # The oldest Ubuntu runner, so that the Linux build works with older glibc versions.
+                os: [windows-latest, ubuntu-22.04]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            # The build and the smoke test pick Python 3.12 themselves, so this only provides uv.
+            - name: Set up uv
+              uses: astral-sh/setup-uv@v10.3.0
+
+            # The commands below are the ones in executable/README.md.
+            - name: Build the executable
+              run: uv run --no-project --python 3.12 --with . --with-requirements executable/requirements.txt executable/build.py
+
+            - name: Smoke-test the executable
+              run: uv run --no-project --python 3.12 --with . --with pip executable/smoke.py dist/site2md
