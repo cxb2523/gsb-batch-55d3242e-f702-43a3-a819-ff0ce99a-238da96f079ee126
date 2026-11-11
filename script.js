@@ -33,7 +33,9 @@ const CONFIG = {
     SELECT_LOCAL_VIDEO: "Please select a local video file.",
     RESELECT_LOCAL_VIDEO: "Please reselect the local video.",
     RESELECT_LOCAL_SUBTITLE: "Please reselect the local subtitle.",
-    UPDATE_AVAILABLE: "A new version is available. Reload now?"
+    UPDATE_AVAILABLE: "A new version is available. Reload now?",
+    SUBTITLE_FETCH_ERROR: "Subtitle could not be loaded. The video will play without subtitles.",
+    SUBTITLE_FORMAT_ERROR: "Invalid subtitle format: only WebVTT (.vtt) and SubRip (.srt) files are supported. The video will play without subtitles."
   },
 
 };
@@ -156,6 +158,8 @@ function restoreAudioSettings() {
 const state = {
   currentVideo: null,
   currentVideoType: "url",
+  // Original subtitle source chosen by the user (URL or local blob URL).
+  // Kept even when loading fails, so the download button rule stays intact.
   currentSubtitle: "",
   currentSubtitleType: "url",
   currentTitle: "",
@@ -163,6 +167,9 @@ const state = {
   totalWatchTime: getWatchTime(),
   accumulatedWatchTime: 0
 }
+
+// Owns the single mounted subtitle <track> and its converted blob URL.
+const subtitleController = new SubtitleModule.SubtitleController(DOM.player);
 
 function formatTime(totalSeconds) {
   const hours = Math.floor(totalSeconds / 3600);
@@ -255,22 +262,26 @@ function truncateTitle(title, maxLength = CONFIG.LIMITS.TITLE_MAX_LENGTH) {
 
 function playVideo(video, subtitle = "", title = null, videoType = "url", subtitleType = "url") {
   revokeCurrentMedia();
+
+  // Tear down the previous subtitle track, release its converted blob URL and
+  // invalidate any in-flight subtitle request before configuring the new video.
+  subtitleController.switchSource(subtitle).then((result) => {
+    if (result.stale) {
+      // User switched videos again before this request finished: discard.
+      return;
+    }
+    if (result.status === "fetch-error") {
+      showAlert(CONFIG.MESSAGES.SUBTITLE_FETCH_ERROR, { icon: "error" });
+    } else if (result.status === "invalid-format") {
+      showAlert(CONFIG.MESSAGES.SUBTITLE_FORMAT_ERROR, { icon: "error" });
+    }
+  });
+
   DOM.player.innerHTML = "";
 
   const sourceElement = document.createElement("source");
   sourceElement.src = video;
   DOM.player.appendChild(sourceElement);
-
-  if(subtitle) {
-    const track = document.createElement("track");
-    track.src = subtitle;
-    track.kind = "subtitles";
-    track.srclang = "en";
-    track.label = "English";
-    track.default = true;
-    DOM.player.appendChild(track);
-    DOM.player.textTracks[0].mode = "showing";
-  }
 
   DOM.player.load();
   DOM.player.play().catch(() => {});
@@ -278,6 +289,7 @@ function playVideo(video, subtitle = "", title = null, videoType = "url", subtit
   state.currentVideo = video;
   state.currentVideoType = videoType;
   state.currentTitle = title || (videoType==="url"? video.split("/").pop(): title);
+  // Store the original user-provided subtitle source (not the converted blob).
   state.currentSubtitle = subtitle;
   state.currentSubtitleType = subtitleType;
   updateDownloadButtons();

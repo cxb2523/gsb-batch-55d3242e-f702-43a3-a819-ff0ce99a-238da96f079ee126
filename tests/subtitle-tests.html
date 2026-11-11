@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neovid Subtitle Module — Offline Tests</title>
+<style>
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 2rem;
+    background: #f7f7f8;
+    color: #1c1c1e;
+  }
+  h1 { font-size: 1.4rem; }
+  #summary {
+    font-weight: 700;
+    margin: 1rem 0;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    background: #e9e9ee;
+  }
+  #summary.pass { background: #d7f5d7; color: #14532d; }
+  #summary.fail { background: #fbdada; color: #7f1d1d; }
+  ul#results { list-style: none; padding: 0; }
+  li.case {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin: 0.6rem 0;
+    padding: 0.75rem 1rem;
+  }
+  .case .head { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+  .badge {
+    display: inline-block;
+    min-width: 3.2rem;
+    text-align: center;
+    border-radius: 6px;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.8rem;
+    color: #fff;
+  }
+  .badge.pass { background: #15803d; }
+  .badge.fail { background: #b91c1c; }
+  .badge.running { background: #6b7280; }
+  .detail {
+    margin: 0.4rem 0 0;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    color: #444;
+  }
+  .detail.error { color: #b91c1c; }
+  video { width: 1px; height: 1px; position: absolute; left: -9999px; }
+</style>
+</head>
+<body>
+<h1>Neovid subtitle loader — offline test suite</h1>
+<p>
+  This page only depends on <code>subtitle.js</code> and runs fully offline
+  (open it directly with <code>file://</code>). Every case uses self-made
+  subtitle text and stubbed fetch responses.
+</p>
+<div id="summary">Running…</div>
+<ul id="results"></ul>
+
+<!-- Module under test: same file used by the real player -->
+<script src="../subtitle.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const resultsEl = document.getElementById("results");
+  const summaryEl = document.getElementById("summary");
+
+  const VALID_VTT =
+    "WEBVTT\n\n" +
+    "00:00:01.000 --> 00:00:03.000\n" +
+    "Hello from VTT\n\n" +
+    "00:00:04.000 --> 00:00:06.000\n" +
+    "Second cue\n";
+
+  const VALID_SRT =
+    "1\n" +
+    "00:00:01,000 --> 00:00:03,000\n" +
+    "Hello from SRT\n\n" +
+    "2\n" +
+    "00:00:04,000 --> 00:00:06,000\n" +
+    "Second cue\n";
+
+  const GARBAGE_TEXT =
+    "this is not a subtitle file\n" +
+    "there is no WEBVTT header and no timing lines anywhere\n" +
+    "just random words 12345\n";
+
+  function makeVideo() {
+    const video = document.createElement("video");
+    document.body.appendChild(video);
+    return video;
+  }
+
+  function textBlobUrl(text, type) {
+    return URL.createObjectURL(new Blob([text], { type: type || "text/plain" }));
+  }
+
+  // Minimal Response-like object accepted by the module's fetch contract.
+  function textResponse(text, ok, status) {
+    return {
+      ok: ok !== false,
+      status: status === undefined ? 200 : status,
+      text: function () { return Promise.resolve(text); }
+    };
+  }
+
+  function assert(condition, message) {
+    if (!condition) {
+      throw new Error(message || "Assertion failed");
+    }
+  }
+
+  function record(name) {
+    const li = document.createElement("li");
+    li.className = "case";
+    const head = document.createElement("div");
+    head.className = "head";
+    const badge = document.createElement("span");
+    badge.className = "badge running";
+    badge.textContent = "RUN";
+    const title = document.createElement("span");
+    title.textContent = name;
+    head.appendChild(badge);
+    head.appendChild(title);
+    const detail = document.createElement("p");
+    detail.className = "detail";
+    li.appendChild(head);
+    li.appendChild(detail);
+    resultsEl.appendChild(li);
+    return {
+      pass: function (info) {
+        badge.className = "badge pass";
+        badge.textContent = "PASS";
+        detail.textContent = info || "";
+      },
+      fail: function (error) {
+        badge.className = "badge fail";
+        badge.textContent = "FAIL";
+        detail.className = "detail error";
+        detail.textContent = error && error.stack ? error.stack : String(error);
+      }
+    };
+  }
+
+  async function testValidVttMounts() {
+    const video = makeVideo();
+    const controller = new SubtitleModule.SubtitleController(video);
+    const url = textBlobUrl(VALID_VTT, "text/vtt");
+
+    const result = await controller.switchSource(url);
+
+    assert(result.status === "loaded", "expected status loaded, got " + result.status);
+    assert(result.format === "vtt", "expected format vtt, got " + result.format);
+    assert(video.querySelectorAll("track").length === 1, "exactly one track must be mounted");
+    const track = video.querySelector("track");
+    assert(track.src.indexOf("blob:") === 0, "track must use a blob URL, got " + track.src);
+    assert(controller.objectUrl === track.src, "controller must track the mounted blob URL");
+
+    const mountedText = await (await fetch(track.src)).text();
+    assert(mountedText.indexOf("WEBVTT") === 0, "mounted blob must contain WebVTT text");
+
+    URL.revokeObjectURL(url);
+    return "status=loaded, format=vtt, 1 track mounted via blob URL";
+  }
+
+  async function testSrtConvertedToVtt() {
+    const video = makeVideo();
+    const controller = new SubtitleModule.SubtitleController(video);
+    const url = textBlobUrl(VALID_SRT, "application/x-subrip");
+
+    // Unit-level conversion check first.
+    const converted = SubtitleModule.prepareSubtitleText(VALID_SRT);
+    assert(converted.format === "srt", "detected format should be srt");
+    assert(converted.vttText.indexOf("WEBVTT") === 0, "converted text must start with WEBVTT");
+    assert(converted.vttText.indexOf("00:00:01.000 --> 00:00:03.000") !== -1,
+      "SRT comma timestamps must be converted to dots");
+    assert(converted.vttText.indexOf("00:00:01,000") === -1,
+      "no comma timestamps may remain");
+
+    const result = await controller.switchSource(url);
+    assert(result.status === "loaded", "expected status loaded, got " + result.status);
+    assert(result.format === "srt", "source format must be reported as srt");
+    assert(video.querySelectorAll("track").length === 1, "exactly one track must be mounted");
+
+    const mountedText = await (await fetch(video.querySelector("track").src)).text();
+    assert(mountedText.indexOf("WEBVTT") === 0, "mounted blob must be WebVTT");
+    assert(mountedText.indexOf("00:00:01.000 -->") !== -1,
+      "mounted blob must contain converted dot timestamps");
+
+    URL.revokeObjectURL(url);
+    return "SRT detected, converted (header + dot timestamps) and mounted as blob VTT";
+  }
+
+  async function testGarbageRejected() {
+    const video = makeVideo();
+    const controller = new SubtitleModule.SubtitleController(video);
+    const url = textBlobUrl(GARBAGE_TEXT, "text/plain");
+
+    assert(SubtitleModule.detectSubtitleFormat(GARBAGE_TEXT) === null,
+      "garbage text must not be recognized as vtt/srt");
+
+    const result = await controller.switchSource(url);
+    assert(result.status === "invalid-format",
+      "expected invalid-format, got " + result.status);
+    assert(video.querySelectorAll("track").length === 0,
+      "no track may be mounted for invalid content");
+    assert(controller.objectUrl === null, "no blob URL may be retained");
+
+    URL.revokeObjectURL(url);
+    return "status=invalid-format, zero tracks mounted, no blob retained";
+  }
+
+  async function testFetchFailureRejectedVideoUnaffected() {
+    const video = makeVideo();
+    const controller = new SubtitleModule.SubtitleController(video);
+
+    // Simulate the browser blocking/failing the request, like a CORS failure.
+    const failingFetch = function () {
+      return Promise.reject(new TypeError("Failed to fetch (simulated CORS/network block)"));
+    };
+
+    const result = await controller.switchSource("https://example.invalid/sub.vtt", {
+      fetchImpl: failingFetch
+    });
+    assert(result.status === "fetch-error",
+      "expected fetch-error, got " + result.status);
+    assert(video.querySelectorAll("track").length === 0,
+      "no track may be mounted after a failed fetch");
+    assert(controller.objectUrl === null, "no blob URL may be retained");
+
+    // Also cover the non-2xx branch (e.g. 404).
+    const notFoundFetch = function () {
+      return Promise.resolve(textResponse("Not Found", false, 404));
+    };
+    const result404 = await controller.switchSource("https://example.invalid/missing.vtt", {
+      fetchImpl: notFoundFetch
+    });
+    assert(result404.status === "fetch-error",
+      "non-2xx response must be fetch-error, got " + result404.status);
+    assert(video.querySelectorAll("track").length === 0, "still no track after 404");
+
+    // The video element itself stays fully usable: a local source can be set
+    // and play() invoked independently of the failed subtitle.
+    const videoBlob = textBlobUrl("fake-video-bytes", "video/mp4");
+    video.src = videoBlob;
+    let playRejected = false;
+    try {
+      // play() may reject with NotSupportedError for fake bytes, but the call
+      // must be accepted by the element — i.e. playback state is independent.
+      await video.play().catch(function () { playRejected = true; });
+    } catch (e) {
+      playRejected = true;
+    }
+    assert(video.src.indexOf("blob:") === 0, "video source must still be assignable");
+    assert(video.querySelectorAll("track").length === 0,
+      "failed subtitle must leave no track in the player");
+
+    URL.revokeObjectURL(videoBlob);
+    return "network error and 404 both rejected; video source still settable, zero tracks";
+  }
+
+  async function testStaleRequestDiscarded() {
+    const video = makeVideo();
+    const controller = new SubtitleModule.SubtitleController(video);
+
+    // First request is deliberately slow; second request resolves immediately.
+    let slowResolve;
+    const slowFetch = function () {
+      return new Promise(function (resolve) {
+        slowResolve = function () { resolve(textResponse(VALID_SRT)); };
+      });
+    };
+    const fastFetch = function () {
+      return Promise.resolve(textResponse(VALID_VTT));
+    };
+
+    const slowPromise = controller.switchSource("https://example.invalid/slow.srt", {
+      fetchImpl: slowFetch
+    });
+    const fastPromise = controller.switchSource("https://example.invalid/fast.vtt", {
+      fetchImpl: fastFetch
+    });
+
+    const fastResult = await fastPromise;
+    assert(fastResult.status === "loaded", "fast (newest) request should load");
+    assert(fastResult.format === "vtt", "newest request is the VTT one");
+    assert(video.querySelectorAll("track").length === 1, "one track after fast request");
+    const activeUrl = controller.objectUrl;
+    assert(video.querySelector("track").src === activeUrl, "track belongs to newest request");
+
+    // Now let the old, slow request finish.
+    slowResolve();
+    const slowResult = await slowPromise;
+    assert(slowResult.stale === true, "old request must be reported stale");
+    assert(slowResult.status === "stale", "old request status must be stale");
+
+    // The newer video's subtitle state must be untouched.
+    assert(video.querySelectorAll("track").length === 1,
+      "stale request must not add a second track");
+    assert(controller.objectUrl === activeUrl,
+      "stale request must not replace the active blob URL");
+    assert(video.querySelector("track").src === activeUrl,
+      "mounted track must still be the newest one");
+
+    return "stale SRT request discarded; newest VTT track remains the only track";
+  }
+
+  async function testSwitchAndClearLifecycle() {
+    const video = makeVideo();
+    const controller = new SubtitleModule.SubtitleController(video);
+
+    const firstUrl = textBlobUrl(VALID_VTT, "text/vtt");
+    const firstResult = await controller.switchSource(firstUrl);
+    assert(firstResult.status === "loaded", "first subtitle should load");
+    const firstBlob = controller.objectUrl;
+
+    // Switching to a second valid subtitle must revoke the first blob and
+    // leave exactly one track.
+    const secondUrl = textBlobUrl(VALID_SRT, "application/x-subrip");
+    const secondResult = await controller.switchSource(secondUrl);
+    assert(secondResult.status === "loaded", "second subtitle should load");
+    assert(video.querySelectorAll("track").length === 1, "only one track after switch");
+    assert(controller.objectUrl !== firstBlob, "a new blob URL must replace the old one");
+
+    let firstBlobRevoked = false;
+    try {
+      await fetch(firstBlob);
+    } catch (e) {
+      firstBlobRevoked = true;
+    }
+    assert(firstBlobRevoked, "previous blob URL must have been revoked on switch");
+
+    // Switching to a video with no subtitle must remove every track.
+    const emptyResult = await controller.switchSource("");
+    assert(emptyResult.status === "empty", "empty source reports empty");
+    assert(video.querySelectorAll("track").length === 0, "no track may remain without subtitle");
+    assert(controller.objectUrl === null, "blob URL must be released when cleared");
+
+    let secondBlobRevoked = false;
+    try {
+      await fetch(secondResult.objectUrl);
+    } catch (e) {
+      secondBlobRevoked = true;
+    }
+    assert(secondBlobRevoked, "last blob URL must be revoked on clear");
+
+    URL.revokeObjectURL(firstUrl);
+    URL.revokeObjectURL(secondUrl);
+    return "switch revokes old blob; empty source clears track and releases blob";
+  }
+
+  const cases = [
+    ["Valid WebVTT is fetched and mounted", testValidVttMounts],
+    ["Valid SRT is converted to WebVTT before mounting", testSrtConvertedToVtt],
+    ["Headerless text without timing lines is rejected", testGarbageRejected],
+    ["Failed fetch is rejected and video stays playable", testFetchFailureRejectedVideoUnaffected],
+    ["Stale request cannot overwrite the newer video's subtitle", testStaleRequestDiscarded],
+    ["Track teardown and blob release on switch/clear", testSwitchAndClearLifecycle]
+  ];
+
+  async function run() {
+    let passed = 0;
+    for (const [name, fn] of cases) {
+      const reporter = record(name);
+      try {
+        const info = await fn();
+        reporter.pass(info);
+        passed += 1;
+      } catch (error) {
+        reporter.fail(error);
+      }
+    }
+
+    const allPassed = passed === cases.length;
+    summaryEl.className = allPassed ? "pass" : "fail";
+    summaryEl.textContent = (allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED") +
+      " — " + passed + " / " + cases.length;
+  }
+
+  window.addEventListener("load", run);
+})();
+</script>
+</body>
+</html>

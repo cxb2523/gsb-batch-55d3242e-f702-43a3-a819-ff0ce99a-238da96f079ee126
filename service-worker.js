@@ -1,9 +1,10 @@
-const cacheName = "neovid-v1.4";
+const cacheName = "neovid-v1.5";
 const appShell = [
   "./",
   "index.html",
   "style.css",
   "script.js",
+  "subtitle.js",
   "site.webmanifest",
   "assets/apple-touch-icon.png",
   "assets/logo.png",
