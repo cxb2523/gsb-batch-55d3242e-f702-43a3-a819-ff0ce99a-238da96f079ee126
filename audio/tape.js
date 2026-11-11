@@ -41,12 +41,76 @@ const PR = new Float32Array(NS), DET = new Float32Array(NS), CUM = new Float64Ar
 for (let i = 0; i < NS; i++) { PR[i] = rateAt(i * DT); DET[i] = wowAt(i * DT); }
 const eff = (i) => PR[i] * Math.pow(2, DET[i] / 1200);
 for (let i = 1; i < NS; i++) CUM[i] = CUM[i - 1] + 0.5 * (eff(i - 1) + eff(i)) * DT;
-/** Source time (s) that is heard at panel time u. */
+/** Source time (s) the un-skipped tape would reach by panel time u; notes are placed here. */
 export function S(u) {
   const x = Math.max(0, Math.min(TEND, u)) / DT, i = Math.min(NS - 2, Math.floor(x)), f = x - i;
   const e0 = eff(i), e1 = eff(i + 1);
   return CUM[i] + (e0 * f + 0.5 * (e1 - e0) * f * f) * DT;
 }
+
+// ------------------------------------------------------------------ the needle skip + queryable tape clock
+// Everything below is the single source of truth for the skip schedule AND for the
+// browser-console / Node query. The synthesiser schedules its snippets with skipSegment()
+// and resumes the main playback at S(SKIP_END); tapeState() reads the very same numbers.
+const SKIP_END = SKIP.at + SKIP.len * SKIP.times;          // 4.0 s: four 0.25 s repeats
+const clampU = (u) => (Number.isFinite(+u) ? Math.max(0, Math.min(END, +u)) : 0);
+
+/** One repetition k (0-based) of the skipped half beat, in panel time and source time. */
+function skipSegment(k) {
+  const start = SKIP.at + k * SKIP.len;
+  return {
+    index: k + 1,                                          // 1 … SKIP.times
+    start, end: start + SKIP.len,
+    source: S(SKIP.at),                                    // every repeat starts at the same tape position
+    rate: rateAt(start),                                   // the flat 0.7937× stretch
+    detune: wowAt(start),
+  };
+}
+
+/** Which repetition (1…4) is playing at panel time u; 0 outside the skip. */
+export function skipPassAt(u) {
+  const x = clampU(u);
+  if (x < SKIP.at || x >= SKIP_END) return 0;
+  return Math.min(SKIP.times, Math.floor((x - SKIP.at) / SKIP.len) + 1);
+}
+
+/**
+ * The tape's playback state at panel time u (seconds; 0 = the crossing into panel 18).
+ * This is the queryable form of the same rate curve and skip schedule the synthesiser uses.
+ *
+ *   rate        playbackRate (1× → 0.7937× over the first 0.6 s; 0.7937× → 1× over 5.5–6.0 s)
+ *   sourceTime  source-tape seconds heard at u. During the skip it is the position inside the
+ *               repeated half beat; after it, it is the un-interrupted S(u) (so at u = 4.0 it is
+ *               S(4.0), where the main playback resumes).
+ *   skipPass    1…4 while the needle skips (u ∈ [3.0, 4.0)), 0 outside
+ *   skipping    skipPass > 0
+ *
+ * Browser console:  const { tapeState } = await import('/audio/tape.js'); tapeState(3.1)
+ * Node:             node -e "import('./audio/tape.js').then(m => console.log(m.tapeState(3.1)))"
+ */
+export function tapeState(u) {
+  const at = clampU(u), pass = skipPassAt(at);
+  let sourceTime;
+  if (pass) {
+    const seg = skipSegment(pass - 1);
+    sourceTime = seg.source + (at - seg.start) * seg.rate * Math.pow(2, seg.detune / 1200);
+  } else {
+    sourceTime = S(at);                                    // includes the 0.5 Hz wow
+  }
+  return { u: at, rate: rateAt(at), sourceTime, skipPass: pass, skipping: pass > 0 };
+}
+/** Alias of tapeState(u), matching the rateAt / wowAt naming already used in this file. */
+export const tapeAt = tapeState;
+
+// The preview page loads audio/tape.js with the score; expose the query there too, so it can be
+// called straight from the browser console (window.tapeState(3.1), window.tapeAt(3.1)).
+if (typeof globalThis !== 'undefined') {
+  globalThis.tapeState = tapeState;
+  globalThis.tapeAt = tapeAt;
+}
+
+/** Float32Array slice of a sampled control curve over panel time [u0, u1] (inclusive). */
+const curveSlice = (curve, u0, u1) => curve.slice(Math.round(u0 / DT), Math.round(u1 / DT) + 1);
 
 // ------------------------------------------------------------------ the source cue (written in D; synthesised +4)
 const ep = I.epiano({ ratio: 1, index: 1.6, level: 0.11, decay: 3.2 });
@@ -140,27 +204,35 @@ export async function vaporTape(E) {
   const wet = ctx.createGain(); wet.gain.setValueAtTime(0.8, T(0)); wet.gain.setValueAtTime(0.8, T(END)); wet.gain.linearRampToValueAtTime(0, T(END + 0.9));
   lp.connect(dry).connect(E.bus.input);
   lp.connect(verb).connect(wet).connect(E.bus.input);
-  // main playback: rate curve + wow on detune; muted while the needle skips; out on the crossing
-  const main = ctx.createBufferSource(); main.buffer = buf;
-  main.playbackRate.setValueCurveAtTime(PR, T(0), TEND);
-  main.detune.setValueCurveAtTime(DET, T(0), TEND);
-  const mg = ctx.createGain();
-  const k0 = T(SKIP.at), k1 = T(SKIP.at + SKIP.len * SKIP.times), F = 0.004;
-  mg.gain.setValueAtTime(1, T(0));
-  mg.gain.setValueAtTime(1, k0 - F); mg.gain.linearRampToValueAtTime(0, k0);
-  mg.gain.setValueAtTime(0, k1); mg.gain.linearRampToValueAtTime(1, k1 + F);
-  mg.gain.setValueAtTime(1, T(END)); mg.gain.linearRampToValueAtTime(0, T(END) + 0.12);
-  main.connect(mg).connect(lp);
-  main.start(T(0), 0); main.stop(T(TEND));
+  // main playback, split at the skip: the first source stops on the needle drop, and the second
+  // explicitly resumes at S(SKIP_END) — the source time the un-skipped tape would have reached —
+  // so the bar-2 skip never shifts the beat grid after it.
+  const k0 = T(SKIP.at), k1 = T(SKIP_END), F = 0.004;
+  const mainA = ctx.createBufferSource(); mainA.buffer = buf;
+  mainA.playbackRate.setValueCurveAtTime(curveSlice(PR, 0, SKIP.at), T(0), SKIP.at);
+  mainA.detune.setValueCurveAtTime(curveSlice(DET, 0, SKIP.at), T(0), SKIP.at);
+  const mgA = ctx.createGain();
+  mgA.gain.setValueAtTime(1, T(0));
+  mgA.gain.setValueAtTime(1, k0 - F); mgA.gain.linearRampToValueAtTime(0, k0);
+  mainA.connect(mgA).connect(lp);
+  mainA.start(T(0), 0); mainA.stop(k0);
+  const mainB = ctx.createBufferSource(); mainB.buffer = buf;
+  mainB.playbackRate.setValueCurveAtTime(curveSlice(PR, SKIP_END, TEND), k1, TEND - SKIP_END);
+  mainB.detune.setValueCurveAtTime(curveSlice(DET, SKIP_END, TEND), k1, TEND - SKIP_END);
+  const mgB = ctx.createGain();
+  mgB.gain.setValueAtTime(0, k1); mgB.gain.linearRampToValueAtTime(1, k1 + F);
+  mgB.gain.setValueAtTime(1, T(END)); mgB.gain.linearRampToValueAtTime(0, T(END) + 0.12);
+  mainB.connect(mgB).connect(lp);
+  mainB.start(k1, S(SKIP_END)); mainB.stop(T(TEND));
   // the needle skip: the same half beat, four times, each with a faint click
-  const s0 = S(SKIP.at), rate = rateAt(SKIP.at);
   for (let k = 0; k < SKIP.times; k++) {
-    const t = T(SKIP.at + k * SKIP.len), d = T(SKIP.at + (k + 1) * SKIP.len) - t;
+    const seg = skipSegment(k);
+    const t = T(seg.start), d = T(seg.end) - t;
     const src = ctx.createBufferSource(); src.buffer = buf;
-    src.playbackRate.value = rate; src.detune.value = wowAt(SKIP.at + k * SKIP.len);
+    src.playbackRate.value = seg.rate; src.detune.value = seg.detune;
     const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(1, t + F);
     g.gain.setValueAtTime(1, t + d - F); g.gain.linearRampToValueAtTime(0, t + d);
-    src.connect(g).connect(lp); src.start(t, s0); src.stop(t + d + 0.01);
+    src.connect(g).connect(lp); src.start(t, seg.source); src.stop(t + d + 0.01);
     const n = ctx.createBufferSource(); n.buffer = noiseBuffer(ctx, 0.1, 401 + k);
     const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2500;
     const ng = ctx.createGain(); ng.gain.setValueAtTime(0.05, t); ng.gain.exponentialRampToValueAtTime(0.0005, t + 0.02);
