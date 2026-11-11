@@ -1,0 +1,704 @@
+/**
+ * Drawing the live layer over the schematic.
+ *
+ * Sits on its own canvas above the static drawing, so a playing animation
+ * repaints only this and never re-rasterizes the components underneath.
+ *
+ * Everything here is a function of the playback instant and nothing else, with
+ * one exception: the current dots carry a phase, because motion is the one thing
+ * that cannot be read off a single frozen moment. That exception is why `tick`
+ * exists, and the phase advances with *playback* rather than with the wall
+ * clock — so it holds still under a paused transport, and rewinds and races when
+ * the timeline is dragged.
+ */
+
+import { rectExpand, type Painter, type Rect, type Vec2 } from '$lib/canvas';
+import { advance, drawFlow, voltageColour, type AnimationState } from './animate';
+import {
+	drawnReach,
+	instanceVisible,
+	JUNCTION_RADIUS,
+	LABEL_GAP,
+	leadAxis,
+	symbolPaths,
+	wireVisible
+} from './draw';
+import type { FlowContext, FlowFrame } from './flow';
+import {
+	BARS,
+	brightness,
+	ledColour,
+	ledRating,
+	SEGMENTS,
+	SEGMENT_SHAPES,
+	type Burnout,
+	DIGITS,
+	digitSegment
+} from './led';
+import { formatWithUnit } from '$lib/units';
+import {
+	definitionFor,
+	definitionOf,
+	pointKey,
+	wireSegments,
+	wireStart,
+	type Instance,
+	type Schematic,
+	type Wire,
+	type WireSegment
+} from './model';
+import { instanceBounds, instancePins } from './scene';
+
+export interface DynamicView {
+	schematic: Schematic;
+	frame: FlowFrame;
+	context: FlowContext;
+	animation: AnimationState;
+	netOfPoint: ReadonlyMap<string, number>;
+	/** Where three or more wires meet, drawn again here in the net's colour. */
+	junctions: readonly Vec2[];
+	showVoltage: boolean;
+	showCurrent: boolean;
+	showLight: boolean;
+	showValues: boolean;
+	/** Whether the transport is running. Read by the drawing, not by `tick`. */
+	running: boolean;
+	/** Where playback is, in simulated seconds. */
+	time: number;
+	/** Length of the run, which sets how long an explosion lasts on screen. */
+	stopTime: number;
+	/** Instance id -> the moment that LED failed. */
+	burnouts: ReadonlyMap<string, Burnout>;
+	/**
+	 * Nets whose voltage is an artifact rather than a measurement.
+	 *
+	 * A node with nothing holding it sits whereever the leakage in the model puts
+	 * it, which here is somewhere near a rail. Printing that number beside the
+	 * wire, in the same style as every real reading on the drawing, is how a
+	 * floating input comes to look like a working one — so these say what they
+	 * are instead, and keep the wire's plain colour rather than a voltage's.
+	 */
+	floating: ReadonlySet<number>;
+	/** What is selected, and the halo colour — this layer paints over both. */
+	selection: ReadonlySet<string>;
+	selectionColour: string;
+}
+
+/**
+ * Advance the animation. Call once per frame, before drawing.
+ *
+ * `dt` is how far *playback* moved, not how long the frame took — so it is
+ * negative when the timeline is dragged backwards and large when it is dragged
+ * quickly. That is what makes the dots rewind and race with the scrubber
+ * instead of sitting still while only their brightness changes.
+ *
+ * Which also means there is nothing to gate on the transport: paused and
+ * untouched, playback has not moved, `dt` is zero, and the dots hold where they
+ * are of their own accord.
+ */
+export function tick(view: DynamicView, dt: number): void {
+	if (!view.showCurrent || dt === 0) return;
+	advance(view.animation, view.frame, view.context.currentScale, dt);
+}
+
+export function drawDynamic(painter: Painter, view: DynamicView, visible: Rect): void {
+	const { frame, context, schematic } = view;
+	const region = rectExpand(visible, 60);
+	const inside = (x: number, y: number) =>
+		x >= region.x && x <= region.x + region.w && y >= region.y && y <= region.y + region.h;
+
+	if (view.showVoltage) {
+		for (const wire of schematic.wires) {
+			const start = wireStart(wire);
+			const net = view.netOfPoint.get(pointKey(start.x, start.y));
+			if (net === undefined) continue;
+			const volts = frame.netVoltage.get(net);
+			if (volts === undefined) continue;
+			// Left in the plain wire colour: colouring it by a voltage nothing
+			// decided would be the loudest claim on the drawing.
+			if (view.floating.has(net)) continue;
+			// By the box the wire spans, not by its corners: a long wire crossing
+			// the view with both ends off it is on screen all the same.
+			if (!wireVisible(wire, region)) continue;
+			// Painted opaquely over the static wire, so a selected one would stop
+			// looking selected the moment anything was running — which is exactly
+			// when you are most likely to be picking wires out to look at. What it is
+			// carrying is on the scope; that it is the one you picked is not.
+			const chosen = view.selection.has(wire.id);
+			painter.polyline(wire.points, {
+				color: chosen ? view.selectionColour : voltageColour(volts, context.voltageRange),
+				width: chosen ? 2.4 : 2
+			});
+		}
+
+		// The wires just painted sit over the static layer, junction dots included,
+		// so a junction on a live net vanished under its own wires the moment a
+		// run started. Painted again on top, in the colour of the net it marks.
+		for (const dot of view.junctions) {
+			if (!inside(dot.x, dot.y)) continue;
+			const net = view.netOfPoint.get(pointKey(dot.x, dot.y));
+			if (net === undefined || view.floating.has(net)) continue;
+			const volts = frame.netVoltage.get(net);
+			if (volts === undefined) continue;
+			painter.dot(dot, JUNCTION_RADIUS, { color: voltageColour(volts, context.voltageRange) });
+		}
+	}
+
+	if (view.showCurrent) {
+		for (const wire of schematic.wires) {
+			const { segments, ids } = segmentsOf(wire);
+			for (const [index, segment] of segments.entries()) {
+				if (!segmentVisible(segment.a, segment.b, region)) continue;
+				const id = ids[index];
+				const current = frame.wireCurrent.get(id);
+				if (current === undefined) continue;
+				drawFlow(
+					painter,
+					segment.a,
+					segment.b,
+					// The envelope, so a wire that carries its charge in bursts keeps
+					// its dots between them instead of blinking once per burst. The
+					// instant's own current stands in until the envelope exists, which
+					// is the first frame of a run.
+					view.animation.level.get(id) ?? Math.abs(current),
+					context.currentScale,
+					view.animation.phase.get(id) ?? 0,
+					'#ffe9a8'
+				);
+			}
+		}
+
+		// And through the devices themselves, so current does not appear to vanish
+		// on entering a resistor and reappear on the far side.
+		for (const instance of schematic.instances) {
+			const path = context.instanceFlow.get(instance.id);
+			if (!path) continue;
+			const current = frame.instanceCurrent.get(instance.id);
+			if (current === undefined) continue;
+			if (!instanceVisible(instance, region, 0)) continue;
+
+			const pins = instancePins(instance);
+			const from = pins.find(({ pin }) => pin.name === path.from)?.at;
+			const to = pins.find(({ pin }) => pin.name === path.to)?.at;
+			if (!from || !to) continue;
+
+			// `from` is the terminal the engine reports current *into*, so a positive
+			// reading means it runs `from` → `to` inside the part. Drawn the other
+			// way round, the dots crossing a resistor went against the dots on the
+			// wires at both of its ends — the same conductor, animated two ways.
+			drawFlow(
+				painter,
+				from as Vec2,
+				to as Vec2,
+				view.animation.level.get(`i:${instance.id}`) ?? Math.abs(current),
+				context.currentScale,
+				view.animation.phase.get(`i:${instance.id}`) ?? 0,
+				'#ffe9a8'
+			);
+		}
+	}
+
+	if (view.showValues) drawReadings(painter, view, inside);
+
+	// Not gated on `showLight`: a part that has been destroyed is a fact about the
+	// circuit, not a lighting effect. Switching the light layer off has to leave a
+	// burnt LED looking burnt, or the drawing contradicts both the panel and the
+	// scope trace that steps at the moment it failed.
+	for (const instance of schematic.instances) {
+		if (!LIT.has(instance.kind)) continue;
+		if (!instanceVisible(instance, region, 0)) continue;
+		if (instance.kind === 'led') drawLed(painter, view, instance);
+		else if (instance.kind === 'display7') drawDigit(painter, view, instance);
+		else if (instance.kind === 'display7x4') drawDigits(painter, view, instance);
+		else if (instance.kind === 'fuse') drawFuse(painter, view, instance);
+		else if (instance.kind === 'bargraph') drawBars(painter, view, instance);
+		else if (instance.kind === 'lamp') drawLamp(painter, view, instance);
+	}
+}
+
+/** Whether any of the segment from `a` to `b` can be inside `region`. */
+function segmentVisible(a: Vec2, b: Vec2, region: Rect): boolean {
+	return !(
+		Math.max(a.x, b.x) < region.x ||
+		Math.min(a.x, b.x) > region.x + region.w ||
+		Math.max(a.y, b.y) < region.y ||
+		Math.min(a.y, b.y) > region.y + region.h
+	);
+}
+
+/**
+ * A wire's segments and their ids, worked out once per shape of the wire.
+ *
+ * Asked for every wire on every frame; spelling the ids out afresh each time
+ * was a string per segment per frame for something that only changes when the
+ * wire does. Keyed by the list of points, which is replaced whenever the wire
+ * is re-shaped.
+ */
+const segmentCache = new WeakMap<readonly Vec2[], { segments: WireSegment[]; ids: string[] }>();
+
+function segmentsOf(wire: Wire): { segments: WireSegment[]; ids: string[] } {
+	const known = segmentCache.get(wire.points);
+	if (known && known.segments.length === Math.max(wire.points.length - 1, 0)) return known;
+	const segments = wireSegments(wire);
+	const entry = { segments, ids: segments.map((segment) => `${wire.id}#${segment.index}`) };
+	segmentCache.set(wire.points, entry);
+	return entry;
+}
+
+// ---------------------------------------------------------------------------
+// Readings
+// ---------------------------------------------------------------------------
+
+type Anchors = Map<number, { at: Vec2; clear: boolean }>;
+
+/**
+ * Where each net's voltage is written, for one state of the drawing.
+ *
+ * It depends on the geometry and the nets and on nothing that moves during a
+ * run, so it is worked out when those change and not on every frame — which
+ * was every wire point checked against every part, sixty times a second.
+ */
+const anchorCache = new WeakMap<
+	ReadonlyMap<string, number>,
+	{ wires: unknown; instances: unknown; anchors: Anchors }
+>();
+
+function readingAnchors(view: DynamicView): Anchors {
+	const { schematic, netOfPoint } = view;
+	const known = anchorCache.get(netOfPoint);
+	if (known && known.wires === schematic.wires && known.instances === schematic.instances) {
+		return known.anchors;
+	}
+
+	// Where each part is, so a reading is not written across one.
+	//
+	// The label sits just above its anchor, and the topmost point of a net is
+	// very often a pin — which put the reading inside the symbol it belongs to,
+	// overlapping the drawing and, on a source, sitting in the middle of the
+	// circle. A point out on the wiring says the same thing and can be read.
+	const bodies = schematic.instances.map(instanceBounds);
+	const clearOfParts = (p: Vec2) =>
+		!bodies.some(
+			(b) => p.x >= b.x - 6 && p.x <= b.x + b.w + 6 && p.y >= b.y - 14 && p.y <= b.y + b.h + 6
+		);
+
+	const anchor: Anchors = new Map();
+	for (const wire of schematic.wires) {
+		for (const point of wire.points) {
+			const net = netOfPoint.get(pointKey(point.x, point.y));
+			if (net === undefined) continue;
+			const clear = clearOfParts(point);
+			const best = anchor.get(net);
+			// Clear of every symbol first, and only then highest and leftmost. A net
+			// whose every point is under something keeps the old placement rather
+			// than losing its reading altogether.
+			const better =
+				!best ||
+				(clear && !best.clear) ||
+				(clear === best.clear &&
+					(point.y < best.at.y || (point.y === best.at.y && point.x < best.at.x)));
+			if (better) anchor.set(net, { at: { x: point.x, y: point.y }, clear });
+		}
+	}
+	anchorCache.set(netOfPoint, { wires: schematic.wires, instances: schematic.instances, anchors: anchor });
+	return anchor;
+}
+
+/** Volts. Green, the way a meter's leads are, and clear of the two voltage poles. */
+const VOLTS_INK = '#7fe3a0';
+/** Amps, in the colour of the current dots, so the two read as one idea. */
+const AMPS_INK = '#ffe9a8';
+/** One line of text, in schematic units, for stacking a reading under a label. */
+const LINE = 12;
+
+/**
+ * Significant figures in a reading.
+ *
+ * Three, not the four the catalog uses for values someone typed in. A typed
+ * value is exact and deserves to be shown back exactly; a reading is a
+ * measurement, and `2.695 V` claims a precision the circuit does not have while
+ * being harder to read at a glance than `2.7 V`. The scope is there for anyone
+ * who wants the fourth digit.
+ */
+const FIGURES = 3;
+
+/**
+ * The numbers behind the colours.
+ *
+ * Colour and motion say *roughly*, at a glance, which is what you want while
+ * something is moving. A number says exactly, which is what you want once you
+ * have stopped to check one. They are separate switches for that reason.
+ *
+ * One voltage per net rather than one per wire: a net is at a single potential
+ * by definition, so labelling every leg would be the same number written five
+ * times. It goes at the net's topmost-leftmost corner, which is stable — the
+ * same net labels itself in the same place from frame to frame and run to run.
+ *
+ * Current is per component, because that is where the engine defines it.
+ */
+function drawReadings(
+	painter: Painter,
+	view: DynamicView,
+	inside: (x: number, y: number) => boolean
+): void {
+	const size = Math.min(11 * painter.viewport.scale, 14);
+	if (size < 7) return;
+
+	const anchor = readingAnchors(view);
+
+	for (const [net, { at }] of anchor) {
+		const volts = view.frame.netVoltage.get(net);
+		if (volts === undefined || !inside(at.x, at.y)) continue;
+		// Nothing holds this node, so the number the solver settled on is a
+		// property of the leakage in the model and not of the circuit. Saying so
+		// is the only honest reading.
+		const reading = view.floating.has(net) ? 'floating' : formatWithUnit(volts, 'V', FIGURES);
+		painter.text(reading, { x: at.x, y: at.y - 7 }, {
+			size,
+			color: VOLTS_INK,
+			align: 'center',
+			baseline: 'bottom',
+			minSize: 7
+		});
+	}
+
+	for (const instance of view.schematic.instances) {
+		const current = view.frame.instanceCurrent.get(instance.id);
+		if (current === undefined || !inside(instance.x, instance.y)) continue;
+		// The same figure the dots are moving on: a needle with a fall time, not
+		// the instant. A part that conducts in bursts spends most of its frames
+		// carrying nothing, and a label that reported each of those would sit at
+		// zero and flick to a milliamp — while the dots beside it, which follow
+		// the charge, kept moving. Two readouts of the same thing disagreeing is
+		// worse than either being coarse.
+		const reading = view.animation.level.get(`i:${instance.id}`) ?? Math.abs(current);
+		// Stacked under the name and the value rather than put somewhere of its own.
+		// Those two already sit on the side the leads leave clear, and that is the
+		// only side with room: dropping the reading anywhere else lands it on a wire
+		// for one orientation or the other.
+		const def = definitionFor(instance);
+		const reach = drawnReach(def, instance.rotation);
+		const sideways = leadAxis(def, instance.rotation) === 'x';
+		const clear = (sideways ? reach.y : reach.x) + LABEL_GAP;
+		painter.text(
+			formatWithUnit(reading, 'A', FIGURES),
+			sideways
+				? { x: instance.x, y: instance.y + clear + LINE }
+				: { x: instance.x + clear, y: instance.y + 8 + LINE },
+			{
+				size,
+				color: AMPS_INK,
+				align: sideways ? 'center' : 'left',
+				baseline: 'top',
+				minSize: 7
+			}
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// LEDs
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of the run an explosion plays over.
+ *
+ * A fraction rather than a fixed duration, because it is measured in simulated
+ * time: that way the burst takes the same share of the replay whether the run
+ * covers a microsecond or a minute, and scrubbing back over the moment replays
+ * it instead of finding it already finished.
+ */
+const BURST_SPAN = 0.05;
+
+/** What is left of a part that has burnt, and the cracks through it. */
+const CHAR = '#2b2521';
+const CRACK = '#7a6250';
+
+/**
+ * The lit bars of a seven-segment digit.
+ *
+ * Each one is its own diode with its own current, so this is the same lighting
+ * as a single LED done eight times over — but drawn as a stroke along the bar
+ * rather than as a halo around a point, because what makes a digit readable is
+ * the shape and not the glow. The unlit bars are already on the layer below, so
+ * a segment carrying nothing simply is not painted here and shows through dark.
+ */
+function drawDigit(painter: Painter, view: DynamicView, instance: Instance): void {
+	drawSegments(
+		painter,
+		view,
+		instance,
+		SEGMENTS.map((segment) => [segment, SEGMENT_SHAPES[segment]] as const),
+		4.5
+	);
+}
+
+/**
+ * The four-digit display: the single digit's lighting, a digit at a time.
+ *
+ * Read from the frame's mean current like every other part, so a display being
+ * multiplexed faster than the frame shows all four digits lit at once, each at
+ * the brightness its share of the time gives it — which is what the eye makes
+ * of it too. Slowed down far enough, the digits take turns.
+ */
+function drawDigits(painter: Painter, view: DynamicView, instance: Instance): void {
+	drawSegments(
+		painter,
+		view,
+		instance,
+		DIGITS.flatMap((digit) =>
+			SEGMENTS.map((segment) => [`${digit}${segment}`, digitSegment(digit, segment)] as const)
+		),
+		3.5
+	);
+}
+
+function drawSegments(
+	painter: Painter,
+	view: DynamicView,
+	instance: Instance,
+	bars: ReadonlyArray<readonly [string, readonly [number, number, number, number]]>,
+	width: number
+): void {
+	if (!view.showLight) return;
+	const rated = ledRating(instance);
+	const { rgb } = ledColour(instance.params.colour);
+	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		for (const [key, [x1, y1, x2, y2]] of bars) {
+			const current = view.frame.segmentCurrent.get(`${instance.id}:${key}`) ?? 0;
+			const lit = brightness(current, rated);
+			// Same floor as a single LED: below this it is leakage, and painting it
+			// would leave every bar faintly on and the digit unreadable.
+			if (lit < 0.05) continue;
+			const from = { x: x1, y: y1 };
+			const to = { x: x2, y: y2 };
+			// A soft pass under a hard one: the spill says how hard it is driven and
+			// the bar itself stays the same width, so a dim digit is still a digit.
+			painter.polyline([from, to], { color: ink, width: width * 2, alpha: 0.18 + 0.22 * lit });
+			painter.polyline([from, to], {
+				color: whiteHot(rgb, Math.max(lit - 0.7, 0) * 0.6),
+				width,
+				alpha: Math.min(0.5 + lit * 0.5, 1)
+			});
+		}
+	});
+}
+
+/**
+ * A fuse that has blown: the body sooted over and the element parted in the
+ * middle, with the same flash an LED goes out with.
+ */
+function drawFuse(painter: Painter, view: DynamicView, instance: Instance): void {
+	const burn = view.burnouts.get(instance.id);
+	if (!burn || view.time < burn.time) return;
+	const at = { x: instance.x, y: instance.y };
+	const paths = symbolPaths(instance.kind, instance.params);
+	painter.transformed(at, instance.rotation, () => {
+		painter.strokePath(paths.stroke, { color: CHAR, width: 3 });
+		painter.polyline(
+			[
+				{ x: -12, y: 0 },
+				{ x: -4, y: 0 },
+				{ x: -2, y: -3 }
+			],
+			{ color: CRACK, width: 1.6 }
+		);
+		painter.polyline(
+			[
+				{ x: 12, y: 0 },
+				{ x: 5, y: 0 },
+				{ x: 3, y: 3 }
+			],
+			{ color: CRACK, width: 1.6 }
+		);
+	});
+	const progress = (view.time - burn.time) / Math.max(view.stopTime * BURST_SPAN, 1e-15);
+	if (view.showLight && progress <= 1) drawBurst(painter, at, progress, instance.id);
+}
+
+/** Parts that give off light, and so are drawn again once something flows. */
+const LIT = new Set(['led', 'display7', 'display7x4', 'bargraph', 'lamp', 'fuse']);
+
+/** A bar graph: the digit's lighting, one bar at a time. */
+function drawBars(painter: Painter, view: DynamicView, instance: Instance): void {
+	if (!view.showLight) return;
+	const rated = ledRating(instance);
+	const { rgb } = ledColour(instance.params.colour);
+	const ink = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+	painter.transformed({ x: instance.x, y: instance.y }, instance.rotation, () => {
+		for (const [i, bar] of BARS.entries()) {
+			const current = view.frame.segmentCurrent.get(`${instance.id}:${bar}`) ?? 0;
+			const lit = brightness(current, rated);
+			if (lit < 0.05) continue;
+			const y = (i - 5) * 10;
+			const from = { x: -14, y };
+			const to = { x: 14, y };
+			painter.polyline([from, to], { color: ink, width: 9, alpha: 0.18 + 0.22 * lit });
+			painter.polyline([from, to], {
+				color: whiteHot(rgb, Math.max(lit - 0.7, 0) * 0.6),
+				width: 5,
+				alpha: Math.min(0.5 + lit * 0.5, 1)
+			});
+		}
+	});
+}
+
+/** Warm white, the colour of a filament rather than of a junction. */
+const FILAMENT: readonly [number, number, number] = [255, 204, 120];
+
+/**
+ * A filament lamp, lit by the power in it.
+ *
+ * Measured against the current it draws at its rating, so a bulb run at its
+ * rated voltage is fully lit and one on half of it is visibly dim — the same
+ * brightness curve the LEDs use, which is close enough for a glow.
+ */
+function drawLamp(painter: Painter, view: DynamicView, instance: Instance): void {
+	if (!view.showLight) return;
+	const volts = Number(instance.params.voltage);
+	const watts = Number(instance.params.power);
+	if (!(volts > 0) || !(watts > 0)) return;
+	const current = Math.abs(view.frame.instanceCurrent.get(instance.id) ?? 0);
+	const lit = brightness(current, watts / volts);
+	if (lit < 0.05) return;
+	const at = { x: instance.x, y: instance.y };
+	painter.glow(at, 16 + 36 * lit, FILAMENT, Math.min(0.2 + lit * 0.5, 0.9));
+	painter.glow(at, (16 + 36 * lit) * 0.45, FILAMENT, Math.min(0.25 + lit * 0.55, 1));
+}
+
+function drawLed(painter: Painter, view: DynamicView, instance: Instance): void {
+	const at = { x: instance.x, y: instance.y };
+	const burn = view.burnouts.get(instance.id);
+
+	if (!burn || view.time < burn.time) {
+		if (!view.showLight) return;
+		const current = view.frame.instanceCurrent.get(instance.id) ?? 0;
+		const lit = brightness(current, ledRating(instance));
+		// Below this it is a leakage current, not a light. Drawing it would put a
+		// permanent smudge on every LED in the circuit, lit or not.
+		if (lit < 0.05) return;
+
+		const { rgb } = ledColour(instance.params.colour);
+		// Three passes, all added rather than painted over each other: a wide halo
+		// for the spill, a tight one for the part of it that is genuinely bright,
+		// and a hot core so the LED reads as the source of the light rather than as
+		// something sitting in a pool of it. One pass alone cannot do both ends —
+		// wide enough to spill is too faint to look lit at full current.
+		painter.glow(at, 14 + 34 * lit, rgb, Math.min(0.2 + lit * 0.5, 0.9));
+		painter.glow(at, (14 + 34 * lit) * 0.45, rgb, Math.min(0.25 + lit * 0.55, 1));
+		painter.dot(at, 2.2 + 4 * Math.min(lit, 1), {
+			color: whiteHot(rgb, Math.max(lit - 0.75, 0) * 0.5),
+			alpha: Math.min(0.55 + lit * 0.5, 1)
+		});
+		return;
+	}
+
+	// Past the moment it failed. The char is drawn first and unconditionally, so
+	// a burnt part still looks burnt when the transport is paused long after the
+	// blast has finished — the failure is a fact about the circuit, not an effect.
+	const paths = symbolPaths(instance.kind, instance.params);
+	painter.transformed(at, instance.rotation, () => {
+		painter.strokePath(paths.stroke, { color: CHAR, width: 3 });
+		if (paths.hasFill) painter.fillPath(paths.fill, { color: CHAR });
+		painter.polyline(
+			[
+				{ x: -7, y: -6 },
+				{ x: -1, y: 1 },
+				{ x: -4, y: 4 },
+				{ x: 3, y: 8 }
+			],
+			{ color: CRACK, width: 1.4 }
+		);
+		painter.polyline(
+			[
+				{ x: -2, y: -8 },
+				{ x: 2, y: -2 },
+				{ x: 8, y: -3 }
+			],
+			{ color: CRACK, width: 1.2 }
+		);
+	});
+
+	// The blast itself is light, so it does answer to the toggle. The wreckage
+	// above does not.
+	const progress = (view.time - burn.time) / Math.max(view.stopTime * BURST_SPAN, 1e-15);
+	if (view.showLight && progress <= 1) drawBurst(painter, at, progress, instance.id);
+}
+
+/**
+ * The explosion, as a function of how far through it we are.
+ *
+ * No state is kept between frames: the shard directions come from the instance
+ * id, so the same LED blows apart the same way every time it is replayed, and
+ * scrubbing backwards and forwards over the moment is stable rather than
+ * reshuffling the debris on every pass.
+ */
+function drawBurst(painter: Painter, at: Vec2, progress: number, seed: string): void {
+	const fade = 1 - progress;
+
+	// The flash. Brief, white-hot, and gone before the ring has travelled far.
+	if (progress < 0.35) {
+		const heat = 1 - progress / 0.35;
+		painter.glow(at, 18 + 30 * (1 - heat), [255, 238, 205], 0.9 * heat);
+	}
+
+	// The shock front, expanding and thinning as it goes.
+	painter.circle(at, 6 + 46 * progress, undefined, {
+		color: '#ffb066',
+		width: 2.6 * fade,
+		alpha: fade * 0.9
+	});
+
+	// Pieces of the package on their way out, each a short streak along its path.
+	const random = seeded(seed);
+	for (let i = 0; i < 9; i++) {
+		const angle = random() * Math.PI * 2;
+		const reach = (24 + random() * 28) * progress;
+		const dx = Math.cos(angle);
+		const dy = Math.sin(angle);
+		const tail = 8 * fade;
+		painter.line(
+			{ x: at.x + dx * reach, y: at.y + dy * reach },
+			{ x: at.x + dx * (reach + tail), y: at.y + dy * (reach + tail) },
+			{ color: '#ffd9a0', width: 1.8, alpha: fade }
+		);
+	}
+
+	// Smoke, once the light has gone out of it.
+	if (progress > 0.3) {
+		const drift = (progress - 0.3) / 0.7;
+		painter.glow({ x: at.x, y: at.y - 26 * drift }, 11 + 26 * drift, [128, 128, 140], 0.3 * (1 - drift));
+	}
+}
+
+/**
+ * Pull a colour toward white.
+ *
+ * Real light sources desaturate at their centre once they are bright enough to
+ * saturate whatever is looking at them, and that is the cue the eye reads as
+ * "very bright" — a pure hue can only get so convincing before it just looks
+ * like a bigger patch of the same colour.
+ */
+function whiteHot(rgb: readonly [number, number, number], amount: number): string {
+	const t = Math.min(Math.max(amount, 0), 1);
+	const mix = (c: number) => Math.round(c + (255 - c) * t);
+	return `rgb(${mix(rgb[0])}, ${mix(rgb[1])}, ${mix(rgb[2])})`;
+}
+
+/** A small deterministic generator, seeded by text. */
+function seeded(text: string): () => number {
+	let state = 2166136261;
+	for (let i = 0; i < text.length; i++) {
+		state ^= text.charCodeAt(i);
+		state = Math.imul(state, 16777619);
+	}
+	return () => {
+		state = Math.imul(state ^ (state >>> 15), 2246822507);
+		state = Math.imul(state ^ (state >>> 13), 3266489909);
+		state ^= state >>> 16;
+		return (state >>> 0) / 4294967296;
+	};
+}

@@ -1,0 +1,1643 @@
+//! The event-driven digital domain.
+//!
+//! Nothing here steps through time. Devices only run when one of their inputs
+//! actually changes, and they schedule their outputs into the future by their
+//! propagation delay. A 100 MHz clock feeding an idle counter costs a handful of
+//! evaluations per cycle, not one per analog timestep.
+//!
+//! Nets are multiply driven on purpose — that is how a tri-state bus works — so
+//! every driver keeps its own value and the net resolves them on read.
+
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
+/// A digital net (wire).
+pub type NetId = usize;
+
+/// Identifies one device output driving one net.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DriverId(pub usize);
+
+/// Four-state logic. `Unknown` is a real value, not an error: it is what an
+/// uninitialized flip-flop holds and what a bus contention produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Logic {
+    Low,
+    High,
+    Unknown,
+    HighZ,
+}
+
+impl Logic {
+    #[inline]
+    pub fn from_bool(b: bool) -> Self {
+        if b { Logic::High } else { Logic::Low }
+    }
+
+    /// `Some(true|false)` for a driven level, `None` for X and Z.
+    #[inline]
+    pub fn as_bool(self) -> Option<bool> {
+        match self {
+            Logic::Low => Some(false),
+            Logic::High => Some(true),
+            _ => None,
+        }
+    }
+
+    /// A floating input reads as unknown to the logic that consumes it.
+    #[inline]
+    pub fn sense(self) -> Self {
+        if self == Logic::HighZ { Logic::Unknown } else { self }
+    }
+
+    #[inline]
+    pub fn invert(self) -> Self {
+        match self.sense() {
+            Logic::Low => Logic::High,
+            Logic::High => Logic::Low,
+            other => other,
+        }
+    }
+
+    #[inline]
+    pub fn and(self, other: Self) -> Self {
+        // A single dominant zero settles the result even if the other input is X.
+        match (self.sense(), other.sense()) {
+            (Logic::Low, _) | (_, Logic::Low) => Logic::Low,
+            (Logic::High, Logic::High) => Logic::High,
+            _ => Logic::Unknown,
+        }
+    }
+
+    #[inline]
+    pub fn or(self, other: Self) -> Self {
+        match (self.sense(), other.sense()) {
+            (Logic::High, _) | (_, Logic::High) => Logic::High,
+            (Logic::Low, Logic::Low) => Logic::Low,
+            _ => Logic::Unknown,
+        }
+    }
+
+    #[inline]
+    pub fn xor(self, other: Self) -> Self {
+        match (self.as_bool(), other.as_bool()) {
+            (Some(a), Some(b)) => Logic::from_bool(a != b),
+            _ => Logic::Unknown,
+        }
+    }
+
+    /// Combine two drivers on the same net.
+    #[inline]
+    pub fn resolve(self, other: Self) -> Self {
+        match (self, other) {
+            (Logic::HighZ, x) | (x, Logic::HighZ) => x,
+            (a, b) if a == b => a,
+            // Two drivers fighting: neither wins.
+            _ => Logic::Unknown,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event queue
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+pub struct Event {
+    pub time: f64,
+    pub driver: DriverId,
+    pub net: NetId,
+    pub state: Logic,
+    /// Insertion order, so events at the same instant fire deterministically.
+    seq: u64,
+}
+
+impl PartialEq for Event {
+    fn eq(&self, other: &Self) -> bool {
+        self.time == other.time && self.seq == other.seq
+    }
+}
+impl Eq for Event {}
+
+impl Ord for Event {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reversed: `BinaryHeap` is a max-heap and we want the earliest event.
+        other.time.total_cmp(&self.time).then_with(|| other.seq.cmp(&self.seq))
+    }
+}
+impl PartialOrd for Event {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct EventQueue {
+    heap: BinaryHeap<Event>,
+    seq: u64,
+}
+
+impl EventQueue {
+    pub fn push(&mut self, time: f64, driver: DriverId, net: NetId, state: Logic) {
+        self.seq += 1;
+        self.heap.push(Event { time, driver, net, state, seq: self.seq });
+    }
+
+    /// Time of the next pending event, if any.
+    pub fn next_time(&self) -> Option<f64> {
+        self.heap.peek().map(|e| e.time)
+    }
+
+    /// Remove and return the next event if it is due at or before `time`.
+    pub fn pop_due(&mut self, time: f64) -> Option<Event> {
+        match self.heap.peek() {
+            Some(e) if e.time <= time => self.heap.pop(),
+            _ => None,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.heap.clear();
+        self.seq = 0;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.heap.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Devices
+// ---------------------------------------------------------------------------
+
+/// What a device sees while evaluating.
+pub struct EvalCtx<'a> {
+    pub now: f64,
+    resolved: &'a [Logic],
+    queue: &'a mut EventQueue,
+    /// First driver id owned by the device being evaluated.
+    driver_base: usize,
+}
+
+impl EvalCtx<'_> {
+    /// Resolved state of a net.
+    #[inline]
+    pub fn read(&self, net: NetId) -> Logic {
+        self.resolved.get(net).copied().unwrap_or(Logic::Unknown)
+    }
+
+    /// Drive one of this device's outputs, taking effect after `delay` seconds.
+    pub fn drive(&mut self, output_index: usize, net: NetId, state: Logic, delay: f64) {
+        let time = self.now + delay.max(0.0);
+        self.queue.push(time, DriverId(self.driver_base + output_index), net, state);
+    }
+}
+
+/// A device in the digital domain.
+pub trait DigitalDevice: std::fmt::Debug + Send {
+    fn name(&self) -> &str;
+    fn kind(&self) -> &'static str;
+    /// Nets this device listens to. Changes on these trigger `evaluate`.
+    fn input_nets(&self) -> &[NetId];
+    /// Nets this device drives, in the order `EvalCtx::drive` indexes them.
+    fn output_nets(&self) -> &[NetId];
+
+    /// Called once before time starts. Clocks schedule their first edge here;
+    /// combinational parts publish their initial output.
+    fn initialize(&mut self, ctx: &mut EvalCtx) {
+        self.evaluate(ctx);
+    }
+
+    /// Called whenever an input net settles on a new value.
+    fn evaluate(&mut self, ctx: &mut EvalCtx);
+
+    fn reset(&mut self) {}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GateKind {
+    Buffer,
+    Not,
+    And,
+    Nand,
+    Or,
+    Nor,
+    Xor,
+    Xnor,
+}
+
+/// A combinational gate with any number of inputs.
+#[derive(Debug, Clone)]
+pub struct Gate {
+    pub name: String,
+    pub kind: GateKind,
+    pub inputs: Vec<NetId>,
+    pub output: NetId,
+    /// Propagation delay in seconds.
+    pub delay: f64,
+    outputs: Vec<NetId>,
+}
+
+impl Gate {
+    pub fn new(
+        name: impl Into<String>,
+        kind: GateKind,
+        inputs: Vec<NetId>,
+        output: NetId,
+        delay: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            inputs,
+            output,
+            delay: delay.max(0.0),
+            outputs: vec![output],
+        }
+    }
+
+    /// The output for the inputs as read, without collecting them first: a
+    /// gate is evaluated a million times a second behind a fast clock, and a
+    /// list allocated for each of those was most of what an event cost.
+    fn compute(&self, mut values: impl Iterator<Item = Logic>) -> Logic {
+        match self.kind {
+            GateKind::Buffer => values.next().unwrap_or(Logic::Unknown).sense(),
+            GateKind::Not => values.next().unwrap_or(Logic::Unknown).invert(),
+            GateKind::And => values.fold(Logic::High, |a, b| a.and(b)),
+            GateKind::Nand => values.fold(Logic::High, |a, b| a.and(b)).invert(),
+            GateKind::Or => values.fold(Logic::Low, |a, b| a.or(b)),
+            GateKind::Nor => values.fold(Logic::Low, |a, b| a.or(b)).invert(),
+            GateKind::Xor => values.fold(Logic::Low, |a, b| a.xor(b)),
+            GateKind::Xnor => values.fold(Logic::Low, |a, b| a.xor(b)).invert(),
+        }
+    }
+}
+
+impl DigitalDevice for Gate {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "gate"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.outputs
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        let out = self.compute(self.inputs.iter().map(|n| ctx.read(*n)));
+        ctx.drive(0, self.output, out, self.delay);
+    }
+}
+
+/// A free-running clock. It has no inputs; it reschedules itself forever.
+#[derive(Debug, Clone)]
+pub struct Clock {
+    pub name: String,
+    pub output: NetId,
+    /// Time spent low and high per cycle.
+    pub low_time: f64,
+    pub high_time: f64,
+    /// Delay before the first rising edge.
+    pub start_delay: f64,
+    state: Logic,
+    inputs: Vec<NetId>,
+    outputs: Vec<NetId>,
+}
+
+impl Clock {
+    pub fn new(name: impl Into<String>, output: NetId, frequency: f64, duty: f64) -> Self {
+        let period = 1.0 / frequency.max(1e-12);
+        let duty = duty.clamp(0.01, 0.99);
+        Self {
+            name: name.into(),
+            output,
+            low_time: period * (1.0 - duty),
+            high_time: period * duty,
+            start_delay: 0.0,
+            state: Logic::Low,
+            // A clock listens to its own output. That is what re-triggers it: the
+            // edge it just produced is the event that makes it schedule the next.
+            inputs: vec![output],
+            outputs: vec![output],
+        }
+    }
+}
+
+impl DigitalDevice for Clock {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "clock"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.outputs
+    }
+
+    fn initialize(&mut self, ctx: &mut EvalCtx) {
+        self.state = Logic::Low;
+        ctx.drive(0, self.output, Logic::Low, 0.0);
+        ctx.drive(0, self.output, Logic::High, self.start_delay + self.low_time);
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        // Reached only when our own edge lands, since the clock has no inputs.
+        let current = ctx.read(self.output);
+        let (next, hold) = match current {
+            Logic::High => (Logic::Low, self.high_time),
+            _ => (Logic::High, self.low_time),
+        };
+        self.state = current;
+        ctx.drive(0, self.output, next, hold);
+    }
+}
+
+/// A logic level somebody set, holding a net at it for the whole run.
+///
+/// The digital counterpart of a switch, and a genuinely different part rather
+/// than a convenience. A switch is a contact: it either connects a net to
+/// something or leaves it connected to nothing, and "nothing" is not a logic
+/// level — which is why a switch feeding a gate input needs a resistor to hold
+/// that input when the contact is open. This drives instead. Both of its
+/// positions are a level, so there is nothing to pull and no instant at which
+/// the net is adrift.
+///
+/// It has no inputs, so nothing in the circuit can move it and `evaluate` is
+/// never reached after the start. That is the point of it.
+///
+/// `flips` is when somebody moved it, in seconds from the start of the run: each
+/// entry inverts the level from that instant on. A run is replayed from zero
+/// every time the drawing changes, so an operation performed halfway through has
+/// to be part of the description of the circuit rather than something done to a
+/// running one — otherwise the past would be rewritten by every click, and the
+/// step you just made would be the one thing the waveform did not show.
+#[derive(Debug, Clone)]
+pub struct LogicSource {
+    pub name: String,
+    pub output: NetId,
+    pub state: Logic,
+    pub flips: Vec<f64>,
+    inputs: Vec<NetId>,
+    outputs: Vec<NetId>,
+}
+
+impl LogicSource {
+    pub fn new(name: impl Into<String>, output: NetId, state: Logic) -> Self {
+        Self {
+            name: name.into(),
+            output,
+            state,
+            flips: Vec::new(),
+            inputs: Vec::new(),
+            outputs: vec![output],
+        }
+    }
+
+    /// The same source, operated at each of these instants.
+    pub fn operated_at(mut self, flips: impl IntoIterator<Item = f64>) -> Self {
+        self.flips = flips.into_iter().filter(|t| t.is_finite() && *t > 0.0).collect();
+        self.flips.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self
+    }
+}
+
+impl DigitalDevice for LogicSource {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "logic_source"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.outputs
+    }
+
+    /// The whole schedule goes on the queue before time starts.
+    ///
+    /// Nothing else can put it there: with no inputs this device is never
+    /// evaluated again, which is exactly the property that makes it stable.
+    fn initialize(&mut self, ctx: &mut EvalCtx) {
+        ctx.drive(0, self.output, self.state, 0.0);
+        let mut level = self.state;
+        for at in self.flips.clone() {
+            level = match level {
+                Logic::High => Logic::Low,
+                _ => Logic::High,
+            };
+            ctx.drive(0, self.output, level, at);
+        }
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        ctx.drive(0, self.output, self.state, 0.0);
+    }
+}
+
+/// Positive-edge-triggered D flip-flop with an optional asynchronous reset.
+#[derive(Debug, Clone)]
+pub struct DFlipFlop {
+    pub name: String,
+    pub clk: NetId,
+    pub d: NetId,
+    /// Active-high asynchronous reset. `None` if unused.
+    pub reset: Option<NetId>,
+    pub preset: Option<NetId>,
+    pub q: NetId,
+    pub qn: NetId,
+    /// Clock-to-output delay.
+    pub delay: f64,
+    prev_clk: Logic,
+    stored: Logic,
+    inputs: Vec<NetId>,
+    outputs: Vec<NetId>,
+}
+
+/// The inputs that act whatever the clock is doing.
+///
+/// Together rather than as two more arguments, because they are one idea: the
+/// pair of pins a datasheet groups under "asynchronous inputs", and the pair a
+/// caller with neither of them leaves at `default()`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AsyncInputs {
+    pub reset: Option<NetId>,
+    pub preset: Option<NetId>,
+}
+
+impl DFlipFlop {
+    pub fn new(
+        name: impl Into<String>,
+        clk: NetId,
+        d: NetId,
+        async_inputs: AsyncInputs,
+        q: NetId,
+        qn: NetId,
+        delay: f64,
+    ) -> Self {
+        let AsyncInputs { reset, preset } = async_inputs;
+        let mut inputs = vec![clk, d];
+        inputs.extend(reset);
+        inputs.extend(preset);
+        Self {
+            name: name.into(),
+            clk,
+            d,
+            reset,
+            preset,
+            q,
+            qn,
+            delay: delay.max(0.0),
+            prev_clk: Logic::Unknown,
+            // Powers up low rather than unknown. Real hardware comes up in an
+            // arbitrary state, but an unknown here can never resolve: a toggle
+            // flip-flop feeds `qn` back into `d`, and `invert(X)` is `X`, so a
+            // divide-by-two drawn without a reset would sit at X forever. Being
+            // useful beats being pedantic; wire up the reset input for rigour.
+            stored: Logic::Low,
+            inputs,
+            outputs: vec![q, qn],
+        }
+    }
+
+    fn publish(&self, ctx: &mut EvalCtx) {
+        ctx.drive(0, self.q, self.stored, self.delay);
+        ctx.drive(1, self.qn, self.stored.invert(), self.delay);
+    }
+}
+
+impl DigitalDevice for DFlipFlop {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "dff"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.outputs
+    }
+
+    fn initialize(&mut self, ctx: &mut EvalCtx) {
+        self.prev_clk = ctx.read(self.clk);
+        self.publish(ctx);
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        if let Some(rst) = self.reset
+            && ctx.read(rst) == Logic::High
+        {
+            self.prev_clk = ctx.read(self.clk);
+            if self.stored != Logic::Low {
+                self.stored = Logic::Low;
+                self.publish(ctx);
+            }
+            return;
+        }
+        // Checked after reset, so holding both puts the output low. A datasheet
+        // calls that combination invalid and means it: on real silicon both
+        // outputs go high at once and they are supposed to be opposites. Picking
+        // an order is not a claim that the hardware does this — it is refusing to
+        // leave a part of the model undefined.
+        if let Some(pre) = self.preset
+            && ctx.read(pre) == Logic::High
+        {
+            self.prev_clk = ctx.read(self.clk);
+            if self.stored != Logic::High {
+                self.stored = Logic::High;
+                self.publish(ctx);
+            }
+            return;
+        }
+
+        let clk = ctx.read(self.clk);
+        let rising = self.prev_clk == Logic::Low && clk == Logic::High;
+        self.prev_clk = clk;
+        if rising {
+            let d = ctx.read(self.d).sense();
+            if d != self.stored {
+                self.stored = d;
+                self.publish(ctx);
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.prev_clk = Logic::Unknown;
+        self.stored = Logic::Low;
+    }
+}
+
+/// A tri-state buffer: passes `input` to `output` when `enable` is high, and
+/// releases the net to high impedance otherwise. The building block of a bus.
+#[derive(Debug, Clone)]
+pub struct TriStateBuffer {
+    pub name: String,
+    pub input: NetId,
+    pub enable: NetId,
+    pub output: NetId,
+    pub delay: f64,
+    inputs: Vec<NetId>,
+    outputs: Vec<NetId>,
+}
+
+impl TriStateBuffer {
+    pub fn new(
+        name: impl Into<String>,
+        input: NetId,
+        enable: NetId,
+        output: NetId,
+        delay: f64,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            input,
+            enable,
+            output,
+            delay: delay.max(0.0),
+            inputs: vec![input, enable],
+            outputs: vec![output],
+        }
+    }
+}
+
+impl DigitalDevice for TriStateBuffer {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "tristate"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.outputs
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        let out = match ctx.read(self.enable) {
+            Logic::High => ctx.read(self.input).sense(),
+            Logic::Low => Logic::HighZ,
+            // An unknown enable means we cannot say whether the net is driven.
+            _ => Logic::Unknown,
+        };
+        ctx.drive(0, self.output, out, self.delay);
+    }
+}
+
+/// A block of memory: words picked by a binary address and read out
+/// continuously.
+///
+/// That is all of a static RAM, a ROM, or an EEPROM. Chip selects, output
+/// enables and three-state pins are the package's business, built from gates
+/// and buffers around this the same way the real die has them around its cell
+/// array — so this has one write line, active high, and always drives its
+/// outputs.
+///
+/// A RAM stores whatever is on its data inputs for as long as `write` is high.
+/// An EEPROM (see `Programming`) does not: it latches the address as `write`
+/// rises and the data as it falls, and then spends milliseconds putting the
+/// byte into the array, reading back as the complement of bit 7 on the top
+/// output until it is done — the data polling a program waits on.
+///
+/// The address is read least significant bit first. While any of its bits is
+/// unknown the outputs are unknown, and a write goes nowhere: which cell a real
+/// part would have hit depends on how the decoder settled, and nothing here knows
+/// that.
+#[derive(Debug, Clone)]
+pub struct Memory {
+    pub name: String,
+    pub address: Vec<NetId>,
+    pub data_in: Vec<NetId>,
+    pub data_out: Vec<NetId>,
+    pub write: NetId,
+    /// Access time: from an address or a write to the outputs following it.
+    pub delay: f64,
+    /// How an EEPROM writes, or `None` for a RAM.
+    programming: Option<Programming>,
+    /// Every bit, word by word, least significant first.
+    cells: Vec<Logic>,
+    /// What the cells hold at the start of a run.
+    initial: Vec<Logic>,
+    inputs: Vec<NetId>,
+    outputs: Vec<NetId>,
+    /// What `write` was at the last evaluation, for finding its edges.
+    write_was: Logic,
+    /// The word the last rising edge of `write` latched.
+    latched: Option<usize>,
+    phase: Phase,
+}
+
+/// How an EEPROM takes a write.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Programming {
+    /// How long the array takes to store what was loaded, seconds.
+    pub write_time: f64,
+    /// Words that can be loaded before a write starts, all in one page. One for
+    /// a part that writes a byte at a time.
+    pub page: usize,
+    /// How long after the last load the write starts, when a page takes more.
+    pub load_window: f64,
+    /// A net nobody else drives, pulsed to wake the device when a wait is up.
+    pub timer: NetId,
+}
+
+/// A word loaded for writing, and the bits it goes in with.
+type Load = (usize, Vec<Logic>);
+
+#[derive(Debug, Clone, Default)]
+enum Phase {
+    #[default]
+    Idle,
+    /// Words in the page buffer, and when the write starts unless more come.
+    Loading { words: Vec<Load>, until: f64 },
+    /// The array being written, and when it is done.
+    Writing { words: Vec<Load>, until: f64 },
+}
+
+/// A wake-up pulse's width. Anything shorter than every real delay will do.
+const TICK: f64 = 1e-12;
+
+impl Memory {
+    /// Widest address a memory takes: 64 K words.
+    pub const MAX_ADDRESS_BITS: usize = 16;
+
+    /// A memory whose cells start as `initial`, one entry per word, `None` for a
+    /// word nobody put anything in. Words past the end of `initial` are `blank`.
+    pub fn new(
+        name: impl Into<String>,
+        (address, write): (Vec<NetId>, NetId),
+        (data_in, data_out): (Vec<NetId>, Vec<NetId>),
+        initial: &[Option<u64>],
+        blank: Option<u64>,
+        delay: f64,
+    ) -> Self {
+        let width = data_out.len();
+        let words = 1usize << address.len().min(Self::MAX_ADDRESS_BITS);
+        let mut cells = Vec::with_capacity(words * width);
+        for w in 0..words {
+            let word = initial.get(w).copied().unwrap_or(blank);
+            for b in 0..width {
+                cells.push(match word {
+                    Some(value) => Logic::from_bool(value >> b & 1 == 1),
+                    None => Logic::Unknown,
+                });
+            }
+        }
+        let inputs = address.iter().chain(&data_in).chain([&write]).copied().collect();
+        Self {
+            name: name.into(),
+            address,
+            data_in,
+            outputs: data_out.clone(),
+            data_out,
+            write,
+            delay: delay.max(0.0),
+            programming: None,
+            initial: cells.clone(),
+            cells,
+            inputs,
+            write_was: Logic::Unknown,
+            latched: None,
+            phase: Phase::Idle,
+        }
+    }
+
+    /// Write the way an EEPROM does rather than the way a RAM does.
+    pub fn programmed(mut self, programming: Programming) -> Self {
+        self.inputs.push(programming.timer);
+        self.outputs.push(programming.timer);
+        self.programming = Some(programming);
+        self
+    }
+
+    /// The word the address picks, or `None` while any bit of it is undecided.
+    fn selected(&self, ctx: &EvalCtx) -> Option<usize> {
+        self.address.iter().enumerate().try_fold(0usize, |word, (bit, &net)| {
+            Some(word | usize::from(ctx.read(net).as_bool()?) << bit)
+        })
+    }
+
+    /// What the cell at `word`, `bit` holds right now.
+    pub fn cell(&self, word: usize, bit: usize) -> Logic {
+        self.cells.get(word * self.data_out.len() + bit).copied().unwrap_or(Logic::Unknown)
+    }
+
+    /// Wake up at `at`, by pulsing the timer net.
+    fn wake_at(&self, ctx: &mut EvalCtx, at: f64) {
+        if let Some(p) = self.programming {
+            let index = self.data_out.len();
+            let wait = (at - ctx.now).max(0.0);
+            ctx.drive(index, p.timer, Logic::High, wait);
+            ctx.drive(index, p.timer, Logic::Low, wait + TICK);
+        }
+    }
+
+    /// An EEPROM's side of a change on its inputs: edges of `write`, and waits
+    /// running out.
+    fn program(&mut self, ctx: &mut EvalCtx, p: Programming, word: Option<usize>) {
+        let now = ctx.now;
+        // A wait that has run out moves the part on.
+        match &mut self.phase {
+            Phase::Loading { words, until } if now >= *until - TICK => {
+                let words = std::mem::take(words);
+                let until = now + p.write_time;
+                self.phase = Phase::Writing { words, until };
+                self.wake_at(ctx, until);
+            }
+            Phase::Writing { words, until } if now >= *until - TICK => {
+                let width = self.data_out.len();
+                for (w, data) in std::mem::take(words) {
+                    self.cells[w * width..(w + 1) * width].copy_from_slice(&data);
+                }
+                self.phase = Phase::Idle;
+            }
+            _ => {}
+        }
+
+        let level = ctx.read(self.write);
+        let rose = level == Logic::High && self.write_was != Logic::High;
+        let fell = level == Logic::Low && self.write_was == Logic::High;
+        self.write_was = level;
+        if rose {
+            self.latched = word;
+        }
+        if !fell {
+            return;
+        }
+        let Some(w) = self.latched else { return };
+        let data: Vec<Logic> = self.data_in.iter().map(|&net| ctx.read(net).sense()).collect();
+        let page = |w: usize| w / p.page.max(1);
+        match &mut self.phase {
+            // Busy writing the array: nothing is taken until it is done.
+            Phase::Writing { .. } => {}
+            Phase::Loading { words, until } => {
+                // Another word of the same page, which holds the write off again.
+                // A word from another page is not taken.
+                if words.first().is_some_and(|(first, _)| page(*first) == page(w)) {
+                    words.retain(|(other, _)| *other != w);
+                    words.push((w, data));
+                    *until = now + p.load_window;
+                    let until = *until;
+                    self.wake_at(ctx, until);
+                }
+            }
+            Phase::Idle => {
+                let (phase, until) = if p.page > 1 {
+                    let until = now + p.load_window;
+                    (Phase::Loading { words: vec![(w, data)], until }, until)
+                } else {
+                    let until = now + p.write_time;
+                    (Phase::Writing { words: vec![(w, data)], until }, until)
+                };
+                self.phase = phase;
+                self.wake_at(ctx, until);
+            }
+        }
+    }
+}
+
+impl DigitalDevice for Memory {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> &'static str {
+        "memory"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &self.inputs
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &self.outputs
+    }
+
+    fn evaluate(&mut self, ctx: &mut EvalCtx) {
+        let width = self.data_out.len();
+        let word = self.selected(ctx);
+        match self.programming {
+            None => {
+                if ctx.read(self.write) == Logic::High
+                    && let Some(word) = word
+                {
+                    for (bit, &net) in self.data_in.iter().enumerate().take(width) {
+                        self.cells[word * width + bit] = ctx.read(net).sense();
+                    }
+                }
+            }
+            Some(p) => self.program(ctx, p, word),
+        }
+        // While a write is in hand the array cannot be read: the top output is
+        // the complement of what the last word loaded has there, and the rest
+        // say nothing.
+        let polling = match &self.phase {
+            Phase::Idle => None,
+            Phase::Loading { words, .. } | Phase::Writing { words, .. } => {
+                words.last().map(|(_, data)| data[width - 1].invert())
+            }
+        };
+        for bit in 0..width {
+            let value = match polling {
+                Some(top) if bit == width - 1 => top,
+                Some(_) => Logic::Unknown,
+                None => word.map_or(Logic::Unknown, |w| self.cells[w * width + bit]),
+            };
+            let net = self.data_out[bit];
+            ctx.drive(bit, net, value, self.delay);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.cells.clone_from(&self.initial);
+        self.write_was = Logic::Unknown;
+        self.latched = None;
+        self.phase = Phase::Idle;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The digital domain
+// ---------------------------------------------------------------------------
+
+/// Guard against combinational loops: a chain of zero-delay gates that keeps
+/// re-triggering at the same instant would otherwise hang the simulation.
+const MAX_DELTA_CYCLES: usize = 10_000;
+
+/// A loop of logic that was still changing at one instant after every delta
+/// cycle it was allowed — two zero-delay gates chasing each other, most often.
+///
+/// Reported rather than resolved. Whatever level such a loop is left at is an
+/// answer the circuit does not have: real gates have delay, and what the loop
+/// does depends on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unsettled {
+    pub time: f64,
+    /// A few of the nets that were still moving, by name.
+    pub nets: Vec<String>,
+}
+
+#[derive(Debug)]
+struct Net {
+    name: String,
+    drivers: Vec<DriverId>,
+    resolved: Logic,
+}
+
+/// The event-driven half of the simulator.
+#[derive(Debug, Default)]
+pub struct DigitalDomain {
+    nets: Vec<Net>,
+    devices: Vec<Box<dyn DigitalDevice>>,
+    /// First driver id owned by each device.
+    driver_base: Vec<usize>,
+    /// Current value published by each driver.
+    driver_values: Vec<Logic>,
+    /// Net -> devices that read it.
+    fanout: Vec<Vec<usize>>,
+    queue: EventQueue,
+    resolved: Vec<Logic>,
+    /// Nets whose resolved value changed during the current instant.
+    dirty: Vec<NetId>,
+    /// Devices to evaluate for the current instant. Kept between instants so
+    /// a fast clock does not allocate a list a million times a second.
+    touched: Vec<usize>,
+    /// The delta cycle each net was last put on `dirty` in, and each device on
+    /// `touched`. Checking membership by scanning the list made an edge on a
+    /// net read by a thousand flip-flops cost a million comparisons.
+    dirty_mark: Vec<u64>,
+    touched_mark: Vec<u64>,
+    cycle: u64,
+    /// The first instant a loop failed to settle, if one has.
+    unsettled: Option<Unsettled>,
+    /// Every change of level since the log was last taken, in the order they
+    /// happened: the time of the event that did it, never the instant somebody
+    /// got round to asking.
+    ///
+    /// A settle can run out many instants' worth of queue in one call, and a
+    /// net can move several times in that span. A single "last value" per net
+    /// would fold a whole burst into its final level, so the record is the
+    /// sequence itself.
+    log: Vec<Transition>,
+    /// Nets whose changes the analog side has to be told about, because a
+    /// bridge drives an analog node from them.
+    watched: Vec<bool>,
+    /// How far the queue has been run out, in seconds.
+    now: f64,
+}
+
+/// One net taking a new level at an instant.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transition {
+    pub time: f64,
+    pub net: NetId,
+    pub state: Logic,
+}
+
+/// Why [`DigitalDomain::settle_until`] handed control back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Halt {
+    /// The queue was run out to the time asked for.
+    Reached,
+    /// A watched net changed; the domain stands at that instant, with every event
+    /// due at it applied and nothing later.
+    Watched,
+    /// The event budget ran out; the domain stands at the last instant it
+    /// finished.
+    Budget,
+}
+
+/// Where a settle stopped, and why.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settled {
+    pub time: f64,
+    pub halt: Halt,
+    /// Events applied along the way — the work done, for pacing.
+    pub events: usize,
+}
+
+impl DigitalDomain {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_net(&mut self, name: impl Into<String>) -> NetId {
+        let id = self.nets.len();
+        self.nets.push(Net { name: name.into(), drivers: Vec::new(), resolved: Logic::HighZ });
+        self.resolved.push(Logic::HighZ);
+        self.fanout.push(Vec::new());
+        self.watched.push(false);
+        self.dirty_mark.push(0);
+        id
+    }
+
+    pub fn net_count(&self) -> usize {
+        self.nets.len()
+    }
+
+    pub fn net_name(&self, net: NetId) -> Option<&str> {
+        self.nets.get(net).map(|n| n.name.as_str())
+    }
+
+    pub fn state(&self, net: NetId) -> Logic {
+        self.resolved.get(net).copied().unwrap_or(Logic::Unknown)
+    }
+
+    /// Register a device and wire up its driver slots and fanout.
+    pub fn add_device(&mut self, device: Box<dyn DigitalDevice>) -> usize {
+        let index = self.devices.len();
+        let base = self.driver_values.len();
+
+        for (i, net) in device.output_nets().iter().enumerate() {
+            let id = DriverId(base + i);
+            self.driver_values.push(Logic::HighZ);
+            if let Some(n) = self.nets.get_mut(*net) {
+                n.drivers.push(id);
+            }
+        }
+        for net in device.input_nets() {
+            if let Some(f) = self.fanout.get_mut(*net)
+                && !f.contains(&index)
+            {
+                f.push(index);
+            }
+        }
+
+        self.driver_base.push(base);
+        self.devices.push(device);
+        self.touched_mark.push(0);
+        index
+    }
+
+    /// Register an external driver — used by analog-to-digital bridges, which
+    /// are not devices but still need to own a slot on a net.
+    pub fn add_external_driver(&mut self, net: NetId) -> DriverId {
+        let id = DriverId(self.driver_values.len());
+        self.driver_values.push(Logic::HighZ);
+        if let Some(n) = self.nets.get_mut(net) {
+            n.drivers.push(id);
+        }
+        id
+    }
+
+    /// Schedule an event from outside the domain.
+    pub fn schedule(&mut self, time: f64, driver: DriverId, net: NetId, state: Logic) {
+        self.queue.push(time, driver, net, state);
+    }
+
+    /// Move a named source to a level from `at` onwards, as a hand would.
+    ///
+    /// Only meaningful for a device that drives without listening — a logic
+    /// source. Anything with inputs is told what to do by its inputs, and forcing
+    /// its output would last exactly until the next thing it heard.
+    ///
+    /// Returns whether such a device exists.
+    pub fn operate(&mut self, name: &str, state: Logic, at: f64) -> bool {
+        let Some(index) = self.devices.iter().position(|d| d.name() == name) else {
+            return false;
+        };
+        if !self.devices[index].input_nets().is_empty() {
+            return false;
+        }
+        let Some(&net) = self.devices[index].output_nets().first() else {
+            return false;
+        };
+        // Never behind what the domain has already run: it goes ahead of the
+        // analog side by up to a step, and an event put before `now` would be
+        // applied after edges already computed and handed out from inputs that
+        // did not yet include it. A hand on a switch lands on the newest instant
+        // there is.
+        self.queue.push(at.max(self.now), DriverId(self.driver_base[index]), net, state);
+        true
+    }
+
+    /// Time of the earliest pending event.
+    pub fn next_event_time(&self) -> Option<f64> {
+        self.queue.next_time()
+    }
+
+    /// Publish initial values and let clocks schedule their first edges.
+    pub fn initialize(&mut self) {
+        for index in 0..self.devices.len() {
+            let mut device = std::mem::replace(&mut self.devices[index], Box::new(NullDevice));
+            let mut ctx = EvalCtx {
+                now: 0.0,
+                resolved: &self.resolved,
+                queue: &mut self.queue,
+                driver_base: self.driver_base[index],
+            };
+            device.initialize(&mut ctx);
+            self.devices[index] = device;
+        }
+        self.settle(0.0);
+    }
+
+    /// Mark the nets whose changes stop a [`Self::settle_until`].
+    pub fn watch(&mut self, nets: impl IntoIterator<Item = NetId>) {
+        self.watched.fill(false);
+        for net in nets {
+            if let Some(w) = self.watched.get_mut(net) {
+                *w = true;
+            }
+        }
+    }
+
+    /// How far the queue has been run out.
+    pub fn now(&self) -> f64 {
+        self.now
+    }
+
+    /// The loop that failed to settle, once, if one has.
+    pub fn take_unsettled(&mut self) -> Option<Unsettled> {
+        self.unsettled.take()
+    }
+
+    /// Every level change since this was last called, oldest first.
+    pub fn take_log(&mut self) -> Vec<Transition> {
+        std::mem::take(&mut self.log)
+    }
+
+    /// The same, into a buffer the caller keeps: what it held is discarded, and
+    /// its allocation becomes the log's, so a run that asks every step does not
+    /// grow a fresh list every step.
+    pub fn swap_log(&mut self, into: &mut Vec<Transition>) {
+        into.clear();
+        std::mem::swap(&mut self.log, into);
+    }
+
+    /// Apply every event due at or before `time`, instant by instant, and
+    /// propagate each until the domain is stable. Returns how many nets changed.
+    pub fn settle(&mut self, time: f64) -> usize {
+        let before = self.log.len();
+        self.settle_until(time, false, usize::MAX);
+        let mut changed: Vec<NetId> = Vec::new();
+        for entry in &self.log[before..] {
+            if !changed.contains(&entry.net) {
+                changed.push(entry.net);
+            }
+        }
+        changed.len()
+    }
+
+    /// Run the queue out towards `time`, one instant at a time.
+    ///
+    /// Each instant is finished before the next is begun: everything due at it
+    /// is applied, the devices downstream are evaluated with the clock reading
+    /// that instant, and whatever they schedule for the same instant goes round
+    /// again. That is what lets a call cover any span at all — a device sees
+    /// events in the order they happen and measures its delay from the event,
+    /// not from wherever the caller happened to stop.
+    ///
+    /// Two things cut the span short. With `stop_at_watched`, the first instant
+    /// at which a watched net changes is the last one done, so the caller can
+    /// bring the analog side up to exactly there before going on. And a call is
+    /// never allowed more than `budget` events, so a fast clock cannot hold the
+    /// caller for as long as its span is wide.
+    pub fn settle_until(&mut self, time: f64, stop_at_watched: bool, budget: usize) -> Settled {
+        let mut events = 0;
+        loop {
+            let Some(instant) = self.queue.next_time().filter(|t| *t <= time) else {
+                self.now = self.now.max(time);
+                return Settled { time: self.now, halt: Halt::Reached, events };
+            };
+            if events >= budget {
+                return Settled { time: self.now, halt: Halt::Budget, events };
+            }
+            let before = self.log.len();
+            events += self.run_instant(instant);
+            self.now = self.now.max(instant);
+            if stop_at_watched && self.log[before..].iter().any(|t| self.watched[t.net]) {
+                return Settled { time: instant, halt: Halt::Watched, events };
+            }
+        }
+    }
+
+    /// Apply everything due at exactly `instant`, and keep going while the
+    /// devices it wakes schedule more for the same instant. Returns the events
+    /// applied.
+    fn run_instant(&mut self, instant: f64) -> usize {
+        let mut events = 0;
+        for _ in 0..MAX_DELTA_CYCLES {
+            self.cycle += 1;
+            let cycle = self.cycle;
+            self.dirty.clear();
+            let mut applied = false;
+            while let Some(event) = self.queue.pop_due(instant) {
+                applied = true;
+                events += 1;
+                if self.driver_values[event.driver.0] == event.state {
+                    continue;
+                }
+                self.driver_values[event.driver.0] = event.state;
+                let resolved = self.resolve(event.net);
+                if resolved != self.resolved[event.net] {
+                    self.resolved[event.net] = resolved;
+                    self.nets[event.net].resolved = resolved;
+                    self.log.push(Transition { time: event.time, net: event.net, state: resolved });
+                    if self.dirty_mark[event.net] != cycle {
+                        self.dirty_mark[event.net] = cycle;
+                        self.dirty.push(event.net);
+                    }
+                }
+            }
+
+            if self.dirty.is_empty() {
+                if !applied {
+                    return events;
+                }
+                continue;
+            }
+
+            // Re-evaluate everything downstream of the nets that moved.
+            let mut touched = std::mem::take(&mut self.touched);
+            touched.clear();
+            for net in &self.dirty {
+                for &d in &self.fanout[*net] {
+                    if self.touched_mark[d] != cycle {
+                        self.touched_mark[d] = cycle;
+                        touched.push(d);
+                    }
+                }
+            }
+
+            for &index in &touched {
+                let mut device = std::mem::replace(&mut self.devices[index], Box::new(NullDevice));
+                let mut ctx = EvalCtx {
+                    now: instant,
+                    resolved: &self.resolved,
+                    queue: &mut self.queue,
+                    driver_base: self.driver_base[index],
+                };
+                device.evaluate(&mut ctx);
+                self.devices[index] = device;
+            }
+            self.touched = touched;
+
+            // Anything those devices scheduled with zero delay is due right now,
+            // so loop again; anything with real delay waits for its own instant.
+            if self.queue.next_time().is_none_or(|t| t > instant) {
+                return events;
+            }
+        }
+
+        // Still moving after every cycle it was allowed. What is left due at
+        // this instant is thrown away, because leaving it was what hung the
+        // tab: the queue's next event stayed at this same instant, and every
+        // caller asked to be run on to it again, forever. Also what a delay too
+        // small to move the clock at this time — a femtosecond at a hundred
+        // seconds — comes to.
+        let mut nets: Vec<String> = Vec::new();
+        while let Some(event) = self.queue.pop_due(instant) {
+            events += 1;
+            let name = &self.nets[event.net].name;
+            if nets.len() < 4 && !nets.contains(name) {
+                nets.push(name.clone());
+            }
+        }
+        self.unsettled.get_or_insert(Unsettled { time: instant, nets });
+        events
+    }
+
+    fn resolve(&self, net: NetId) -> Logic {
+        self.nets[net]
+            .drivers
+            .iter()
+            .fold(Logic::HighZ, |acc, d| acc.resolve(self.driver_values[d.0]))
+    }
+
+    pub fn reset(&mut self) {
+        self.queue.clear();
+        self.driver_values.fill(Logic::HighZ);
+        for (i, n) in self.nets.iter_mut().enumerate() {
+            n.resolved = Logic::HighZ;
+            self.resolved[i] = Logic::HighZ;
+        }
+        for d in &mut self.devices {
+            d.reset();
+        }
+        self.dirty.clear();
+        self.log.clear();
+        self.now = 0.0;
+        self.unsettled = None;
+    }
+}
+
+/// Placeholder used while a device is temporarily moved out of the vector.
+#[derive(Debug)]
+struct NullDevice;
+
+impl DigitalDevice for NullDevice {
+    fn name(&self) -> &str {
+        ""
+    }
+    fn kind(&self) -> &'static str {
+        "null"
+    }
+    fn input_nets(&self) -> &[NetId] {
+        &[]
+    }
+    fn output_nets(&self) -> &[NetId] {
+        &[]
+    }
+    fn evaluate(&mut self, _ctx: &mut EvalCtx) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn and_is_dominated_by_a_zero() {
+        assert_eq!(Logic::Low.and(Logic::Unknown), Logic::Low);
+        assert_eq!(Logic::High.and(Logic::Unknown), Logic::Unknown);
+        assert_eq!(Logic::High.and(Logic::High), Logic::High);
+    }
+
+    #[test]
+    fn contention_produces_unknown() {
+        assert_eq!(Logic::High.resolve(Logic::Low), Logic::Unknown);
+        assert_eq!(Logic::HighZ.resolve(Logic::High), Logic::High);
+        assert_eq!(Logic::HighZ.resolve(Logic::HighZ), Logic::HighZ);
+    }
+
+    #[test]
+    fn events_come_out_in_time_order() {
+        let mut q = EventQueue::default();
+        q.push(3.0, DriverId(0), 0, Logic::High);
+        q.push(1.0, DriverId(0), 1, Logic::Low);
+        q.push(2.0, DriverId(0), 2, Logic::High);
+        assert_eq!(q.pop_due(10.0).unwrap().net, 1);
+        assert_eq!(q.pop_due(10.0).unwrap().net, 2);
+        assert_eq!(q.pop_due(10.0).unwrap().net, 0);
+        assert!(q.pop_due(10.0).is_none());
+    }
+
+    #[test]
+    fn events_are_not_delivered_early() {
+        let mut q = EventQueue::default();
+        q.push(5.0, DriverId(0), 0, Logic::High);
+        assert!(q.pop_due(4.9).is_none());
+        assert!(q.pop_due(5.0).is_some());
+    }
+
+    #[test]
+    fn an_inverter_chain_propagates_with_delay() {
+        let mut d = DigitalDomain::new();
+        let a = d.add_net("a");
+        let b = d.add_net("b");
+        let c = d.add_net("c");
+        d.add_device(Box::new(Gate::new("N1", GateKind::Not, vec![a], b, 1e-9)));
+        d.add_device(Box::new(Gate::new("N2", GateKind::Not, vec![b], c, 1e-9)));
+
+        let src = d.add_external_driver(a);
+        d.initialize();
+
+        d.schedule(0.0, src, a, Logic::High);
+        d.settle(0.0);
+        assert_eq!(d.state(a), Logic::High);
+        // One gate delay has not elapsed, so nothing downstream may have moved.
+        assert_ne!(d.state(b), Logic::Low);
+        assert_ne!(d.state(c), Logic::High);
+
+        d.settle(1.5e-9);
+        assert_eq!(d.state(b), Logic::Low);
+        d.settle(2.5e-9);
+        assert_eq!(d.state(c), Logic::High);
+    }
+
+    #[test]
+    fn flip_flop_captures_on_the_rising_edge() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        let data = d.add_net("d");
+        let q = d.add_net("q");
+        let qn = d.add_net("qn");
+        d.add_device(Box::new(DFlipFlop::new(
+            "FF1",
+            clk,
+            data,
+            AsyncInputs::default(),
+            q,
+            qn,
+            1e-9,
+        )));
+
+        let clk_drv = d.add_external_driver(clk);
+        let d_drv = d.add_external_driver(data);
+        d.initialize();
+
+        d.schedule(0.0, clk_drv, clk, Logic::Low);
+        d.schedule(0.0, d_drv, data, Logic::High);
+        d.settle(0.0);
+        // Data alone must not change the output.
+        assert_ne!(d.state(q), Logic::High);
+
+        d.schedule(10e-9, clk_drv, clk, Logic::High);
+        d.settle(10e-9);
+        // Deliberately past the clock-to-output delay: `10e-9 + 1e-9` and the
+        // literal `11e-9` are not the same f64, and a test should not depend on
+        // which way that lands.
+        d.settle(12e-9);
+        assert_eq!(d.state(q), Logic::High);
+        assert_eq!(d.state(qn), Logic::Low);
+    }
+
+    #[test]
+    fn preset_and_reset_act_without_a_clock() {
+        // Both are asynchronous, which is the whole point of them: a 7474 clears
+        // whatever the clock is doing, and a power-on reset has to work before
+        // there is a clock at all.
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        let data = d.add_net("d");
+        let rst = d.add_net("rst");
+        let pre = d.add_net("pre");
+        let q = d.add_net("q");
+        let qn = d.add_net("qn");
+        d.add_device(Box::new(DFlipFlop::new(
+            "FF1",
+            clk,
+            data,
+            AsyncInputs { reset: Some(rst), preset: Some(pre) },
+            q,
+            qn,
+            1e-9,
+        )));
+
+        let clk_drv = d.add_external_driver(clk);
+        let d_drv = d.add_external_driver(data);
+        let rst_drv = d.add_external_driver(rst);
+        let pre_drv = d.add_external_driver(pre);
+        d.initialize();
+
+        d.schedule(0.0, clk_drv, clk, Logic::Low);
+        d.schedule(0.0, d_drv, data, Logic::Low);
+        d.schedule(0.0, rst_drv, rst, Logic::Low);
+        d.schedule(0.0, pre_drv, pre, Logic::Low);
+        d.settle(0.0);
+        // Past the publish delay: the initial output is scheduled like any other.
+        d.settle(2e-9);
+        assert_eq!(d.state(q), Logic::Low);
+
+        // Preset takes it high with the clock sitting still and d holding low.
+        d.schedule(10e-9, pre_drv, pre, Logic::High);
+        d.settle(10e-9);
+        d.settle(12e-9);
+        assert_eq!(d.state(q), Logic::High);
+        assert_eq!(d.state(qn), Logic::Low);
+
+        // It holds after the preset goes away, because a flip-flop is a thing
+        // that holds — this is not the input being followed.
+        d.schedule(20e-9, pre_drv, pre, Logic::Low);
+        d.settle(20e-9);
+        d.settle(22e-9);
+        assert_eq!(d.state(q), Logic::High);
+
+        // And reset wins when both are held, which is the order the comment in
+        // `evaluate` picks deliberately.
+        d.schedule(30e-9, pre_drv, pre, Logic::High);
+        d.schedule(30e-9, rst_drv, rst, Logic::High);
+        d.settle(30e-9);
+        d.settle(32e-9);
+        assert_eq!(d.state(q), Logic::Low);
+    }
+
+    #[test]
+    fn clock_keeps_toggling() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        d.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+        d.initialize();
+
+        let period = 1e-6;
+        d.settle(period * 0.5);
+        assert_eq!(d.state(clk), Logic::High);
+        d.settle(period * 1.0);
+        assert_eq!(d.state(clk), Logic::Low);
+        d.settle(period * 1.5);
+        assert_eq!(d.state(clk), Logic::High);
+    }
+
+    #[test]
+    fn tristate_releases_the_bus() {
+        let mut d = DigitalDomain::new();
+        let input = d.add_net("in");
+        let en = d.add_net("en");
+        let bus = d.add_net("bus");
+        d.add_device(Box::new(TriStateBuffer::new("T1", input, en, bus, 0.0)));
+
+        let in_drv = d.add_external_driver(input);
+        let en_drv = d.add_external_driver(en);
+        d.initialize();
+
+        d.schedule(0.0, in_drv, input, Logic::High);
+        d.schedule(0.0, en_drv, en, Logic::High);
+        d.settle(0.0);
+        assert_eq!(d.state(bus), Logic::High);
+
+        d.schedule(1e-9, en_drv, en, Logic::Low);
+        d.settle(1e-9);
+        assert_eq!(d.state(bus), Logic::HighZ);
+    }
+
+    /// One call may run out any span, and a device measures its delay from the
+    /// event that woke it, not from the end of the span.
+    ///
+    /// Settling everything due in a span at once, and only then evaluating,
+    /// folded the span's instants into one: a clock told to settle a whole
+    /// period saw both its edges applied before it was asked, and rescheduled
+    /// from the end of the call. Every caller had to stop at every event to
+    /// keep the timing honest — which is what made a fast clock slow.
+    #[test]
+    fn a_span_is_settled_instant_by_instant() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        let q = d.add_net("q");
+        let qn = d.add_net("qn");
+        d.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+        d.add_device(Box::new(DFlipFlop::new("FF", clk, qn, AsyncInputs::default(), q, qn, 1e-9)));
+        d.initialize();
+        // Past the flip-flop's first publish, which lands a delay after the
+        // start and is the net getting a level rather than changing one.
+        d.settle(2e-9);
+        d.take_log();
+
+        // Ten periods in one call. A little past the last edge, since ten
+        // periods added up half a period at a time need not land on `10e-6`.
+        let settled = d.settle_until(10.25e-6, false, usize::MAX);
+        assert_eq!(settled.halt, Halt::Reached);
+        assert!((settled.time - 10.25e-6).abs() < 1e-18);
+
+        let log = d.take_log();
+        let clock_edges: Vec<f64> = log.iter().filter(|t| t.net == clk).map(|t| t.time).collect();
+        assert_eq!(clock_edges.len(), 20, "{clock_edges:?}");
+        for (i, t) in clock_edges.iter().enumerate() {
+            let expected = 0.5e-6 * (i + 1) as f64;
+            assert!((t - expected).abs() < 1e-15, "edge {i} at {t:.6e}, not {expected:.6e}");
+        }
+        // And the flip-flop's delay is measured from the edge that clocked it.
+        let q_edges: Vec<f64> = log.iter().filter(|t| t.net == q).map(|t| t.time).collect();
+        assert_eq!(q_edges.len(), 10, "{q_edges:?}");
+        for (i, t) in q_edges.iter().enumerate() {
+            let expected = 0.5e-6 + 1e-6 * i as f64 + 1e-9;
+            assert!((t - expected).abs() < 1e-15, "q edge {i} at {t:.6e}, not {expected:.6e}");
+        }
+        // The log is in the order things happened.
+        assert!(log.windows(2).all(|w| w[0].time <= w[1].time));
+    }
+
+    /// A watched net stops the settle at the instant it changes, with that
+    /// instant complete and nothing later touched.
+    #[test]
+    fn a_watched_net_stops_the_span_where_it_changes() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        let q = d.add_net("q");
+        let qn = d.add_net("qn");
+        d.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+        d.add_device(Box::new(DFlipFlop::new("FF", clk, qn, AsyncInputs::default(), q, qn, 1e-9)));
+        d.watch([q]);
+        d.initialize();
+        // Past the flip-flop's first publish, which lands a delay after the
+        // start and is the net getting a level rather than changing one.
+        d.settle(2e-9);
+        d.take_log();
+
+        // The first clock edge is at 0.5 µs; q follows a nanosecond later.
+        let settled = d.settle_until(10e-6, true, usize::MAX);
+        assert_eq!(settled.halt, Halt::Watched);
+        assert!((settled.time - 0.501e-6).abs() < 1e-15, "stopped at {:.6e}", settled.time);
+        assert_eq!(d.state(q), Logic::High);
+        assert!((d.now() - 0.501e-6).abs() < 1e-15);
+        // Nothing beyond that instant: the clock's next edge is still to come.
+        assert_eq!(d.state(clk), Logic::High);
+        assert_eq!(d.next_event_time().map(|t| (t - 1e-6).abs() < 1e-15), Some(true));
+
+        // Asked again, it goes on to the next change and no further.
+        let settled = d.settle_until(10e-6, true, usize::MAX);
+        assert_eq!(settled.halt, Halt::Watched);
+        assert!((settled.time - 1.501e-6).abs() < 1e-15, "stopped at {:.6e}", settled.time);
+        assert_eq!(d.state(q), Logic::Low);
+
+        // Without the watch, the same call runs to the end.
+        let settled = d.settle_until(10e-6, false, usize::MAX);
+        assert_eq!(settled.halt, Halt::Reached);
+        assert!((d.now() - 10e-6).abs() < 1e-18);
+    }
+
+    /// The budget stops the settle between instants, never inside one.
+    #[test]
+    fn a_budget_stops_the_span_between_instants() {
+        let mut d = DigitalDomain::new();
+        let clk = d.add_net("clk");
+        d.add_device(Box::new(Clock::new("CLK", clk, 1e6, 0.5)));
+        d.initialize();
+        d.take_log();
+
+        // The first edge is two events — the clock schedules it once from
+        // `initialize` and once more on seeing its own starting level — so
+        // five events is four edges, and the fifth edge is not begun.
+        let settled = d.settle_until(10.25e-6, false, 5);
+        assert_eq!(settled.halt, Halt::Budget);
+        assert_eq!(settled.events, 5);
+        assert!((settled.time - 2e-6).abs() < 1e-15, "stood at {:.6e}", settled.time);
+        assert_eq!(d.take_log().len(), 4);
+
+        // What was not done is still to do.
+        let rest = d.settle_until(10.25e-6, false, usize::MAX);
+        assert_eq!(rest.halt, Halt::Reached);
+        assert_eq!(d.take_log().len(), 16);
+    }
+}

@@ -1,0 +1,897 @@
+/**
+ * Orthogonal wire routing.
+ *
+ * A* over the schematic grid, with costs rather than hard walls almost
+ * everywhere. A router that refuses to produce a wire when the ideal path is
+ * blocked is worse than one that produces a slightly ugly wire, so a route may
+ * cross a wire, run alongside one, or even pass over a component body — all of
+ * it expensive, none of it forbidden. The route that comes out is the cheapest
+ * compromise available, and when there is no compromise it still finds
+ * something.
+ *
+ * The one thing a route is never allowed to do is *connect* something. By the
+ * drawing's own rules a pin sitting on a wire is on that wire's net, a wire's
+ * corner sitting on another wire joins it, and a wire passing through another's
+ * corner joins it too. A route that did any of those would not be ugly, it would
+ * be a different circuit — and the change would be invisible, since nothing on
+ * the page says "these two used to be apart". So a foreign pin, a foreign wire's
+ * corner, and a corner of our own on a foreign wire are walls, not costs, and
+ * when nothing else can be found the answer is a wire that joins nothing rather
+ * than one that joins the wrong thing (`fallback`, `lastResort`).
+ *
+ * The penalties encode what a person drawing by hand would care about, in order:
+ * do not run *along* an existing wire (two conductors on the same line are
+ * indistinguishable), do not cross one if you can help it, and do not add corners
+ * for no reason.
+ */
+
+import { snapTo, type Vec2 } from '$lib/canvas';
+import { definitionFor, rotatePoint, wireSegments, type Point, type Schematic } from './model';
+
+export interface RouteOptions {
+	grid: number;
+	/**
+	 * Ignore the bodies of these instances — usually the ones moving. Their pins
+	 * stay in the way regardless: a pin is a connection wherever its part is.
+	 */
+	ignoreInstances?: ReadonlySet<string>;
+	/** Ignore these wires — usually the one being re-routed. */
+	ignoreWires?: ReadonlySet<string>;
+	/** Points the route is allowed to pass through even if something occupies them. */
+	allow?: ReadonlySet<string>;
+	/** Cap on explored cells, so a hopeless route fails fast instead of hanging. */
+	effort?: number;
+	/**
+	 * The shape this wire already had.
+	 *
+	 * Given one, the search charges `COST.stray` for every step that leaves it, so
+	 * the drawing survives where it still makes sense and is abandoned where it no
+	 * longer does — decided by the same cost function as everything else, rather
+	 * than by a separate rule about when to keep and when to redraw.
+	 */
+	prefer?: readonly Point[];
+}
+
+const COST = {
+	/** Per grid step travelled. */
+	step: 10,
+	/**
+	 * Each corner.
+	 *
+	 * Deliberately steep — worth about four steps of detour. A cheap turn lets the
+	 * search staircase its way across the page, which is technically the shortest
+	 * path and reads as a tangle.
+	 */
+	turn: 42,
+	/** Passing through a point where a wire crosses this cell perpendicular. */
+	cross: 30,
+	/** Travelling along a cell an existing wire already occupies in the same axis. */
+	overlap: 240,
+	/** Passing over a component's body. Expensive, but not impossible. */
+	body: 400,
+	/**
+	 * Leaving or meeting a pin across its lead instead of along it.
+	 *
+	 * Between two points there are usually several routes of the same length with
+	 * the same number of corners, and the search takes whichever it expanded first.
+	 * This settles those draws the way a person would draw them: carry on out of
+	 * the terminal before turning, so the wire reads as coming *out* of the part
+	 * rather than clipping past it.
+	 *
+	 * Charged only when travelling along the lead closes distance to the other end.
+	 * That condition is the whole difference between this and an earlier attempt
+	 * that had to be reverted: without it, a wire drawn straight up off a sideways
+	 * pin would hook out and back to obey the rule, which is worse than the draw it
+	 * was settling.
+	 *
+	 * Deliberately below `turn`. It decides a draw and nothing more: a route that
+	 * would have to add a corner to leave or arrive along a lead should not bother,
+	 * because a corner is the more visible cost of the two.
+	 */
+	stub: 30,
+	/**
+	 * Each step that leaves the path this wire already had.
+	 *
+	 * This is what lets one search answer a question that used to need a second
+	 * mechanism and a pile of tie-breakers: *how much of what was drawn is still
+	 * worth keeping?* Re-routing a wire from scratch every time something it
+	 * touches moves throws away shapes the user arranged on purpose; keeping the
+	 * old shape unconditionally drags stale detours around forever. Charging for
+	 * departure prices the two against each other, so the answer comes out of the
+	 * same cost function as everything else.
+	 *
+	 * Charged for straying rather than discounted for keeping, so no step is ever
+	 * cheaper than `step` — a negative edge would break the search outright, and a
+	 * discount capped below `step` to avoid that would be too weak to matter.
+	 *
+	 * The value has to sit in a window with a floor and a ceiling, and the two
+	 * cases that set them are ones this behaviour was reported for:
+	 *
+	 * - Lowering a ground must not bring its rail down. Moving a twenty-cell rail
+	 *   strays twenty cells; keeping it and dropping a stub strays about four and
+	 *   buys one corner. Keeping wins while `16 × stray > turn`, so stray > 2.6.
+	 * - Dragging a part sideways must bring its feed along. Sliding the feed strays
+	 *   about nine cells; bending at the pin instead strays six and buys a corner.
+	 * 	 Sliding wins while `3 × stray < turn`, so stray < 14.
+	 *
+	 * Four rather than the middle of that window, because the two ends are not
+	 * symmetric. Clinging harder than necessary keeps shapes that have stopped
+	 * earning their place: measured over a thousand random drags, eight left 1585
+	 * corners behind and four left 1501, with every reported case still coming out
+	 * the same. So: as little memory as does the job.
+	 */
+	stray: 4
+};
+
+/*
+ * There was a clearance ring here — a charge for running through the cells
+ * immediately around a component body, borrowed from the flow-chart routers that
+ * wrap each shape in a protected rectangle.
+ *
+ * It is gone because it was answering a question nobody had asked. The case that
+ * motivated it was a wire leaving a voltage source's terminal sideways, close to
+ * the circle, which I judged from a synthetic test to look like it was passing the
+ * source rather than connecting to it. The cost of that judgement showed up in the
+ * plainest wiring there is: a source terminal at the same height as the part next
+ * to it, where the straight wire pays for hugging its own symbol and the router
+ * steps up and back down to avoid it. A pointless jog in the common case is far
+ * worse than a slightly tight wire in a rare one.
+ *
+ * Wires running alongside symbols is normal in a schematic. Bodies are still
+ * expensive to cross, which is the part that was ever in question.
+ */
+
+/**
+ * Slight over-weighting of the heuristic.
+ *
+ * Among the many equally short orthogonal paths between two points, plain A*
+ * picks whichever it happened to expand first, which is often a staircase.
+ * Leaning on the heuristic makes it commit to heading towards the goal, which
+ * produces the straight-then-turn shape a person would draw. The cost is that
+ * the route can be a few percent longer than optimal, which nobody can see.
+ */
+const GREED = 1.06;
+
+/**
+ * Search box sizes, in grid cells beyond the endpoints.
+ *
+ * Twelve covers essentially every route on a normal schematic and keeps the
+ * common case cheap. Forty is for the rarer case where the obstacle is wider
+ * than the detour room, and is only ever tried when the cheap box came back with
+ * a route that paid to cross something.
+ */
+const SEARCH_MARGINS = [12, 40];
+
+/** Blocked and discouraged cells, built once per route. */
+interface Obstacles {
+	/** Cells covered by a component body. */
+	body: Set<number>;
+	/** Cells a wire runs through horizontally. */
+	horizontal: Set<number>;
+	/** Cells a wire runs through vertically. */
+	vertical: Set<number>;
+	/**
+	 * Cells a route may not pass through: every pin, and every point of every
+	 * wire. Landing on one of those is a connection, not a detour.
+	 */
+	touch: Set<number>;
+	/**
+	 * Which way each pin's lead points, by cell.
+	 *
+	 * Built from every instance, including any a drag is ignoring as obstacles: a
+	 * part on the move still has leads that point somewhere, and the wire chasing
+	 * it should still meet them end on.
+	 */
+	leads: Map<number, { x: number; y: number }>;
+}
+
+/**
+ * Which way a pin's lead points, before rotation.
+ *
+ * The dominant axis of its offset from the body origin. Every pin in the catalog
+ * sits at the end of a lead running along one axis — a MOSFET's drain at
+ * (10, -30) hangs off the top, an op-amp input at (-30, -10) off the left — so
+ * the larger component says which way it faces.
+ */
+function leadDirection(pin: { x: number; y: number }): { x: number; y: number } {
+	if (Math.abs(pin.x) >= Math.abs(pin.y)) return { x: Math.sign(pin.x), y: 0 };
+	return { x: 0, y: Math.sign(pin.y) };
+}
+
+/** The four ways a route may step, and the four cells that touch a cell. */
+const DIRECTIONS = [
+	[1, 0],
+	[-1, 0],
+	[0, 1],
+	[0, -1]
+] as const;
+
+/** Pack grid coordinates into one integer key. */
+const cell = (gx: number, gy: number) => ((gx + 0x8000) << 16) | ((gy + 0x8000) & 0xffff);
+
+/** A rectangle of grid cells, inclusive. */
+interface Region {
+	lo: { x: number; y: number };
+	hi: { x: number; y: number };
+}
+
+/** The cells within `margin` cells of every point given. */
+function regionAround(points: readonly Point[], grid: number, margin: number): Region {
+	let loX = Infinity;
+	let loY = Infinity;
+	let hiX = -Infinity;
+	let hiY = -Infinity;
+	for (const p of points) {
+		const x = Math.round(p.x / grid);
+		const y = Math.round(p.y / grid);
+		if (x < loX) loX = x;
+		if (x > hiX) hiX = x;
+		if (y < loY) loY = y;
+		if (y > hiY) hiY = y;
+	}
+	return { lo: { x: loX - margin, y: loY - margin }, hi: { x: hiX + margin, y: hiY + margin } };
+}
+
+/**
+ * The obstacles a route could meet inside `region`, or anywhere without one.
+ *
+ * Only what reaches into the region is looked at in any detail. A search never
+ * leaves its box, so nothing outside it can change the answer — and building
+ * every part's cells for a route across a tenth of the page was what made one
+ * route on a page of a few hundred chips cost a hundred milliseconds before it
+ * had explored a single cell.
+ */
+function buildObstacles(schematic: Schematic, options: RouteOptions, region?: Region): Obstacles {
+	const { grid } = options;
+	const obstacles: Obstacles = {
+		body: new Set(),
+		horizontal: new Set(),
+		vertical: new Set(),
+		touch: new Set(),
+		leads: new Map()
+	};
+	// In world units, with a cell of slack for rounding.
+	const minX = region ? (region.lo.x - 1) * grid : -Infinity;
+	const maxX = region ? (region.hi.x + 1) * grid : Infinity;
+	const minY = region ? (region.lo.y - 1) * grid : -Infinity;
+	const maxY = region ? (region.hi.y + 1) * grid : Infinity;
+
+	for (const instance of schematic.instances) {
+		const def = definitionFor(instance);
+		if (region) {
+			// The body's farthest reach in any rotation, which contains its pins.
+			const reach = Math.max(
+				Math.abs(def.box.x),
+				Math.abs(def.box.x + def.box.w),
+				Math.abs(def.box.y),
+				Math.abs(def.box.y + def.box.h)
+			);
+			if (
+				instance.x + reach < minX ||
+				instance.x - reach > maxX ||
+				instance.y + reach < minY ||
+				instance.y - reach > maxY
+			) {
+				continue;
+			}
+		}
+		for (const pin of def.pins) {
+			const offset = rotatePoint(pin.x, pin.y, instance.rotation);
+			const at = cell(
+				Math.round((instance.x + offset.x) / grid),
+				Math.round((instance.y + offset.y) / grid)
+			);
+			// Recorded for every instance, including any a drag is ignoring as
+			// obstacles: a part on the move still has leads that point somewhere,
+			// and the wire chasing it should still meet them end on.
+			const lead = leadDirection(pin);
+			const facing = rotatePoint(lead.x, lead.y, instance.rotation);
+			obstacles.leads.set(at, { x: Math.round(facing.x), y: Math.round(facing.y) });
+			obstacles.touch.add(at);
+		}
+		if (options.ignoreInstances?.has(instance.id)) continue;
+
+		const corners = [
+			{ x: def.box.x, y: def.box.y },
+			{ x: def.box.x + def.box.w, y: def.box.y },
+			{ x: def.box.x, y: def.box.y + def.box.h },
+			{ x: def.box.x + def.box.w, y: def.box.y + def.box.h }
+		].map((c) => rotatePoint(c.x, c.y, instance.rotation));
+
+		// Shrink by a whisker: the box includes the pin leads, and a route has to
+		// be able to reach a pin without paying the body penalty to get there.
+		// Only a whisker, though. A block's outline sits a couple of units off
+		// the grid, and with half a step of slack the grid line just inside it
+		// was free to route on — a wire drawn over the outline.
+		const inset = 1;
+		const left = Math.min(...corners.map((c) => c.x)) + instance.x + inset;
+		const right = Math.max(...corners.map((c) => c.x)) + instance.x - inset;
+		const top = Math.min(...corners.map((c) => c.y)) + instance.y + inset;
+		const bottom = Math.max(...corners.map((c) => c.y)) + instance.y - inset;
+
+		// Only the part of a large body inside the region.
+		const fromX = Math.max(Math.ceil(left / grid), region ? region.lo.x - 1 : -Infinity);
+		const toX = Math.min(Math.floor(right / grid), region ? region.hi.x + 1 : Infinity);
+		const fromY = Math.max(Math.ceil(top / grid), region ? region.lo.y - 1 : -Infinity);
+		const toY = Math.min(Math.floor(bottom / grid), region ? region.hi.y + 1 : Infinity);
+		for (let x = fromX; x <= toX; x++) {
+			for (let y = fromY; y <= toY; y++) {
+				obstacles.body.add(cell(x, y));
+			}
+		}
+	}
+
+	for (const wire of schematic.wires) {
+		if (options.ignoreWires?.has(wire.id)) continue;
+		if (region) {
+			let left = Infinity;
+			let right = -Infinity;
+			let top = Infinity;
+			let bottom = -Infinity;
+			for (const p of wire.points) {
+				if (p.x < left) left = p.x;
+				if (p.x > right) right = p.x;
+				if (p.y < top) top = p.y;
+				if (p.y > bottom) bottom = p.y;
+			}
+			if (right < minX || left > maxX || bottom < minY || top > maxY) continue;
+		}
+		for (const point of wire.points) {
+			obstacles.touch.add(cell(Math.round(point.x / grid), Math.round(point.y / grid)));
+		}
+		for (const segment of wireSegments(wire)) {
+			const horizontal = segment.a.y === segment.b.y;
+			const from = horizontal ? segment.a.x : segment.a.y;
+			const to = horizontal ? segment.b.x : segment.b.y;
+			const fixed = horizontal ? segment.a.y : segment.a.x;
+			const step = Math.sign(to - from) || 1;
+			// A long wire across the page only matters where it crosses the region:
+			// the walk starts at the first of its cells inside it and stops at the last.
+			let first = from;
+			let last = to;
+			if (region) {
+				if (horizontal ? fixed < minY || fixed > maxY : fixed < minX || fixed > maxX) continue;
+				const low = horizontal ? minX : minY;
+				const high = horizontal ? maxX : maxY;
+				if (step > 0) {
+					if (from < low) first = from + Math.ceil((low - from) / grid) * grid;
+					last = Math.min(to, high);
+				} else {
+					if (from > high) first = from - Math.ceil((from - high) / grid) * grid;
+					last = Math.max(to, low);
+				}
+			}
+
+			for (let v = first; step > 0 ? v <= last : v >= last; v += step * grid) {
+				const key = horizontal
+					? cell(Math.round(v / grid), Math.round(fixed / grid))
+					: cell(Math.round(fixed / grid), Math.round(v / grid));
+				(horizontal ? obstacles.horizontal : obstacles.vertical).add(key);
+			}
+		}
+	}
+
+	return obstacles;
+}
+
+/** Manhattan distance in grid steps, which never overestimates. */
+const heuristic = (ax: number, ay: number, bx: number, by: number) =>
+	(Math.abs(ax - bx) + Math.abs(ay - by)) * COST.step;
+
+/**
+ * Route from `from` to `to`, orthogonally, avoiding what it reasonably can.
+ *
+ * Returns the corners including both ends. Falls back to a plain L when the
+ * search gives up, so a route always comes back.
+ */
+export function routeWire(
+	schematic: Schematic,
+	from: Point,
+	to: Point,
+	options: RouteOptions
+): Point[] {
+	const { grid } = options;
+	const start = { x: Math.round(from.x / grid), y: Math.round(from.y / grid) };
+	const goal = { x: Math.round(to.x / grid), y: Math.round(to.y / grid) };
+
+	if (start.x === goal.x && start.y === goal.y) {
+		return [{ x: from.x, y: from.y }];
+	}
+
+	const widest = SEARCH_MARGINS[SEARCH_MARGINS.length - 1];
+	let obstacles = buildObstacles(schematic, options, regionAround([from, to], grid, widest));
+	const effort = options.effort ?? 20_000;
+	const kept = keptCells(options.prefer, grid);
+
+	/**
+	 * The leads at either end, and whether following them gets anywhere.
+	 *
+	 * A lead only earns its tie-break when travelling along it closes distance to
+	 * the other end. Leaving a sideways pin to reach something directly above it
+	 * gains nothing on that axis, so the wire is free to turn at the tip instead of
+	 * hooking out and back — and a pin whose lead points away from the goal is left
+	 * alone entirely.
+	 */
+	const productive = (lead: { x: number; y: number } | undefined, dx: number, dy: number) =>
+		lead !== undefined && lead.x * dx + lead.y * dy > 0;
+
+	const startLead = obstacles.leads.get(cell(start.x, start.y));
+	const goalLead = obstacles.leads.get(cell(goal.x, goal.y));
+	const leaveAlong = productive(startLead, goal.x - start.x, goal.y - start.y)
+		? startLead
+		: undefined;
+	const arriveAlong = productive(goalLead, start.x - goal.x, start.y - goal.y)
+		? goalLead
+		: undefined;
+
+
+	// The search is bounded — unbounded A* on an open grid wanders — but a bound
+	// that is too tight hides the cheap way round. Nothing here is a hard wall, so
+	// a clipped search still returns *a* route; it just settles for barging through
+	// a component body when the detour around it lies outside the box.
+	//
+	// So: try a cheap box, and widen only when the result shows it paid a penalty
+	// and the walls were in its way. The common route never pays for the retry.
+	const bend = start.x !== goal.x && start.y !== goal.y ? COST.turn : 0;
+	// The ideal L, plus one corner's slack. A route at or under this went straight
+	// there and stepped over nothing; no wider box could improve on it.
+	const clean = heuristic(start.x, start.y, goal.x, goal.y) + bend + COST.turn;
+
+	let best: { path: Point[]; cost: number } | null = null;
+	for (const margin of SEARCH_MARGINS) {
+		const attempt = search(margin);
+		if (attempt.path && (!best || attempt.cost < best.cost)) {
+			best = { path: attempt.path, cost: attempt.cost };
+		}
+		if (attempt.exhausted) break;
+		if (best && best.cost <= clean) break;
+		// The bounds never turned anything away, so they are not what is costing it.
+		if (!attempt.clipped) break;
+	}
+
+	if (best) return best.path;
+
+	// The search gave up — its cell budget, usually, on a wire across the whole
+	// page. Anything else is only taken if it joins nothing.
+	const settled = fallback(schematic, from, to, options);
+	if (settled) return settled;
+	// One last, wider look. With four times the budget only when nobody set one:
+	// a caller that capped the effort — a drag, routing every frame — has said
+	// how long it can wait, and a route that blows through that cap is the frame
+	// it was protecting.
+	obstacles = buildObstacles(schematic, options, regionAround([from, to], grid, widest * 3));
+	const wide = search(widest * 3, options.effort === undefined ? effort * 4 : effort);
+	return wide.path ?? lastResort(from, to);
+
+	interface Node {
+		x: number;
+		y: number;
+		/** 0 = horizontal, 1 = vertical, -1 = no direction yet. */
+		axis: number;
+		cost: number;
+		estimate: number;
+		parent: Node | null;
+	}
+
+	/** One bounded pass. Reports *why* it failed, so the caller knows to widen. */
+	function search(
+		margin: number,
+		budget = effort
+	): {
+		path?: Point[];
+		/** Total cost of `path`, for comparing one box against another. */
+		cost: number;
+		/** The bounds turned a neighbour away — a wider box might get through. */
+		clipped: boolean;
+		/** Ran out of explored-cell budget. Widening would only cost more. */
+		exhausted: boolean;
+	} {
+		const lo = { x: Math.min(start.x, goal.x) - margin, y: Math.min(start.y, goal.y) - margin };
+		const hi = { x: Math.max(start.x, goal.x) + margin, y: Math.max(start.y, goal.y) + margin };
+		let clipped = false;
+
+		const open = new OpenList<Node>();
+		open.push({
+			x: start.x,
+			y: start.y,
+			axis: -1,
+			cost: 0,
+			estimate: heuristic(start.x, start.y, goal.x, goal.y) * GREED,
+			parent: null
+		});
+		const best = new Map<number, number>();
+		const key = (x: number, y: number, axis: number) => cell(x, y) * 4 + (axis + 1);
+		best.set(key(start.x, start.y, -1), 0);
+
+		let explored = 0;
+		while (open.size > 0 && explored < budget) {
+			const node = open.pop()!;
+			// Superseded by a cheaper way to the same cell and heading, found after
+			// this one was queued. Expanding it could only offer dearer neighbours.
+			if (node.cost > best.get(key(node.x, node.y, node.axis))!) continue;
+			explored++;
+
+			if (node.x === goal.x && node.y === goal.y) {
+				const path: Point[] = [];
+				for (let n: Node | null = node; n; n = n.parent) {
+					path.push({ x: n.x * grid, y: n.y * grid });
+				}
+				path.reverse();
+				// Anchor the ends exactly where they were asked for, in case a pin sits
+				// off-lattice.
+				path[0] = { x: from.x, y: from.y };
+				path[path.length - 1] = { x: to.x, y: to.y };
+				return { path: collapse(path), cost: node.cost, clipped, exhausted: false };
+			}
+
+			for (const [dx, dy] of DIRECTIONS) {
+				const nx = node.x + dx;
+				const ny = node.y + dy;
+				if (nx < lo.x || nx > hi.x || ny < lo.y || ny > hi.y) {
+					clipped = true;
+					continue;
+				}
+
+				const axis = dx === 0 ? 1 : 0;
+				const here = cell(nx, ny);
+				const isGoal = nx === goal.x && ny === goal.y;
+				const permitted = options.allow?.has(`${nx},${ny}`) ?? false;
+				const turning = node.axis !== -1 && node.axis !== axis;
+
+				// Walls, not costs: passing through a pin or a wire's corner joins it,
+				// and so does putting a corner of our own down on a wire.
+				if (!isGoal && !permitted && obstacles.touch.has(here)) continue;
+				if (turning && !permitted) {
+					const corner = cell(node.x, node.y);
+					if (obstacles.horizontal.has(corner) || obstacles.vertical.has(corner)) continue;
+				}
+
+				let step = COST.step;
+				if (turning) step += COST.turn;
+				if (!isGoal && !permitted) {
+					if (obstacles.body.has(here)) step += COST.body;
+
+					// Running along a wire is much worse than crossing it: two conductors
+					// drawn on the same line cannot be told apart.
+					//
+					// Charged only for cells the route passes *through*. The destination
+					// is where it stops, so landing on the end of an existing wire is a
+					// junction, not an overlap — and charging for it made every join onto
+					// a wire end jog sideways and back to approach from a free direction.
+					const along = axis === 0 ? obstacles.horizontal : obstacles.vertical;
+					const across = axis === 0 ? obstacles.vertical : obstacles.horizontal;
+					if (along.has(here)) step += COST.overlap;
+					else if (across.has(here)) step += COST.cross;
+				}
+
+				// Departing from the shape this wire already had.
+				if (kept && !kept.has(key(nx, ny, axis))) step += COST.stray;
+
+				// Break a tie towards leaving and meeting each pin along its lead.
+				if (node.axis === -1 && leaveAlong && (dx !== leaveAlong.x || dy !== leaveAlong.y)) {
+					step += COST.stub;
+				}
+				if (isGoal && arriveAlong && (dx !== -arriveAlong.x || dy !== -arriveAlong.y)) {
+					step += COST.stub;
+				}
+
+				const cost = node.cost + step;
+				const k = key(nx, ny, axis);
+				const known = best.get(k);
+				if (known !== undefined && known <= cost) continue;
+
+				best.set(k, cost);
+				open.push({
+					x: nx,
+					y: ny,
+					axis,
+					cost,
+					estimate: cost + heuristic(nx, ny, goal.x, goal.y) * GREED,
+					parent: node
+				});
+			}
+		}
+
+		return { cost: Infinity, clipped, exhausted: explored >= budget };
+	}
+}
+
+/**
+ * `routeWire` for a preview, which asks the same question over and over.
+ *
+ * A wire being drawn is routed on every pointer move and every repaint of the
+ * overlay, and most of those are the same two ends over the same drawing: the
+ * pointer snaps to the grid, so it only lands somewhere new a cell at a time.
+ * The answer is kept until either end or the drawing changes.
+ */
+export function previewRouter(): (schematic: Schematic, from: Point, to: Point, grid: number) => Point[] {
+	let last: {
+		instances: unknown;
+		wires: unknown;
+		key: string;
+		path: Point[];
+	} | null = null;
+	return (schematic, from, to, grid) => {
+		const key = `${from.x},${from.y},${to.x},${to.y},${grid}`;
+		if (last && last.key === key && last.instances === schematic.instances && last.wires === schematic.wires) {
+			return last.path;
+		}
+		const path = routeWire(schematic, from, to, { grid });
+		last = { instances: schematic.instances, wires: schematic.wires, key, path };
+		return path;
+	};
+}
+
+/**
+ * The open list of the search: a binary heap on the estimate.
+ *
+ * Ties go to whichever node was queued first, which is what the linear scan it
+ * replaced did — a route between two points has many equally short answers, and
+ * which one comes out is part of what the drawing looks like. A scan was fine
+ * for the hundreds of cells a route across a small drawing explores and was
+ * quadratic in them, which is what made a route that could not be found take
+ * a second and a half.
+ */
+class OpenList<T extends { estimate: number }> {
+	private items: Array<{ node: T; order: number }> = [];
+	private queued = 0;
+
+	get size(): number {
+		return this.items.length;
+	}
+
+	private before(a: { node: T; order: number }, b: { node: T; order: number }): boolean {
+		return a.node.estimate < b.node.estimate || (a.node.estimate === b.node.estimate && a.order < b.order);
+	}
+
+	push(node: T): void {
+		const items = this.items;
+		const entry = { node, order: this.queued++ };
+		let i = items.length;
+		items.push(entry);
+		while (i > 0) {
+			const parent = (i - 1) >> 1;
+			if (!this.before(entry, items[parent])) break;
+			items[i] = items[parent];
+			i = parent;
+		}
+		items[i] = entry;
+	}
+
+	pop(): T | undefined {
+		const items = this.items;
+		const top = items[0];
+		const last = items.pop();
+		if (!top || !last || items.length === 0) return top?.node;
+		let i = 0;
+		for (;;) {
+			const left = 2 * i + 1;
+			if (left >= items.length) break;
+			const right = left + 1;
+			const child = right < items.length && this.before(items[right], items[left]) ? right : left;
+			if (!this.before(items[child], last)) break;
+			items[i] = items[child];
+			i = child;
+		}
+		items[i] = last;
+		return top.node;
+	}
+}
+
+/**
+ * Would this path join something it was not asked to?
+ *
+ * The three ways a wire connects by geometry alone: it passes through a pin, it
+ * passes through a corner of another wire, or one of its own corners lands on
+ * another wire. Its two ends are exempt — they are the pins it is for, and
+ * whatever those already touch is not this route's doing. A leg that is not
+ * axis-aligned is exempt too, since the drawing's rules only recognise contact
+ * along a straight row or column; that is what makes `lastResort` safe.
+ */
+export function joinsSomething(
+	schematic: Schematic,
+	path: readonly Point[],
+	options: RouteOptions
+): boolean {
+	if (path.length < 2) return false;
+	return joins(buildObstacles(schematic, options, regionAround(path, options.grid, 1)), path, options.grid);
+}
+
+function joins(obstacles: Obstacles, path: readonly Point[], grid: number): boolean {
+	if (path.length < 2) return false;
+	const at = (p: Point) => cell(Math.round(p.x / grid), Math.round(p.y / grid));
+
+	for (let i = 1; i < path.length - 1; i++) {
+		const corner = at(path[i]);
+		if (obstacles.touch.has(corner)) return true;
+		if (obstacles.horizontal.has(corner) || obstacles.vertical.has(corner)) return true;
+	}
+	for (let i = 0; i < path.length - 1; i++) {
+		const a = path[i];
+		const b = path[i + 1];
+		if (a.x !== b.x && a.y !== b.y) continue;
+		const steps = Math.round((Math.abs(b.x - a.x) + Math.abs(b.y - a.y)) / grid);
+		const dx = Math.sign(b.x - a.x);
+		const dy = Math.sign(b.y - a.y);
+		for (let k = 1; k < steps; k++) {
+			const x = Math.round(a.x / grid) + dx * k;
+			const y = Math.round(a.y / grid) + dy * k;
+			if (obstacles.touch.has(cell(x, y))) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Every (cell, axis) a path travels, keyed the way the search keys its nodes.
+ *
+ * Axis is part of the key on purpose: re-using a cell by running across it is not
+ * re-using the wire, it is crossing it, and only travelling the same way counts
+ * as keeping what was drawn.
+ */
+function keptCells(path: readonly Point[] | undefined, grid: number): Set<number> | null {
+	if (!path || path.length < 2) return null;
+	const out = new Set<number>();
+	for (let i = 0; i < path.length - 1; i++) {
+		const a = path[i];
+		const b = path[i + 1];
+		const axis = a.x === b.x ? 1 : 0;
+		const steps = Math.round((Math.abs(b.x - a.x) + Math.abs(b.y - a.y)) / grid);
+		const dx = Math.sign(b.x - a.x);
+		const dy = Math.sign(b.y - a.y);
+		for (let k = 1; k <= steps; k++) {
+			const x = Math.round(a.x / grid) + dx * k;
+			const y = Math.round(a.y / grid) + dy * k;
+			out.add(cell(x, y) * 4 + (axis + 1));
+		}
+	}
+	return out;
+}
+
+/** Remove the interior points of straight runs, leaving only corners. */
+function collapse(points: Point[]): Point[] {
+	const out: Point[] = [points[0]];
+	for (let i = 1; i < points.length - 1; i++) {
+		const [before, here, after] = [out[out.length - 1], points[i], points[i + 1]];
+		const straight =
+			(before.x === here.x && here.x === after.x) || (before.y === here.y && here.y === after.y);
+		if (!straight) out.push(here);
+	}
+	out.push(points[points.length - 1]);
+	return out;
+}
+
+/**
+ * What a route is when the search could not finish: the shape the wire had,
+ * if it had one, with the end that moved stretched to where it is now; a
+ * plain elbow otherwise.
+ *
+ * The distinction matters more than it looks. A search gives up on a long
+ * wire — a feed from a flip-flop on the far side of the page to a gate input
+ * — when its cell budget or the frame's time runs out, and both run out on
+ * exactly the wires that have the most to lose from a bad guess. An elbow
+ * between two far-apart points runs a leg across the whole page, and when the
+ * moved end is a pin in a row of pins that leg goes straight through every
+ * one of them: one nudge of a selection, and eight nets became one. The old
+ * shape with a jog at the end was right before the nudge and is within one
+ * cell of right after it.
+ */
+export function fallback(
+	schematic: Schematic,
+	from: Point,
+	to: Point,
+	options: RouteOptions
+): Point[] | null {
+	const { prefer } = options;
+	const candidates = [elbow(from, to), elbow(from, to, true)];
+	if (prefer && prefer.length >= 2) candidates.unshift(stretched(prefer, from, to));
+	// One set of obstacles for all of them, over the ground any of them covers.
+	const obstacles = buildObstacles(schematic, options, regionAround(candidates.flat(), options.grid, 1));
+	// A leg off the axes is only ever `lastResort`'s to draw: it is exempt from
+	// the join check, so a stretched shape that came out slanted would pass it
+	// while being nothing anybody drew.
+	return (
+		candidates.find((path) => orthogonal(path) && !joins(obstacles, path, options.grid)) ?? null
+	);
+}
+
+function orthogonal(path: readonly Point[]): boolean {
+	for (let i = 0; i + 1 < path.length; i++) {
+		if (path[i].x !== path[i + 1].x && path[i].y !== path[i + 1].y) return false;
+	}
+	return true;
+}
+
+/**
+ * A wire that joins nothing, for when nothing better could be found.
+ *
+ * One straight leg from end to end, however it lies. It is not a drawing anybody
+ * wants — but the drawing's rules only see contact along a row or a column, so
+ * a leg that is on neither can connect nothing on the way, and a wire that is
+ * plainly waiting to be tidied is better than one that quietly rewired the
+ * circuit. Reached only when the search, both elbows and the old shape all ran
+ * into something.
+ */
+export function lastResort(from: Point, to: Point): Point[] {
+	return [
+		{ x: from.x, y: from.y },
+		{ x: to.x, y: to.y }
+	];
+}
+
+/**
+ * `path` with its ends moved to `from` and `to`.
+ *
+ * The leg an end sits on keeps its axis and slides across to meet the new
+ * position: a vertical leg down to a pin that moved sideways moves sideways
+ * as a whole, so the wire still arrives at the pin along its lead and the
+ * jog happens at the far corner, up where there is room. The jog was at the
+ * foot once, and on a pin in a row of pins a jog at the foot runs along the
+ * row — through the neighbours — for as far as the pin moved. Only a wire
+ * that is one straight leg, whose far end is fixed, has nowhere to slide to
+ * and bends at that end instead.
+ */
+export function stretched(path: readonly Point[], from: Point, to: Point): Point[] {
+	let points = path.map((p) => ({ x: p.x, y: p.y }));
+	const same = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
+	if (!same(points[points.length - 1], to)) points = slideEnd(points.reverse(), to).reverse();
+	if (!same(points[0], from)) points = slideEnd(points, from);
+	return collapse(points);
+}
+
+/** `points` with its first point moved to `at`, the first leg sliding to follow. */
+function slideEnd(points: Point[], at: Point): Point[] {
+	const [end, corner, next] = points;
+	// A first leg that has shrunk to nothing has no axis of its own to read off.
+	// It runs across the leg after it, whatever that one's is: reading it as
+	// vertical because a point has the same x as itself slid the end sideways
+	// and left a diagonal leg behind.
+	const vertical =
+		end.x === corner.x && end.y === corner.y && next ? next.y === corner.y : corner.x === end.x;
+	if (points.length === 2) {
+		// One straight leg with the other end fixed: bend at the fixed end,
+		// still arriving along the leg's own axis.
+		return [at, vertical ? { x: at.x, y: corner.y } : { x: corner.x, y: at.y }, corner];
+	}
+	const slid = vertical ? { x: at.x, y: corner.y } : { x: corner.x, y: at.y };
+	return [{ x: at.x, y: at.y }, slid, ...points.slice(2)];
+}
+
+/** The plain two-segment route, used as a preview and as the fallback. */
+export function elbow(from: Point, to: Point, verticalFirst = false): Point[] {
+	if (from.x === to.x || from.y === to.y) return [from, to];
+	const corner = verticalFirst ? { x: from.x, y: to.y } : { x: to.x, y: from.y };
+	return [from, corner, to];
+}
+
+/** Snap a point to the routing lattice. */
+export function onGrid(p: Vec2, grid: number): Point {
+	return { x: snapTo(p.x, grid), y: snapTo(p.y, grid) };
+}
+
+/**
+ * Does this path run through a component body?
+ *
+ * For deciding whether a shape that was arrived at some other way is good
+ * enough, or whether the router should be asked instead. Bodies only: crossing a
+ * wire is untidy, running through a symbol is wrong.
+ */
+export function crossesBody(schematic: Schematic, path: readonly Point[], options: RouteOptions): boolean {
+	if (path.length < 2) return false;
+	const { grid } = options;
+	const obstacles = buildObstacles(schematic, options, regionAround(path, grid, 1));
+
+	for (let i = 0; i < path.length - 1; i++) {
+		const a = path[i];
+		const b = path[i + 1];
+		const steps = Math.round((Math.abs(b.x - a.x) + Math.abs(b.y - a.y)) / grid);
+		const dx = Math.sign(b.x - a.x);
+		const dy = Math.sign(b.y - a.y);
+		for (let k = 0; k <= steps; k++) {
+			const x = Math.round(a.x / grid) + dx * k;
+			const y = Math.round(a.y / grid) + dy * k;
+			if (obstacles.body.has(cell(x, y))) return true;
+		}
+	}
+	return false;
+}

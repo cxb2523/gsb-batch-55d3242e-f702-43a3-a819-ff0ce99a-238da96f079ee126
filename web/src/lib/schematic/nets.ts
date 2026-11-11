@@ -1,0 +1,1090 @@
+/**
+ * Turns drawn geometry into electrical connectivity.
+ *
+ * Two things touch if they share a grid point. Wires also connect to anything
+ * landing in the middle of them, which is how a T-junction works — but two wires
+ * merely *crossing*, with no endpoint at the intersection, stay separate. That is
+ * the convention every schematic editor uses and the one every engineer expects.
+ */
+
+import {
+	GRID,
+	SINGLE_CONTACTS,
+	definitionFor,
+	definitionOf,
+	pinPosition,
+	pointKey,
+	simplifyPath,
+	wireSegments,
+	type Instance,
+	type PinDef,
+	type Point,
+	type Schematic,
+	type Wire,
+	type WireSegment
+} from './model';
+
+/**
+ * A number for every distinct grid point, the way `pointKey` tells them apart.
+ *
+ * Points on the drawing are whole numbers well inside a million, and those are
+ * packed into one number with no text involved; anything else falls back to the
+ * text key, so two points are the same number exactly when they have the same key.
+ */
+class PointNumbers {
+	private packed = new Map<number, number>();
+	private other = new Map<string, number>();
+	private keys: string[] = [];
+	private xs: number[] = [];
+	private ys: number[] = [];
+
+	get size(): number {
+		return this.keys.length;
+	}
+
+	of(x: number, y: number): number {
+		const rx = Math.round(x);
+		const ry = Math.round(y);
+		const inRange = rx > -PACK_OFFSET && rx < PACK_OFFSET && ry > -PACK_OFFSET && ry < PACK_OFFSET;
+		if (inRange) {
+			const code = (rx + PACK_OFFSET) * PACK_SPAN + (ry + PACK_OFFSET);
+			const known = this.packed.get(code);
+			if (known !== undefined) return known;
+			const n = this.add(rx, ry);
+			this.packed.set(code, n);
+			return n;
+		}
+		const key = pointKey(x, y);
+		const known = this.other.get(key);
+		if (known !== undefined) return known;
+		const n = this.add(rx, ry);
+		this.other.set(key, n);
+		return n;
+	}
+
+	private add(rx: number, ry: number): number {
+		this.xs.push(rx);
+		this.ys.push(ry);
+		this.keys.push('');
+		return this.keys.length - 1;
+	}
+
+	/** The text key of a point, made only when asked for. */
+	key(n: number): string {
+		return (this.keys[n] ||= `${this.xs[n]},${this.ys[n]}`);
+	}
+}
+
+const PACK_OFFSET = 1 << 20;
+const PACK_SPAN = 1 << 21;
+
+/** Union-find over the numbers `0..size-1`, with path halving and union by size. */
+class NumberSets {
+	private parent: Int32Array;
+	private weight: Int32Array;
+
+	constructor(size: number) {
+		this.parent = new Int32Array(size);
+		this.weight = new Int32Array(size).fill(1);
+		for (let i = 0; i < size; i++) this.parent[i] = i;
+	}
+
+	find(n: number): number {
+		const parent = this.parent;
+		while (parent[n] !== n) {
+			parent[n] = parent[parent[n]];
+			n = parent[n];
+		}
+		return n;
+	}
+
+	union(a: number, b: number): void {
+		let ra = this.find(a);
+		let rb = this.find(b);
+		if (ra === rb) return;
+		if (this.weight[ra] > this.weight[rb]) [ra, rb] = [rb, ra];
+		this.parent[ra] = rb;
+		this.weight[rb] += this.weight[ra];
+	}
+}
+
+export interface PinRef {
+	instance: Instance;
+	pin: PinDef;
+	x: number;
+	y: number;
+}
+
+export interface Net {
+	index: number;
+	points: string[];
+	pins: PinRef[];
+	/** Tied to a ground symbol. */
+	isGround: boolean;
+	/** Carries analog pins, so it needs a node in the MNA system. */
+	hasAnalog: boolean;
+	/** Some digital device reads this net. */
+	hasDigitalInput: boolean;
+	/** Some digital device drives this net. */
+	hasDigitalOutput: boolean;
+}
+
+export interface Connectivity {
+	nets: Net[];
+	/** Grid point -> index into `nets`. */
+	netOfPoint: Map<string, number>;
+	/** `${instanceId}:${pinName}` -> index into `nets`. */
+	netOfPin: Map<string, number>;
+}
+
+export function pinKey(instanceId: string, pinName: string): string {
+	return `${instanceId}:${pinName}`;
+}
+
+/**
+ * A probe handle for a pin.
+ *
+ * The durable form: a pin survives being moved, rotated or re-routed, which a
+ * bare coordinate does not. A net with no pins on it falls back to a grid point,
+ * and those are stored as they are.
+ */
+export function probePin(instanceId: string, pinName: string): string {
+	return `pin:${pinKey(instanceId, pinName)}`;
+}
+
+/**
+ * Point probe handles at instances that have been given fresh ids.
+ *
+ * Ids are minted on every load — that is what keeps a pasted circuit from
+ * colliding with what is already open — so a handle read out of a file or a link
+ * names an instance that no longer exists. Left untranslated it resolves to
+ * nothing and the probe disappears without a word, which is what opening a saved
+ * circuit used to do to every signal somebody had chosen to watch.
+ *
+ * A handle whose part did not survive the load is dropped rather than kept
+ * pointing at nothing.
+ */
+export function remapProbes(
+	probes: readonly string[],
+	remap: ReadonlyMap<string, string>
+): string[] {
+	const out: string[] = [];
+	for (const handle of probes) {
+		if (!handle.startsWith('pin:')) {
+			// A grid point. The drawing did not move, so neither did it.
+			out.push(handle);
+			continue;
+		}
+		const rest = handle.slice('pin:'.length);
+		const cut = rest.indexOf(':');
+		if (cut < 0) continue;
+		const moved = remap.get(rest.slice(0, cut));
+		if (moved) out.push(probePin(moved, rest.slice(cut + 1)));
+	}
+	return out;
+}
+
+/** Does `(x, y)` land strictly inside an axis-aligned segment, not on its ends? */
+export function liesWithin(x: number, y: number, a: Point, b: Point): boolean {
+	if (a.x === b.x && x === a.x) {
+		return y > Math.min(a.y, b.y) && y < Math.max(a.y, b.y);
+	}
+	if (a.y === b.y && y === a.y) {
+		return x > Math.min(a.x, b.x) && x < Math.max(a.x, b.x);
+	}
+	return false;
+}
+
+/** Every segment of every wire, tagged with the wire it belongs to. */
+export function allSegments(schematic: Schematic): Array<WireSegment & { wire: Wire }> {
+	return schematic.wires.flatMap((wire) => wireSegments(wire).map((s) => ({ ...s, wire })));
+}
+
+/**
+ * The points that sit strictly inside a segment, found by the line it runs along.
+ *
+ * Asking every segment about every point is a few hundred thousand checks on a
+ * drawing of a couple of hundred wires, and each check reads six coordinates
+ * through the store's proxy — which is where the time went: a hundred-odd
+ * milliseconds per pass, several passes per frame, and a full-drawing drag that
+ * crawled. Everything here is read once, into plain numbers, and a segment then
+ * only meets the points that share its row or column.
+ */
+export class LineIndex<T extends Point> {
+	private byX = new Map<number, T[]>();
+	private byY = new Map<number, T[]>();
+
+	constructor(points: Iterable<T>) {
+		for (const point of points) {
+			const x = point.x;
+			const y = point.y;
+			const column = this.byX.get(x);
+			if (column) column.push(point);
+			else this.byX.set(x, [point]);
+			const row = this.byY.get(y);
+			if (row) row.push(point);
+			else this.byY.set(y, [point]);
+		}
+	}
+
+	/** Points strictly between `a` and `b`, not on either end. Axis-aligned only. */
+	inside(a: Point, b: Point): T[] {
+		const ax = a.x;
+		const ay = a.y;
+		const bx = b.x;
+		const by = b.y;
+		if (ax === bx) {
+			const column = this.byX.get(ax);
+			if (!column) return [];
+			const low = Math.min(ay, by);
+			const high = Math.max(ay, by);
+			return column.filter((p) => p.y > low && p.y < high);
+		}
+		if (ay === by) {
+			const row = this.byY.get(ay);
+			if (!row) return [];
+			const low = Math.min(ax, bx);
+			const high = Math.max(ax, bx);
+			return row.filter((p) => p.x > low && p.x < high);
+		}
+		return [];
+	}
+}
+
+/**
+ * `ties` are pairs of points that are one conductor without a wire between
+ * them: how an unfolded block's port reaches the pins inside it. Nothing on
+ * the drawing itself needs them.
+ */
+export function buildConnectivity(
+	schematic: Schematic,
+	ties: ReadonlyArray<readonly [Point, Point]> = []
+): Connectivity {
+	// Every distinct point gets a small integer, and the union-find runs on an
+	// array of those. It ran on the text keys once, through a map, and on a page
+	// of a few hundred chips that was a hundred milliseconds a pass — several
+	// passes a frame while something is being dragged.
+	const points = new PointNumbers();
+	const pins: PinRef[] = [];
+	const pinPoint: number[] = [];
+
+	for (const instance of schematic.instances) {
+		for (const pin of definitionFor(instance).pins) {
+			const { x, y } = pinPosition(instance, pin);
+			pins.push({ instance, pin, x, y });
+			pinPoint.push(points.of(x, y));
+		}
+	}
+	const wirePoints: Array<Point & { n: number }> = [];
+	for (const wire of schematic.wires) {
+		for (const p of wire.points) wirePoints.push({ x: p.x, y: p.y, n: points.of(p.x, p.y) });
+	}
+	const tied = ties.map(([a, b]) => [points.of(a.x, a.y), points.of(b.x, b.y)] as const);
+
+	const set = new NumberSets(points.size);
+	// A wire is one conductor: every corner along it is the same net.
+	const segments = allSegments(schematic);
+	for (const segment of segments) {
+		set.union(points.of(segment.a.x, segment.a.y), points.of(segment.b.x, segment.b.y));
+	}
+	for (const [a, b] of tied) set.union(a, b);
+
+	// Anything sitting mid-wire joins that wire: pins and other wires' corners.
+	const touchPoints = new LineIndex<Point & { n: number }>([
+		...pins.map((p, i) => ({ x: p.x, y: p.y, n: pinPoint[i] })),
+		...wirePoints
+	]);
+	for (const segment of segments) {
+		const start = points.of(segment.a.x, segment.a.y);
+		for (const point of touchPoints.inside(segment.a, segment.b)) set.union(point.n, start);
+	}
+
+	const byRoot = new Map<number, Net>();
+	const netOfPoint = new Map<string, number>();
+	const netOfPin = new Map<string, number>();
+
+	const ensure = (n: number): Net => {
+		const root = set.find(n);
+		let net = byRoot.get(root);
+		if (!net) {
+			net = {
+				index: byRoot.size,
+				points: [],
+				pins: [],
+				isGround: false,
+				hasAnalog: false,
+				hasDigitalInput: false,
+				hasDigitalOutput: false
+			};
+			byRoot.set(root, net);
+		}
+		return net;
+	};
+
+	// Pins first and then wire corners, each point once: the order the nets are
+	// numbered in.
+	const seen = new Uint8Array(points.size);
+	for (const n of [...pinPoint, ...wirePoints.map((p) => p.n)]) {
+		if (seen[n]) continue;
+		seen[n] = 1;
+		ensure(n).points.push(points.key(n));
+	}
+
+	const probed = new Set<Net>();
+	pins.forEach((ref, i) => {
+		const net = ensure(pinPoint[i]);
+		net.pins.push(ref);
+		if (ref.instance.kind === 'ground') net.isGround = true;
+		// A probe is a name attached to a point, not a part on the net. Deciding
+		// here that its pin makes the net analog would mean that clipping one onto
+		// a gate output conjures an analog node, a bridge to drive it and — since
+		// every analog circuit needs a reference — a demand for a ground symbol
+		// that has nothing to do with what was drawn.
+		//
+		// A port is the same kind of thing with even less to say: what a block's
+		// terminal is gets read off the rest of the net, so the port itself
+		// must not colour it.
+		else if (ref.pin.domain === 'analog') {
+			if (ref.instance.kind === 'probe') probed.add(net);
+			else if (ref.instance.kind !== 'port') net.hasAnalog = true;
+		} else if (ref.pin.direction === 'out') net.hasDigitalOutput = true;
+		else net.hasDigitalInput = true;
+	});
+
+	// Where there is nothing digital to name instead, the probe is measuring a
+	// voltage: a probe on bare wire still has to read something.
+	for (const net of probed) {
+		if (!net.hasDigitalInput && !net.hasDigitalOutput) net.hasAnalog = true;
+	}
+
+	// A ground symbol makes the net analog by definition.
+	for (const net of byRoot.values()) {
+		if (net.isGround) net.hasAnalog = true;
+	}
+
+	const nets = [...byRoot.values()];
+	nets.forEach((net, index) => {
+		net.index = index;
+		for (const key of net.points) netOfPoint.set(key, index);
+		for (const ref of net.pins) netOfPin.set(pinKey(ref.instance.id, ref.pin.name), index);
+	});
+
+	return { nets, netOfPoint, netOfPin };
+}
+
+/**
+ * How the pins are grouped into nets, as one comparable string.
+ *
+ * For asking whether two versions of a drawing are the same circuit. Counting
+ * nets does not answer that: a tidy that splits one net in two and merges two
+ * others arrives at the same total, and a tidy that shorts two nets together
+ * arrives at a smaller one — which reads as an improvement.
+ *
+ * Pins rather than points, because pins are what the circuit is made of and they
+ * are exactly what tidying leaves alone. The points move: a junction gains one, a
+ * redundant corner loses one, and comparing those would report a difference on
+ * every successful tidy.
+ */
+export function pinPartition(connectivity: Connectivity): string {
+	const byNet = new Map<number, string[]>();
+	for (const [pin, net] of connectivity.netOfPin) {
+		const list = byNet.get(net);
+		if (list) list.push(pin);
+		else byNet.set(net, [pin]);
+	}
+	return [...byNet.values()]
+		.map((pins) => pins.sort().join(' '))
+		.sort()
+		.join(' | ');
+}
+
+/**
+ * Something a change put on one net when it was on two, unless the join
+ * happened at a point the change was allowed to join at.
+ *
+ * `allowed` is where a gesture meant to connect something — a pin dropped
+ * onto another pin, or onto the end of a wire, with the snap dot showing it.
+ * A net that holds one of those points was joined on purpose; one that was
+ * joined anywhere else was joined by accident: a wire routed through a pin, a
+ * corner landing on a wire, a pin grazing a rail.
+ *
+ * What counts as "was on two": the pins, which keep their identity through
+ * any edit, and the points of `stable` — the wires the change did not touch,
+ * whose points mean the same net they meant before. A wire that was re-routed
+ * has new points, and where its old ones were says nothing.
+ *
+ * Returns two things to name, or null when every join was meant. A wire with
+ * no pin on it is named by its point.
+ */
+export function unexpectedJoin(
+	before: Connectivity,
+	after: Connectivity,
+	allowed: ReadonlySet<string>,
+	stable: ReadonlySet<string>
+): [string, string] | null {
+	const name = (ref: PinRef) => `${ref.instance.name}.${ref.pin.name}`;
+	for (const net of after.nets) {
+		if (net.points.some((key) => allowed.has(key))) continue;
+		const seen = new Map<number, string>();
+		const meet = (was: number | undefined, what: string): [string, string] | null => {
+			if (was === undefined) return null;
+			const other = [...seen.entries()].find(([index]) => index !== was);
+			if (other) return [other[1], what];
+			seen.set(was, what);
+			return null;
+		};
+		for (const ref of net.pins) {
+			const hit = meet(before.netOfPin.get(pinKey(ref.instance.id, ref.pin.name)), name(ref));
+			if (hit) return hit;
+		}
+		for (const key of net.points) {
+			if (!stable.has(key)) continue;
+			const hit = meet(before.netOfPoint.get(key), `the wire at ${key.replace(',', ', ')}`);
+			if (hit) return hit;
+		}
+	}
+	return null;
+}
+
+/**
+ * Join wires that meet end to end with nothing else at the joint.
+ *
+ * Two wires touching at a bare point are one conductor drawn in two pieces, and
+ * keeping them apart has a real cost: the joint becomes a fixed endpoint that
+ * re-routing has to honour. Move a component and the wire is forced back to a
+ * corner that no longer means anything, producing a detour that looks like the
+ * router being stupid when it was only being obedient.
+ *
+ * Conservative on purpose — a point with a pin on it, or where three ends meet,
+ * is a real junction and is left alone. The drawn shape never changes; only the
+ * number of wires does.
+ */
+export function mergeWireChains(schematic: Schematic): Wire[] {
+	const pins = new Set<string>();
+	for (const instance of schematic.instances) {
+		for (const pin of definitionFor(instance).pins) {
+			const at = pinPosition(instance, pin);
+			pins.add(pointKey(at.x, at.y));
+		}
+	}
+
+	const wires: Wire[] = schematic.wires.map((w) => ({
+		id: w.id,
+		points: w.points.map((p) => ({ x: p.x, y: p.y }))
+	}));
+
+	// A joint that some other wire passes through — at a corner of its own, or
+	// partway along a straight — is a junction with that wire as well, however
+	// few *ends* meet there. Folding it away took the point out of the path, the
+	// wire passing through became a wire merely crossing, and one net became two.
+	// Merging never moves a point, so this holds for every pass.
+	const through = new Set<string>();
+	for (const wire of wires) {
+		for (let i = 1; i < wire.points.length - 1; i++) {
+			through.add(pointKey(wire.points[i].x, wire.points[i].y));
+		}
+	}
+	const endPoints = new LineIndex(
+		wires.flatMap((w) => [w.points[0], w.points[w.points.length - 1]]).filter((p) => p !== undefined)
+	);
+	for (const wire of wires) {
+		for (const segment of wireSegments(wire)) {
+			for (const p of endPoints.inside(segment.a, segment.b)) through.add(pointKey(p.x, p.y));
+		}
+	}
+
+	// Repeat until nothing more joins: a chain of N pieces takes N-1 passes.
+	//
+	// The bound is the count this started with. Measured against `wires.length` it
+	// closed on itself — each pass removes a wire, so after k joins the test read
+	// `k < N - k + 1` and gave up around halfway. A chain of five came out as two,
+	// six as two, eight as three, and every joint left behind is a fixed point that
+	// re-routing has to honour: the detours that read as the router being stupid.
+	const passes = wires.length;
+	for (let guard = 0; guard < passes; guard++) {
+		const ends = new Map<string, Array<{ index: number; atStart: boolean }>>();
+		wires.forEach((wire, index) => {
+			for (const atStart of [true, false]) {
+				const p = atStart ? wire.points[0] : wire.points[wire.points.length - 1];
+				const key = pointKey(p.x, p.y);
+				const list = ends.get(key);
+				if (list) list.push({ index, atStart });
+				else ends.set(key, [{ index, atStart }]);
+			}
+		});
+
+		let joined = false;
+		for (const [key, list] of ends) {
+			if (pins.has(key) || through.has(key) || list.length !== 2) continue;
+			const [a, b] = list;
+			// A wire whose own two ends meet is a loop, not a chain.
+			if (a.index === b.index) continue;
+
+			const first = wires[a.index];
+			const second = wires[b.index];
+			// Orient both so the shared point is where they meet in the middle.
+			const head = a.atStart ? [...first.points].reverse() : first.points;
+			const tail = b.atStart ? second.points : [...second.points].reverse();
+			const combined = simplifyPath([...head, ...tail.slice(1)]);
+
+			wires[a.index] = { id: first.id, points: combined };
+			wires.splice(b.index, 1);
+			joined = true;
+			break;
+		}
+		if (!joined) break;
+	}
+
+	return wires;
+}
+
+/**
+ * Points where a dot has to be drawn, because otherwise a reader cannot tell a
+ * junction from a crossing.
+ *
+ * Counted in segment-ends: a bend in one wire has two and is not a junction,
+ * while a wire ending on another wire's corner has three and is.
+ */
+export function junctionDots(schematic: Schematic): Point[] {
+	const counts = new Map<string, { point: Point; ends: number }>();
+	const bump = (point: Point) => {
+		const key = pointKey(point.x, point.y);
+		const entry = counts.get(key) ?? { point, ends: 0 };
+		entry.ends += 1;
+		counts.set(key, entry);
+	};
+
+	const segments = allSegments(schematic);
+	for (const segment of segments) {
+		bump(segment.a);
+		bump(segment.b);
+	}
+
+	// A wire that stops partway along another one is always a junction, however
+	// few ends meet there.
+	const corners = new LineIndex(
+		schematic.wires.flatMap((wire) => wire.points.map((p) => ({ x: p.x, y: p.y, wire })))
+	);
+	const midwire = new Set<string>();
+	for (const segment of segments) {
+		for (const point of corners.inside(segment.a, segment.b)) {
+			if (point.wire !== segment.wire) midwire.add(pointKey(point.x, point.y));
+		}
+	}
+
+	const dots: Point[] = [];
+	for (const [key, entry] of counts) {
+		if (entry.ends >= 3 || midwire.has(key)) dots.push(entry.point);
+	}
+	return dots;
+}
+
+/**
+ * Cut back a wire that runs along another one at either end.
+ *
+ * Moving a wire whose end is pinned to something can leave it doubling back
+ * along a neighbour to reach where it was plugged in — two conductors drawn on
+ * the same line, which is exactly what the router spends its time avoiding, and
+ * which reads as a mistake because it is one.
+ *
+ * The doubled part is redundant as well as ugly: the wire already meets its
+ * neighbour at the far end of the overlap, so cutting to that point keeps the
+ * connection.
+ *
+ * One cut at a time, each checked against the wires as they stand. Checking
+ * every wire against the original set instead looks equivalent and is not: two
+ * wires that cover each other would both be cut, and the connection they shared
+ * would go with them. Measured, that lost twenty-nine connections across a sweep
+ * of the examples — the exact failure this is supposed to prevent.
+ *
+ * Only whole end segments, and only against a single covering segment. Trimming
+ * a partial overlap would move a corner rather than remove one, and changing the
+ * drawn shape is not what this is for.
+ */
+export function trimOverlaps(schematic: Schematic): Wire[] {
+	const wires = [...schematic.wires];
+
+	// Every segment, filed under the line it lies on, so a segment only meets the
+	// ones it could be covered by. Asking every wire about every other wire's
+	// segments, afresh after each cut, took over a second on a drawing of two
+	// thousand wires with nothing to cut at all.
+	interface Span {
+		owner: string;
+		lo: number;
+		hi: number;
+		live: boolean;
+	}
+	const lines = new Map<string, Span[]>();
+	const spansOf = new Map<Wire, Span[]>();
+	const lineOf = (segment: WireSegment) =>
+		segment.a.x === segment.b.x ? `v${segment.a.x}` : `h${segment.a.y}`;
+	const file = (wire: Wire) => {
+		const spans = wireSegments(wire).map((segment) => {
+			const vertical = segment.a.x === segment.b.x;
+			const [u, v] = vertical ? [segment.a.y, segment.b.y] : [segment.a.x, segment.b.x];
+			const span: Span = { owner: wire.id, lo: Math.min(u, v), hi: Math.max(u, v), live: true };
+			const line = lineOf(segment);
+			const list = lines.get(line);
+			if (list) list.push(span);
+			else lines.set(line, [span]);
+			return span;
+		});
+		spansOf.set(wire, spans);
+	};
+	for (const wire of wires) file(wire);
+
+	const covered = (wire: Wire, segment: WireSegment, own: Span) =>
+		(lines.get(lineOf(segment)) ?? []).some(
+			(other) => other.live && other.owner !== wire.id && other.lo <= own.lo && other.hi >= own.hi
+		);
+
+	// One cut at a time, as the wires stand after the last one — and in order, so
+	// a pass forwards finds each cut the way a search from the start would have:
+	// a cut only ever takes a segment away, so a wire that had nothing to cut
+	// before it still has nothing after, and only the wire just cut can have a new
+	// end worth another look.
+	let cuts = 0;
+	const limit = wires.length * 8 + 16;
+	for (let index = 0; index < wires.length && cuts < limit; ) {
+		const wire = wires[index];
+		if (wire.points.length < 2) {
+			index++;
+			continue;
+		}
+		const segments = wireSegments(wire);
+		const spans = spansOf.get(wire)!;
+		let points: Point[] | null = null;
+		if (covered(wire, segments[segments.length - 1], spans[spans.length - 1])) {
+			points = wire.points.slice(0, -1);
+			spans[spans.length - 1].live = false;
+		} else if (covered(wire, segments[0], spans[0])) {
+			points = wire.points.slice(1);
+			spans[0].live = false;
+		}
+		if (!points) {
+			index++;
+			continue;
+		}
+		cuts++;
+		for (const span of spans) span.live = false;
+		if (points.length < 2) {
+			wires.splice(index, 1);
+			continue;
+		}
+		const trimmed = { ...wire, points };
+		wires[index] = trimmed;
+		file(trimmed);
+	}
+
+	return wires;
+}
+
+/**
+ * Split a wire wherever something else meets it partway along.
+ *
+ * Two shapes of the same problem, and they are mirror images.
+ *
+ * A branch ending in the middle of a wire is a real junction, but as a bare point
+ * on someone else's segment it is a fragile one: only the *ends* of a wire are
+ * tracked as things that follow, so moving the host leaves the branch holding
+ * nothing.
+ *
+ * A pin sitting in the middle of a wire has the same trouble from the other side.
+ * The wire is not a follower of that pin, because following is decided by looking
+ * at a wire's two ends — so move the part, or re-route the wire, and the pin is
+ * left behind. That is how a circuit comes apart over a run of drags with every
+ * pin still attached to something and no warning to show for it.
+ *
+ * Splitting turns both into wire ends meeting at a point, which is the case the
+ * editor already handles: each of them anchors the others, and a pin at the end
+ * of a wire is followed like any other. What is drawn never changes; only the
+ * number of wires does.
+ *
+ * `mergeWireChains` will not undo this — it only folds a point where exactly two
+ * ends meet, and it leaves anything with a pin on it alone.
+ */
+export function splitAtJunctions(schematic: Schematic, nextId: () => string): Wire[] {
+	const ends = new Set<string>();
+	for (const wire of schematic.wires) {
+		for (const index of [0, wire.points.length - 1]) {
+			ends.add(pointKey(wire.points[index].x, wire.points[index].y));
+		}
+	}
+	for (const instance of schematic.instances) {
+		for (const pin of definitionFor(instance).pins) {
+			const at = pinPosition(instance, pin);
+			ends.add(pointKey(at.x, at.y));
+		}
+	}
+
+	const out: Wire[] = [];
+	for (const wire of schematic.wires) {
+		let rest = wire;
+		let first = true;
+
+		for (;;) {
+			const at = firstJunctionWithin(rest, ends);
+			if (!at) break;
+
+			out.push({ id: first ? wire.id : nextId(), points: at.before });
+			rest = { id: nextId(), points: at.after };
+			first = false;
+		}
+
+		out.push(first ? wire : rest);
+	}
+	return out;
+}
+
+/** Where another wire ends strictly inside this one, and the two halves it makes. */
+function firstJunctionWithin(
+	wire: Wire,
+	ends: ReadonlySet<string>
+): { before: Point[]; after: Point[] } | null {
+	for (let i = 0; i < wire.points.length - 1; i++) {
+		const a = wire.points[i];
+		const b = wire.points[i + 1];
+
+		// A corner counts. A branch can land on a bend as easily as on a straight,
+		// and a bend is not an interior point of either segment that meets there —
+		// so walking segments alone steps right over it.
+		if (i > 0 && ends.has(pointKey(a.x, a.y))) {
+			return { before: wire.points.slice(0, i + 1), after: wire.points.slice(i) };
+		}
+
+		const vertical = a.x === b.x;
+		const from = vertical ? a.y : a.x;
+		const to = vertical ? b.y : b.x;
+		const step = Math.sign(to - from) * GRID;
+		if (step === 0) continue;
+
+		for (let v = from + step; step > 0 ? v < to : v > to; v += step) {
+			const at = vertical ? { x: a.x, y: v } : { x: v, y: a.y };
+			if (!ends.has(pointKey(at.x, at.y))) continue;
+			return {
+				before: [...wire.points.slice(0, i + 1), at],
+				after: [at, ...wire.points.slice(i + 1)]
+			};
+		}
+	}
+	return null;
+}
+
+// ---------------------------------------------------------------------------
+// Making room for a part
+// ---------------------------------------------------------------------------
+
+/** Running distance to each corner of a polyline. Axis-aligned, so Manhattan. */
+function lengthsOf(points: readonly Point[]): number[] {
+	const out = [0];
+	for (let i = 1; i < points.length; i++) {
+		const step = Math.abs(points[i].x - points[i - 1].x) + Math.abs(points[i].y - points[i - 1].y);
+		out.push(out[i - 1] + step);
+	}
+	return out;
+}
+
+/** How far along a wire a point sits, or null if it is not on it at all. */
+function positionAlong(points: readonly Point[], p: Point): number | null {
+	const lengths = lengthsOf(points);
+	for (let i = 1; i < points.length; i++) {
+		const a = points[i - 1];
+		if (p.x === a.x && p.y === a.y) return lengths[i - 1];
+		if (liesWithin(p.x, p.y, a, points[i])) {
+			return lengths[i - 1] + Math.abs(p.x - a.x) + Math.abs(p.y - a.y);
+		}
+	}
+	const last = points[points.length - 1];
+	if (p.x === last.x && p.y === last.y) return lengths[lengths.length - 1];
+	return null;
+}
+
+function pointAt(points: readonly Point[], distance: number): Point {
+	const lengths = lengthsOf(points);
+	for (let i = 1; i < points.length; i++) {
+		if (distance > lengths[i]) continue;
+		const a = points[i - 1];
+		const b = points[i];
+		const span = lengths[i] - lengths[i - 1];
+		const t = span === 0 ? 0 : (distance - lengths[i - 1]) / span;
+		return { x: Math.round(a.x + (b.x - a.x) * t), y: Math.round(a.y + (b.y - a.y) * t) };
+	}
+	return { ...points[points.length - 1] };
+}
+
+/** The stretch of a wire between two distances along it. */
+function sliceAlong(points: readonly Point[], from: number, to: number): Point[] {
+	if (to <= from) return [];
+	const lengths = lengthsOf(points);
+	const out: Point[] = [pointAt(points, from)];
+	for (let i = 0; i < points.length; i++) {
+		if (lengths[i] > from && lengths[i] < to) out.push({ ...points[i] });
+	}
+	out.push(pointAt(points, to));
+	return out.filter((p, i) => i === 0 || p.x !== out[i - 1].x || p.y !== out[i - 1].y);
+}
+
+/**
+ * Open a gap in any wire that a part now bridges, so it sits in series.
+ *
+ * Dropping a component onto a wire is how anyone puts one in a circuit, and it
+ * is exactly what you get after deleting a part and letting the gap close behind
+ * it. What it must never leave behind is the part standing on an unbroken wire:
+ * that shorts it out, and the drawing gives nothing away, because a symbol on a
+ * line with a pin touching at each end is what a series connection looks like.
+ * The simulation is then right about a circuit nobody meant to draw.
+ *
+ * So a wire reaching two or more of the part's pins loses the run between the
+ * outermost of them, and the pieces either side stay. What joins them now is the
+ * part. A wire touching only one pin is left alone: that is a tap, and it is
+ * what someone branching off a wire means.
+ */
+export function openForPins(
+	schematic: Schematic,
+	pins: readonly Point[],
+	nextId: () => string
+): Wire[] {
+	const out: Wire[] = [];
+
+	for (const wire of schematic.wires) {
+		const hits = pins
+			.map((p) => positionAlong(wire.points, p))
+			.filter((d): d is number => d !== null)
+			.sort((a, b) => a - b);
+
+		const total = lengthsOf(wire.points).at(-1) ?? 0;
+		if (hits.length < 2 || hits[hits.length - 1] <= hits[0]) {
+			out.push(wire);
+			continue;
+		}
+
+		let reusedId = false;
+		for (const piece of [
+			sliceAlong(wire.points, 0, hits[0]),
+			sliceAlong(wire.points, hits[hits.length - 1], total)
+		]) {
+			if (piece.length < 2) continue;
+			out.push({ id: reusedId ? nextId() : wire.id, points: piece });
+			reusedId = true;
+		}
+	}
+
+	return out;
+}
+
+/**
+ * What to call a net on a scope trace or in a list.
+ *
+ * `n1` and `n2` are names the compiler invented, in the order it happened to
+ * walk the drawing. They are stable and unique, which is all the engine needs
+ * and none of what a person needs: shown two traces called `n1` and `n2`, there
+ * is nothing to do but count nets by hand.
+ *
+ * So a net is named after what it joins. Its pins, most telling first — a
+ * source's output says more than a resistor's leg — and at most two of them,
+ * because a name longer than the trace it labels is not a name.
+ */
+export function netLabel(net: Net, fallback: string): string {
+	if (net.isGround) return 'GND';
+	if (net.pins.length === 0) return fallback;
+
+	// A pin that drives says more about a net than one that merely sits on it.
+	const rank = (ref: PinRef) => {
+		const kind = ref.instance.kind;
+		if (kind === 'vsource' || kind === 'isource' || kind === 'battery') return 0;
+		if (kind === 'clock') return 1;
+		if (ref.pin.direction === 'out') return 1;
+		return 2;
+	};
+	const named = [...net.pins]
+		.sort((a, b) => rank(a) - rank(b) || a.instance.name.localeCompare(b.instance.name))
+		.map((ref) => `${ref.instance.name}.${short(ref.pin.name)}`);
+
+	// A middle dot, so the separator between two names is not the same character
+	// as the one inside them: `V1.+-R1.a` reads as one thing, `V1.+ · R1.a` as two.
+	const shown = named.slice(0, 2).join(' · ');
+	return named.length > 2 ? `${shown}+${named.length - 2}` : shown;
+}
+
+/** Pin names as they read on a label rather than in the catalog. */
+function short(pin: string): string {
+	switch (pin) {
+		case 'plus':
+			return '+';
+		case 'minus':
+			return '-';
+		case 'anode':
+			return 'a';
+		case 'cathode':
+			return 'k';
+		case 'collector':
+			return 'c';
+		case 'emitter':
+			return 'e';
+		case 'base':
+			return 'b';
+		case 'drain':
+			return 'd';
+		case 'source':
+			return 's';
+		case 'gate':
+			return 'g';
+		default:
+			return pin;
+	}
+}
+
+/**
+ * Parts that do not carry a current at DC, and so cannot hold a node anywhere.
+ *
+ * A capacitor is an open circuit once everything has settled; a current source
+ * and a probe are high impedances by definition. A switch is not on this list:
+ * it is an open circuit when it is open and a piece of wire when it is closed,
+ * which is a fact about the moment rather than about the drawing.
+ */
+const NO_DC_PATH = new Set(['capacitor', 'varcap', 'crystal', 'isource', 'probe', 'port']);
+
+/** One conductive route between two nets. `via` is a switch that has to be closed. */
+interface DcEdge {
+	to: number;
+	via?: string;
+}
+
+export interface FloatingInput {
+	net: number;
+	instance: Instance;
+	pin: string;
+	/**
+	 * Whether closing a switch would give it a level.
+	 *
+	 * The two cases want opposite treatment and used to get the same one. An input
+	 * nothing can ever hold is undefined for the whole run, so the gate is better
+	 * off with `unknown` than with a level invented for it. An input a switch
+	 * feeds is perfectly defined while that switch is closed — which is the
+	 * circuit somebody drew, and the whole reason they drew a switch.
+	 */
+	conditional: boolean;
+}
+
+export interface FloatingAnalysis {
+	inputs: FloatingInput[];
+	/** Nets with no route to a rail given which switches are closed right now. */
+	floatingWith: (closed: ReadonlySet<string>) => Set<number>;
+}
+
+/**
+ * Logic inputs left floating whenever the switches around them open.
+ *
+ * The mistake this catches is the most common one there is with a switch, and
+ * it is invisible: a switch from a rail into a gate input, with nothing pulling
+ * the input the other way. A logic input draws no current, so with the switch
+ * open nothing moves the node at all — it keeps the last voltage that leaked
+ * into it, which here means the rail, and the gate reads the same level whether
+ * the switch is open or closed. The simulation is right and looks broken. On a
+ * real board the same circuit reads whatever the input capacitance picked up
+ * from the mains, which is worse.
+ *
+ * Found by asking which nets reach ground through something that conducts, with
+ * switches as edges that only exist while they are closed. Answering that once,
+ * with every switch treated as permanently open, is what made a button wired to
+ * a gate dead rather than undefined: closing it changed nothing, because the
+ * verdict had been reached before anybody touched it.
+ *
+ * Multi-terminal parts are treated as joining all of their pins, which is not
+ * true of a transistor gate and is deliberately the forgiving direction — this
+ * should stay quiet unless it is sure.
+ */
+export function floatingLogicInputs(
+	schematic: Schematic,
+	connectivity: Connectivity
+): FloatingAnalysis {
+	const netOf = (instance: Instance, pin: string) =>
+		connectivity.netOfPin.get(pinKey(instance.id, pin));
+
+	const edges = new Map<number, DcEdge[]>();
+	const join = (a: number, b: number, via?: string) => {
+		if (a === b) return;
+		for (const [from, to] of [
+			[a, b],
+			[b, a]
+		]) {
+			const edge: DcEdge = via === undefined ? { to } : { to, via };
+			const list = edges.get(from);
+			if (list) list.push(edge);
+			else edges.set(from, [edge]);
+		}
+	};
+
+	const GROUND = -1;
+	for (const net of connectivity.nets) {
+		if (net.isGround) join(net.index, GROUND);
+	}
+
+	for (const instance of schematic.instances) {
+		if (NO_DC_PATH.has(instance.kind)) continue;
+		// A supply terminal is a source with its far end on ground, so it ties its
+		// net to the reference just as surely as a wire to a ground symbol does.
+		if (instance.kind === 'supply') {
+			const index = netOf(instance, 'v');
+			if (index !== undefined) join(index, GROUND);
+			continue;
+		}
+		const on = definitionFor(instance)
+			.pins.filter((pin) => pin.domain === 'analog')
+			.map((pin) => netOf(instance, pin.name))
+			.filter((index): index is number => index !== undefined);
+		const via = SINGLE_CONTACTS.has(instance.kind) ? instance.id : undefined;
+		for (let i = 1; i < on.length; i++) join(on[0], on[i], via);
+	}
+
+	/** Nets reachable from the reference. `'all'` closes every switch at once. */
+	const reach = (closed: ReadonlySet<string> | 'all'): Set<number> => {
+		const seen = new Set<number>();
+		const queue = [GROUND];
+		while (queue.length > 0) {
+			const at = queue.pop()!;
+			for (const edge of edges.get(at) ?? []) {
+				if (edge.via !== undefined && closed !== 'all' && !closed.has(edge.via)) continue;
+				if (seen.has(edge.to)) continue;
+				seen.add(edge.to);
+				queue.push(edge.to);
+			}
+		}
+		return seen;
+	};
+
+	const NONE: ReadonlySet<string> = new Set();
+	const best = reach('all');
+	const worst = reach(NONE);
+
+	const inputs: FloatingInput[] = [];
+	const watched = new Set<number>();
+	for (const net of connectivity.nets) {
+		// Only where a level is going to be read off it. An analog node with no DC
+		// path is an ordinary AC-coupled node and nobody needs telling.
+		if (!net.hasDigitalInput || !net.hasAnalog || worst.has(net.index)) continue;
+		// Something digital driving the net holds it at a rail through the bridge,
+		// which is a path to the reference by any other name.
+		if (net.hasDigitalOutput) continue;
+		watched.add(net.index);
+		for (const ref of net.pins) {
+			if (ref.pin.domain === 'digital' && ref.pin.direction === 'in') {
+				inputs.push({
+					net: net.index,
+					instance: ref.instance,
+					pin: ref.pin.name,
+					conditional: best.has(net.index)
+				});
+			}
+		}
+	}
+
+	return {
+		inputs,
+		floatingWith: (closed) => {
+			if (watched.size === 0) return new Set();
+			const held = reach(closed);
+			return new Set([...watched].filter((net) => !held.has(net)));
+		}
+	};
+}

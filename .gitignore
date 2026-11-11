@@ -1,0 +1,14 @@
+/target
+**/node_modules
+**/.svelte-kit
+**/build
+**/dist
+/web/src/lib/wasm
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Scratch output from driving the app in a browser during development.
+**/.playwright-mcp

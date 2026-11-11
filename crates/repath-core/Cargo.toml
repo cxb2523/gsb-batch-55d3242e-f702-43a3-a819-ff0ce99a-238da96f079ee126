@@ -1,0 +1,21 @@
+[package]
+name = "repath-core"
+description = "Mixed-signal (analog + digital) circuit simulation engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+# The circuit-level suite lives in its own repository, mounted at `tests/` in
+# the root of the workspace; see CONTRIBUTING.md. Cargo finds integration tests
+# only under the crate's own `tests/`, so the file is named here.
+[[test]]
+name = "circuits"
+path = "../../tests/core/circuits.rs"

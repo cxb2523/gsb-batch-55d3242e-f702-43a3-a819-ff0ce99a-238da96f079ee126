@@ -1,0 +1,322 @@
+/**
+ * Engineering notation, in both directions.
+ *
+ * People type `4k7`, `4.7k`, `10u`, `1meg` and expect all of them to work, and
+ * they expect `0.0000047` to come back as `4.7µ`. Getting this wrong makes an
+ * otherwise correct simulator feel broken.
+ */
+
+/**
+ * Scaling by a power of ten is not exact in binary: `100 * 1e-9` comes out as
+ * 1.0000000000000001e-7. Invisible on screen, but it is what gets written to a
+ * file and carried in a share link, and it resurfaces as a value nobody typed.
+ * Fifteen digits is past any physical parameter and short of a double's
+ * seventeen, so it clears the noise without touching anything real.
+ */
+const settle = (value: number) => Number(value.toPrecision(15));
+
+const PREFIXES: Record<string, number> = {
+	f: 1e-15,
+	p: 1e-12,
+	n: 1e-9,
+	u: 1e-6,
+	'µ': 1e-6,
+	'μ': 1e-6,
+	m: 1e-3,
+	k: 1e3,
+	K: 1e3,
+	M: 1e6,
+	G: 1e9,
+	T: 1e12
+};
+
+/** Ordered largest first, for formatting. */
+const SCALE: Array<[number, string]> = [
+	[1e12, 'T'],
+	[1e9, 'G'],
+	[1e6, 'M'],
+	[1e3, 'k'],
+	[1, ''],
+	[1e-3, 'm'],
+	[1e-6, 'µ'],
+	[1e-9, 'n'],
+	[1e-12, 'p'],
+	[1e-15, 'f']
+];
+
+/**
+ * Parse a value with an optional engineering suffix.
+ *
+ * Returns `null` for anything unparseable, so callers can keep the previous
+ * value rather than silently substituting a zero.
+ */
+export function parseValue(input: string): number | null {
+	// The unit after the prefix is read past: `5ms`, `10uF` and `4.7kΩ` are what
+	// people type into a field labelled in seconds, farads or ohms, and refusing
+	// them made the field quietly snap back. Case matters where a unit and a
+	// prefix share a letter — `F` is a farad and `f` is femto — so only spellings
+	// that cannot be a prefix are taken.
+	const text = input
+		.trim()
+		.replace(/\s+/g, '')
+		.replace(/(?<=[\d.fpnuµμmkKMGTg])(Hz|hz|Ω|[oO]hms?|s|V|v|A|F|H|h|W)$/, '');
+	if (text === '') return null;
+
+	// `meg` before the single-letter table, or `1meg` parses as 1 milli.
+	const meg = /^([+-]?[\d.]+)meg$/i.exec(text);
+	if (meg) {
+		const n = Number(meg[1]);
+		return Number.isFinite(n) ? settle(n * 1e6) : null;
+	}
+
+	// Infix form: 4k7 means 4.7k. Common on schematics because it survives a
+	// decimal point being lost to a bad photocopy.
+	const infix = /^([+-]?\d+)([fpnuµμmkKMGT])(\d+)$/.exec(text);
+	if (infix) {
+		const n = Number(`${infix[1]}.${infix[3]}`);
+		return Number.isFinite(n) ? settle(n * PREFIXES[infix[2]]) : null;
+	}
+
+	const suffixed = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([fpnuµμmkKMGT])?$/.exec(text);
+	if (!suffixed) return null;
+	const n = Number(suffixed[1]);
+	if (!Number.isFinite(n)) return null;
+	return suffixed[2] ? settle(n * PREFIXES[suffixed[2]]) : n;
+}
+
+/** Render a number with an engineering suffix and at most `digits` significant figures. */
+export function formatValue(value: number, digits = 4): string {
+	if (!Number.isFinite(value)) return '—';
+	if (value === 0) return '0';
+
+	const magnitude = Math.abs(value);
+	let index = SCALE.findIndex(([s]) => magnitude >= s);
+	if (index === -1) index = SCALE.length - 1;
+
+	// Rounding can push a value up out of the decade it was picked for: 0.9999 A
+	// lands on the milli step, and three significant figures round it to 1000 —
+	// which `toPrecision` then writes as `1.00e+3`, so the reading came out as
+	// `1.00e+3 mA` instead of `1 A`. Step up and try again.
+	while (index > 0 && Math.abs(Number((value / SCALE[index][0]).toPrecision(digits))) >= 1000) {
+		index--;
+	}
+
+	const [scale, suffix] = SCALE[index];
+	const scaled = value / scale;
+	// Trim trailing zeros — 4.7000k reads worse than 4.7k — but only after a
+	// decimal point. Stripping them unconditionally turns 400µ into 4µ.
+	const text = scaled
+		.toPrecision(digits)
+		.replace(/(\.\d*?)0+$/, '$1')
+		.replace(/\.$/, '');
+	return `${text}${suffix}`;
+}
+
+/** Format with a unit, e.g. `formatWithUnit(4700, 'Ω')` → `4.7 kΩ`. */
+export function formatWithUnit(value: number, unit: string, digits = 4): string {
+	const text = formatValue(value, digits);
+	const match = /^(.*?)([fpnµmkMGT])?$/.exec(text);
+	const prefix = match?.[2] ?? '';
+	const number = match?.[1] ?? text;
+	return `${number} ${prefix}${unit}`;
+}
+
+/**
+ * The prefixes offered in the editor, largest first.
+ *
+ * The same ladder `formatValue` uses, so a value typed in one form and read back
+ * in the other cannot disagree about which decade it is in.
+ */
+export const PREFIX_OPTIONS: ReadonlyArray<{ prefix: string; scale: number; label: string }> =
+	SCALE.map(([scale, prefix]) => ({
+		prefix,
+		scale,
+		label: prefix === '' ? '—' : prefix
+	}));
+
+/** A value as it is edited: a number to read, and the decade it sits in. */
+export interface SplitValue {
+	mantissa: number;
+	prefix: string;
+}
+
+/**
+ * Split a value into the number and its prefix.
+ *
+ * Editing them apart is the point: a field that takes `4k7` asks people to know a
+ * notation before they can change a resistor, and mixing digits with letters
+ * makes the value hard to step with the arrow keys.
+ */
+export function splitValue(value: number, digits = 4): SplitValue {
+	if (!Number.isFinite(value) || value === 0) return { mantissa: 0, prefix: '' };
+
+	const magnitude = Math.abs(value);
+	const [scale, prefix] = SCALE.find(([s]) => magnitude >= s) ?? SCALE[SCALE.length - 1];
+	// Rounded to the precision it is displayed at, so what is shown and what is
+	// stored cannot drift apart over repeated edits.
+	return { mantissa: Number((value / scale).toPrecision(digits)), prefix };
+}
+
+/** Put a split value back together. */
+export function joinValue(mantissa: number, prefix: string): number {
+	const found = PREFIX_OPTIONS.find((option) => option.prefix === prefix);
+	return settle(mantissa * (found?.scale ?? 1));
+}
+
+/** The decade below a prefix, or undefined at the bottom of the ladder. */
+function decadeBelow(prefix: string): { prefix: string; scale: number } | undefined {
+	const index = PREFIX_OPTIONS.findIndex((option) => option.prefix === prefix);
+	return index >= 0 ? PREFIX_OPTIONS[index + 1] : undefined;
+}
+
+/**
+ * Move a value one step, and let it settle into the right decade.
+ *
+ * Stepping happens on the number being read rather than on the underlying value,
+ * so a nudge means the same thing at every scale: one at 4.7 k moves to 5.7 k,
+ * not to 4.7001 k. Going up, crossing a thousand re-splits on its own, which is
+ * what makes 999 Ω step to 1 kΩ instead of growing a fourth digit.
+ *
+ * Going down needs saying explicitly, or 1 kΩ would step to nothing and stop —
+ * a value could be raised with the arrows but never lowered past the bottom of
+ * its own decade. Falling through takes the step in the decade below instead, so
+ * 1 kΩ nudges to 999 Ω.
+ */
+export function stepValue(value: number, by: number, digits = 4): number {
+	const { mantissa, prefix } = splitValue(value, digits);
+	const moved = mantissa + by;
+
+	if (value !== 0 && Math.sign(moved) !== Math.sign(mantissa)) {
+		const below = decadeBelow(prefix);
+		if (below) {
+			return settle(Number((value / below.scale + by).toPrecision(12)) * below.scale);
+		}
+	}
+
+	return joinValue(Number(moved.toPrecision(12)), prefix);
+}
+
+/** Unit names people type in words, in English or Spanish, by the symbol they mean. */
+const UNIT_WORDS: Record<string, string> = {
+	'Ω': 'Ω',
+	ohm: 'Ω',
+	ohms: 'Ω',
+	ohmio: 'Ω',
+	ohmios: 'Ω',
+	f: 'F',
+	farad: 'F',
+	farads: 'F',
+	faradio: 'F',
+	faradios: 'F',
+	h: 'H',
+	henry: 'H',
+	henrys: 'H',
+	henries: 'H',
+	henrio: 'H',
+	henrios: 'H',
+	v: 'V',
+	volt: 'V',
+	volts: 'V',
+	voltio: 'V',
+	voltios: 'V',
+	a: 'A',
+	amp: 'A',
+	amps: 'A',
+	ampere: 'A',
+	amperes: 'A',
+	amperio: 'A',
+	amperios: 'A',
+	hz: 'Hz',
+	hertz: 'Hz',
+	hercio: 'Hz',
+	hercios: 'Hz',
+	s: 's',
+	sec: 's',
+	second: 's',
+	seconds: 's',
+	segundo: 's',
+	segundos: 's',
+	w: 'W',
+	watt: 'W',
+	watts: 'W',
+	vatio: 'W',
+	vatios: 'W'
+};
+
+/** Prefixes spelled out. Matched without regard to case, unlike the letters. */
+const PREFIX_WORDS: Record<string, number> = {
+	tera: 1e12,
+	giga: 1e9,
+	mega: 1e6,
+	meg: 1e6,
+	kilo: 1e3,
+	mili: 1e-3,
+	milli: 1e-3,
+	micro: 1e-6,
+	nano: 1e-9,
+	pico: 1e-12,
+	femto: 1e-15
+};
+
+/**
+ * Read a value typed the way it would be said: `330`, `4k7`, `330 mohm`,
+ * `2.2 megohms`, `100 nanofarads`, `4,7 kΩ`.
+ *
+ * A bare number is in `unit`. A unit that is named has to be `unit`, so `10 uF`
+ * typed at a resistor is refused rather than read as ten microohms. Letters keep
+ * their case — `m` is milli and `M` is mega, as on any schematic — and words do
+ * not, so `Mega` and `mega` both mean a million.
+ */
+export function parseQuantity(input: string, unit: string): number | null {
+	const match = /^\s*([+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:e[+-]?\d+)?)\s*(.*?)\s*$/i.exec(input);
+	if (!match) return null;
+	const number = Number(match[1].replace(',', '.'));
+	if (!Number.isFinite(number)) return null;
+	// `kilohm` drops the vowel the two words share.
+	let rest = match[2].replace(/\s+/g, '').replace(/^kil(?=ohm)/i, 'kilo');
+
+	// 4k7: the letter stands in for the decimal point.
+	const infix = /^([fpnuµμmkKMGT])(\d+)(.*)$/.exec(rest);
+	if (infix && /^\d+$/.test(match[1])) {
+		const whole = parseValue(`${match[1]}${infix[1]}${infix[2]}`);
+		return whole !== null && unitMatches(infix[3], unit) ? whole : null;
+	}
+
+	// A prefix on its own is only a prefix: `10 mega` must not lose its last
+	// letter to amperes.
+	if (isPrefix(rest)) return settle(number * (prefixScale(rest) ?? 1));
+
+	// Otherwise the unit comes off the end, longest spelling first, and what is
+	// left has to be a prefix: `mohm` is milli and ohm.
+	let named: string | null = null;
+	const lower = rest.toLowerCase();
+	for (const word of Object.keys(UNIT_WORDS).sort((x, y) => y.length - x.length)) {
+		if (!(word === 'Ω' ? rest.endsWith('Ω') : lower.endsWith(word))) continue;
+		const before = rest.slice(0, rest.length - word.length);
+		if (!isPrefix(before)) continue;
+		named = UNIT_WORDS[word];
+		rest = before;
+		break;
+	}
+	if (named !== unit) return null;
+
+	const scale = prefixScale(rest);
+	return scale === null ? null : settle(number * scale);
+}
+
+function unitMatches(text: string, unit: string): boolean {
+	if (text === '') return true;
+	const word = text === 'Ω' ? 'Ω' : text.toLowerCase();
+	return UNIT_WORDS[word] === unit;
+}
+
+function isPrefix(text: string): boolean {
+	return prefixScale(text) !== null;
+}
+
+function prefixScale(text: string): number | null {
+	if (text === '') return 1;
+	const word = PREFIX_WORDS[text.toLowerCase()];
+	if (word !== undefined) return word;
+	return PREFIXES[text] ?? null;
+}
