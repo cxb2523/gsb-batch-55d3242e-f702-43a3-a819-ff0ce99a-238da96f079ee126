@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Jellyfin Plugin Help</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --text: #1d1d1f;
+        --muted: rgba(0, 0, 0, 0.55);
+        --rule: rgba(0, 0, 0, 0.1);
+        --code-bg: rgba(0, 0, 0, 0.06);
+        --note-bg: rgba(0, 113, 227, 0.08);
+        --note-border: rgba(0, 113, 227, 0.5);
+        --link: #0066cc;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --text: #f5f5f7;
+          --muted: rgba(255, 255, 255, 0.55);
+          --rule: rgba(255, 255, 255, 0.12);
+          --code-bg: rgba(255, 255, 255, 0.1);
+          --note-bg: rgba(41, 151, 255, 0.12);
+          --note-border: rgba(41, 151, 255, 0.6);
+          --link: #2997ff;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        max-width: 640px;
+        margin: 0;
+        padding: 16px 20px 28px;
+        font:
+          13px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          'Helvetica Neue',
+          sans-serif;
+        color: var(--text);
+      }
+
+      h1 {
+        margin: 0 0 4px;
+        font-size: 18px;
+      }
+
+      h2 {
+        margin: 26px 0 8px;
+        padding-bottom: 5px;
+        border-bottom: 1px solid var(--rule);
+        font-size: 14px;
+      }
+
+      h3 {
+        margin: 14px 0 4px;
+        font-size: 13px;
+      }
+
+      p {
+        margin: 0 0 10px;
+      }
+
+      ul,
+      ol {
+        margin: 6px 0 10px;
+        padding-left: 20px;
+      }
+
+      li {
+        margin-bottom: 4px;
+      }
+
+      a {
+        color: var(--link);
+      }
+
+      .intro {
+        color: var(--muted);
+      }
+
+      code,
+      kbd {
+        padding: 1px 4px;
+        border-radius: 3px;
+        background: var(--code-bg);
+        font:
+          12px 'SF Mono',
+          Menlo,
+          monospace;
+      }
+
+      .note {
+        margin: 10px 0;
+        padding: 8px 12px;
+        border-left: 3px solid var(--note-border);
+        border-radius: 4px;
+        background: var(--note-bg);
+      }
+
+      .note p:last-child {
+        margin-bottom: 0;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>Jellyfin for IINA</h1>
+    <p class="intro">
+      Browse your Jellyfin server inside IINA and play its movies, shows and music directly, with
+      titles, subtitles, progress and next episodes handled for you.
+    </p>
+
+    <h2>Getting started</h2>
+    <ol>
+      <li>
+        Open the Jellyfin browser: <strong>Plugin → Show Jellyfin Browser</strong> (<kbd>⌘⇧J</kbd>),
+        or the <strong>Jellyfin</strong> tab in the player's sidebar.
+      </li>
+      <li>
+        Click <strong>Add Server</strong> and enter your server URL, for example
+        <code>http://192.168.1.100:8096</code>.
+      </li>
+      <li>
+        Sign in with your username and password, or use <strong>Quick Connect</strong> and approve
+        the code from another Jellyfin app.
+      </li>
+    </ol>
+    <p>
+      Opening a Jellyfin link that contains an API key (such as a download link) also adds that
+      server and signs you in, unless <strong>Sign in from Jellyfin links</strong> is turned off.
+    </p>
+
+    <h2>Browsing and playing</h2>
+    <p>
+      Pick a movie, episode or song to play it. Search, Continue Watching, your libraries, favorites
+      and music albums are all in the browser; playing an album queues all of its tracks.
+    </p>
+    <p>
+      By default each video opens in a new IINA window so you can keep browsing. Turn off
+      <strong>Open media in a new IINA window</strong> to play in the current one.
+    </p>
+    <p>
+      You can add several servers and switch between them in the browser. Logging out removes that
+      server; you will need its URL and credentials to add it again.
+    </p>
+
+    <h2>While a Jellyfin video plays</h2>
+    <p>Each of these can be turned off in the plugin's settings:</p>
+    <ul>
+      <li>
+        <strong>Title</strong>: the window shows the Jellyfin title, not the stream's file name.
+      </li>
+      <li>
+        <strong>Progress</strong>: playback resumes where you left off, your position is sent to
+        Jellyfin every 10 seconds, and the item is marked watched at 95%.
+      </li>
+      <li>
+        <strong>Next episode</strong>: the next episode is queued and starts when the current one
+        ends, continuing into the next season.
+      </li>
+      <li>
+        <strong>Audio and subtitles</strong>: the audio in your most preferred language is selected.
+        Subtitles are turned on only when you prefer another language over the audio's; with
+        <strong>Always show subtitles</strong>, also in the audio's own language.
+      </li>
+      <li>
+        <strong>Subtitle files</strong>: the item's external subtitle files in your preferred
+        languages are downloaded. Subtitles inside the video file are already available in IINA.
+      </li>
+    </ul>
+
+    <h2>Plugin menu</h2>
+    <p>Under <strong>Plugin</strong> in the menu bar, in the Jellyfin section:</p>
+    <ul>
+      <li><strong>Download Jellyfin Subtitles</strong>: download the subtitle files again.</li>
+      <li><strong>Set Jellyfin Title</strong>: fetch the title again.</li>
+      <li><strong>Show Jellyfin Browser</strong> (<kbd>⌘⇧J</kbd>): open the browser.</li>
+      <li>
+        <strong>Jellyfin Version</strong>: only for items with several versions in Jellyfin (for
+        example 4K and 1080p). Switches version and keeps your position.
+      </li>
+    </ul>
+
+    <h2>Opening Jellyfin links directly</h2>
+    <p>
+      Links opened in IINA some other way (Open URL, a browser extension, Syncplay) get the same
+      handling when they point at a Jellyfin item and carry an API key, for example:
+    </p>
+    <ul>
+      <li><code>https://server/Videos/{ItemId}/stream?static=true&amp;ApiKey={key}</code></li>
+      <li><code>https://server/Items/{ItemId}/Download?ApiKey={key}</code></li>
+    </ul>
+    <p>
+      Servers behind a reverse-proxy path, such as <code>https://example.com/jellyfin</code>, work
+      too.
+    </p>
+
+    <h2>Troubleshooting</h2>
+
+    <h3>No subtitles were downloaded</h3>
+    <p>
+      Only external subtitle files are downloaded, and only in your preferred languages. Check the
+      language codes in the settings, or turn on
+      <strong>Download subtitles in every language</strong>. Subtitles embedded in the file are in
+      IINA's Subtitles menu.
+    </p>
+
+    <h3>The wrong audio or subtitle track is selected</h3>
+    <p>
+      Put your languages in order of preference, most preferred first. A preferred language set in
+      IINA's own Audio or Subtitles settings takes precedence over the plugin. To keep the file's
+      own default tracks, turn off <strong>Pick audio and subtitles in my languages</strong>.
+    </p>
+
+    <h3>Subtitles are off when the audio is in my language</h3>
+    <p>
+      That is the default: subtitles in the language you are already listening to are left off. To
+      have them on anyway, turn on <strong>Always show subtitles</strong>. It needs
+      <strong>Pick audio and subtitles in my languages</strong>, and a preferred subtitle language
+      set in IINA's own settings takes precedence.
+    </p>
+
+    <h3>Progress does not show up in Jellyfin</h3>
+    <p>
+      Check that <strong>Sync playback progress with Jellyfin</strong> is on. Progress goes to the
+      account whose API key is in the link, unless <strong>Report to my signed-in account</strong>
+      is on.
+    </p>
+
+    <h3>Reporting a problem</h3>
+    <div class="note">
+      <p>
+        Turn on <strong>Debug logging</strong> in the plugin's settings and logging in IINA's
+        Advanced settings, reproduce the problem, then open an issue at
+        <a href="https://github.com/mhajder/iina-jellyfin/issues"
+          >github.com/mhajder/iina-jellyfin</a
+        >
+        with the log attached. API keys and tokens are removed from the plugin's logs.
+      </p>
+    </div>
+  </body>
+</html>

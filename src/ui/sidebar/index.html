@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jellyfin Browser</title>
+    <link rel="stylesheet" href="sidebar.css" />
+  </head>
+  <body>
+    <div class="container">
+      <!-- Server Connection -->
+      <div class="server-section">
+        <div class="section-title">Jellyfin Server</div>
+        <div class="server-controls">
+          <div id="serverStatus" class="server-status">Not connected</div>
+          <!-- Saved Server List -->
+          <div id="savedServerList" class="saved-server-list" style="display: none"></div>
+          <div style="display: flex; gap: 8px; margin-top: 8px">
+            <button id="connectBtn" class="button primary">Add Server</button>
+            <button id="addServerBtn" class="button primary" style="display: none">
+              Add Server
+            </button>
+            <button id="logoutBtn" class="button secondary" style="display: none">
+              Disconnect
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Login Section -->
+      <div id="loginSection" class="login-section" style="display: none">
+        <div class="section-title">Login to Jellyfin</div>
+
+        <!-- Login Method Tabs -->
+        <div class="login-method-tabs">
+          <button class="login-method-tab active" data-method="password">Password</button>
+          <button class="login-method-tab" data-method="quickconnect">Quick Connect</button>
+        </div>
+
+        <!-- Password Login Form -->
+        <div id="passwordLoginForm" class="login-form">
+          <div class="input-group">
+            <label class="input-label" for="serverUrl">Server URL</label>
+            <input
+              type="text"
+              id="serverUrl"
+              class="text-input"
+              placeholder="http://your-server:8096"
+            />
+          </div>
+          <div class="input-group">
+            <label class="input-label" for="username">Username</label>
+            <input type="text" id="username" class="text-input" placeholder="Your username" />
+          </div>
+          <div class="input-group">
+            <label class="input-label" for="password">Password</label>
+            <input type="password" id="password" class="text-input" placeholder="Your password" />
+          </div>
+          <div id="loginError" class="error"></div>
+          <button id="loginBtn" class="button">Login</button>
+          <button id="cancelLoginBtn" class="button secondary">Cancel</button>
+        </div>
+
+        <!-- Quick Connect Form -->
+        <div id="quickConnectForm" class="login-form" style="display: none">
+          <div class="input-group">
+            <label class="input-label" for="qcServerUrl">Server URL</label>
+            <input
+              type="text"
+              id="qcServerUrl"
+              class="text-input"
+              placeholder="http://your-server:8096"
+            />
+          </div>
+
+          <!-- Quick Connect Code Display -->
+          <div id="qcCodeSection" style="display: none">
+            <div class="qc-code-container">
+              <div class="qc-code-label">Enter this code in your Jellyfin dashboard:</div>
+              <div id="qcCode" class="qc-code"></div>
+              <div class="qc-instructions">
+                Go to your Jellyfin server &rarr; User Settings &rarr; Quick Connect and enter the
+                code above.
+              </div>
+            </div>
+            <div id="qcPollingStatus" class="qc-polling-status">
+              <span class="qc-spinner"></span>
+              <span>Waiting for approval...</span>
+            </div>
+          </div>
+
+          <div id="qcError" class="error"></div>
+          <button id="qcStartBtn" class="button">Start Quick Connect</button>
+          <button id="qcCancelBtn" class="button secondary">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Main Content Tabs -->
+      <div id="mainContent" style="display: none">
+        <div class="tab-nav">
+          <button class="tab-button active" data-tab="home">Home</button>
+          <button class="tab-button" data-tab="movies">Movies</button>
+          <button class="tab-button" data-tab="series">Series</button>
+          <button class="tab-button" data-tab="music">Music</button>
+          <button class="tab-button" data-tab="search">Search</button>
+        </div>
+
+        <!-- Home Tab -->
+        <div id="homeTab" class="tab-content active">
+          <div class="media-section">
+            <div class="section-title">Continue Watching</div>
+            <div id="continueWatchingList" class="media-list">
+              <div class="loading">Loading...</div>
+            </div>
+          </div>
+          <div class="media-section" style="margin-top: 12px">
+            <div class="section-title">Up Next</div>
+            <div id="nextUpList" class="media-list">
+              <div class="loading">Loading...</div>
+            </div>
+          </div>
+          <div class="media-section" style="margin-top: 12px">
+            <div class="section-title">Recently Added</div>
+            <div id="recentList" class="media-list">
+              <div class="loading">Loading...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Movies Tab -->
+        <div id="moviesTab" class="tab-content">
+          <div class="media-section">
+            <div
+              class="section-title"
+              style="display: flex; justify-content: space-between; align-items: center"
+            >
+              <span>Movies</span>
+              <button
+                id="moviesFilterBtn"
+                class="button secondary"
+                style="padding: 4px 8px; font-size: 10px"
+              >
+                Filter/Sort
+              </button>
+            </div>
+            <div id="moviesFilterPanel" class="filter-panel" style="display: none">
+              <div class="input-group filter-group">
+                <label class="input-label">Sort By</label>
+                <div class="select-container">
+                  <select id="moviesSortSelect" class="server-select">
+                    <option value="SortName,Ascending" selected>A-Z</option>
+                    <option value="SortName,Descending">Z-A</option>
+                    <option value="DateCreated,Descending">Date Added (Newest)</option>
+                    <option value="DateCreated,Ascending">Date Added (Oldest)</option>
+                    <option value="PremiereDate,Descending">Release Date (Newest)</option>
+                    <option value="CommunityRating,Descending">Rating (Highest)</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+              <div class="input-group filter-group">
+                <label class="input-label">Filter</label>
+                <div class="select-container">
+                  <select id="moviesFilterSelect" class="server-select">
+                    <option value="all" selected>All</option>
+                    <option value="unwatched">Unwatched</option>
+                    <option value="favorites">Favorites</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+              <div class="input-group filter-group">
+                <label class="input-label">Genre</label>
+                <div class="select-container">
+                  <select id="moviesGenreSelect" class="server-select">
+                    <option value="all" selected>All Genres</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+            </div>
+            <div id="moviesList" class="media-list">
+              <div class="loading">Loading movies...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Series Tab -->
+        <div id="seriesTab" class="tab-content">
+          <div class="media-section">
+            <div
+              class="section-title"
+              style="display: flex; justify-content: space-between; align-items: center"
+            >
+              <span>Series</span>
+              <button
+                id="seriesFilterBtn"
+                class="button secondary"
+                style="padding: 4px 8px; font-size: 10px"
+              >
+                Filter/Sort
+              </button>
+            </div>
+            <div id="seriesFilterPanel" class="filter-panel" style="display: none">
+              <div class="input-group filter-group">
+                <label class="input-label">Sort By</label>
+                <div class="select-container">
+                  <select id="seriesSortSelect" class="server-select">
+                    <option value="SortName,Ascending" selected>A-Z</option>
+                    <option value="SortName,Descending">Z-A</option>
+                    <option value="DateCreated,Descending">Date Added (Newest)</option>
+                    <option value="DateCreated,Ascending">Date Added (Oldest)</option>
+                    <option value="PremiereDate,Descending">Release Date (Newest)</option>
+                    <option value="CommunityRating,Descending">Rating (Highest)</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+              <div class="input-group filter-group">
+                <label class="input-label">Filter</label>
+                <div class="select-container">
+                  <select id="seriesFilterSelect" class="server-select">
+                    <option value="all" selected>All</option>
+                    <option value="unwatched">Unwatched</option>
+                    <option value="favorites">Favorites</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+              <div class="input-group filter-group">
+                <label class="input-label">Genre</label>
+                <div class="select-container">
+                  <select id="seriesGenreSelect" class="server-select">
+                    <option value="all" selected>All Genres</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+            </div>
+            <div id="seriesList" class="media-list">
+              <div class="loading">Loading series...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Music Tab -->
+        <div id="musicTab" class="tab-content">
+          <div class="media-section">
+            <div
+              class="section-title"
+              style="display: flex; justify-content: space-between; align-items: center"
+            >
+              <span>Music</span>
+              <button
+                id="musicFilterBtn"
+                class="button secondary"
+                style="padding: 4px 8px; font-size: 10px"
+              >
+                Filter/Sort
+              </button>
+            </div>
+            <div id="musicFilterPanel" class="filter-panel" style="display: none">
+              <div class="input-group filter-group">
+                <label class="input-label">View</label>
+                <div class="select-container">
+                  <select id="musicViewSelect" class="server-select">
+                    <option value="albums" selected>Albums</option>
+                    <option value="artists">Artists</option>
+                    <option value="songs">Songs</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+              <div class="input-group filter-group">
+                <label class="input-label">Sort By</label>
+                <div class="select-container">
+                  <select id="musicSortSelect" class="server-select">
+                    <option value="SortName,Ascending" selected>A-Z</option>
+                    <option value="SortName,Descending">Z-A</option>
+                    <option value="DateCreated,Descending">Date Added (Newest)</option>
+                    <option value="DateCreated,Ascending">Date Added (Oldest)</option>
+                    <option value="PremiereDate,Descending">Release Date (Newest)</option>
+                    <option value="CommunityRating,Descending">Rating (Highest)</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+              <div class="input-group filter-group">
+                <label class="input-label">Genre</label>
+                <div class="select-container">
+                  <select id="musicGenreSelect" class="server-select">
+                    <option value="all" selected>All Genres</option>
+                  </select>
+                  <span class="select-arrow">&#9662;</span>
+                </div>
+              </div>
+            </div>
+            <div id="musicList" class="media-list">
+              <div class="loading">Loading music...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Search Tab -->
+        <div id="searchTab" class="tab-content">
+          <div class="search-section">
+            <div class="section-title">Search</div>
+            <input
+              type="text"
+              id="searchInput"
+              class="text-input search-input"
+              placeholder="Search for movies, shows..."
+            />
+            <div class="search-type-filters">
+              <button class="search-type-chip active" data-type="Movie">
+                <span class="chip-icon">🎬</span> Movies
+              </button>
+              <button class="search-type-chip active" data-type="Series">
+                <span class="chip-icon">📺</span> Series
+              </button>
+              <button class="search-type-chip active" data-type="MusicAlbum">
+                <span class="chip-icon">💿</span> Albums
+              </button>
+              <button class="search-type-chip active" data-type="Audio">
+                <span class="chip-icon">🎵</span> Songs
+              </button>
+            </div>
+          </div>
+          <div class="media-section">
+            <div id="searchResults" class="media-list">
+              <div class="empty-state">Enter a search term above</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Album Track Selection -->
+      <div id="albumTracksSection" class="episode-section">
+        <div class="section-title" id="albumTracksTitle">Album Tracks</div>
+        <div id="albumTracksList" class="episode-list">
+          <div class="loading">Loading tracks...</div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 8px">
+          <button id="playAllTracksBtn" class="button" disabled>Play All</button>
+          <button id="openAlbumInJellyfinBtn" class="button secondary" disabled>
+            Open in Jellyfin
+          </button>
+        </div>
+        <button id="cancelAlbumTracksBtn" class="button secondary" style="margin-top: 8px">
+          Back
+        </button>
+      </div>
+
+      <!-- Episode Selection -->
+      <div id="episodeSection" class="episode-section">
+        <div class="section-title">Select Episode</div>
+        <div class="input-group">
+          <label class="input-label">Season</label>
+          <div class="select-container">
+            <select id="seasonSelect" class="server-select season-select">
+              <option value="">Loading seasons...</option>
+            </select>
+            <span class="select-arrow">&#9662;</span>
+          </div>
+        </div>
+        <div id="episodeList" class="episode-list">
+          <div class="loading">Select a season</div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 8px">
+          <button id="playEpisodeBtn" class="button" disabled>Play Episode</button>
+          <button id="openEpisodeInJellyfinBtn" class="button secondary" disabled>
+            Open in Jellyfin
+          </button>
+        </div>
+        <button id="cancelEpisodeBtn" class="button secondary" style="margin-top: 8px">Back</button>
+      </div>
+    </div>
+
+    <script src="lib/media-methods.js"></script>
+    <script src="lib/auth-server-methods.js"></script>
+    <script src="sidebar.js"></script>
+  </body>
+</html>

@@ -1,0 +1,1045 @@
+window.createSidebarAuthServerMethods = function createSidebarAuthServerMethods(debugLog) {
+  // The sidebar's HTTP client resolves for every HTTP status and throws only
+  // when the request never got an answer, always with status 0. The browser's
+  // own message for that ("Load failed" in IINA's WebKit, "Failed to fetch"
+  // elsewhere) means nothing to the user, so name the likely cause instead.
+  function describeAuthError(error) {
+    if (error && error.status === 0) {
+      return 'Network error - check server URL and connectivity';
+    }
+    return `Authentication failed: ${(error && error.message) || 'Unknown error'}`;
+  }
+
+  return {
+    handleClientIdentity(identity) {
+      if (!identity || !identity.deviceId) {
+        debugLog('Ignoring client identity without a device id');
+        return;
+      }
+      this.clientIdentity = identity;
+      debugLog(`Client identity set: device ${identity.deviceId}, version ${identity.version}`);
+    },
+
+    /**
+     * Build the MediaBrowser Authorization header. The device id comes from the
+     * plugin (persisted in preferences) so the webview authenticates as the
+     * same Jellyfin device as the rest of the plugin. Jellyfin keys sessions
+     * and tokens by DeviceId, so a value shared across installs would make
+     * different users collide on the same server.
+     */
+    buildAuthorizationHeader(token) {
+      const identity = this.clientIdentity || {};
+
+      if (!identity.deviceId && !this.fallbackDeviceId) {
+        // Identity message hasn't arrived — use a unique id for this webview
+        // rather than a constant shared by every install.
+        this.fallbackDeviceId = `iina-jellyfin-webview-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+        debugLog('No client identity yet, using generated device id');
+      }
+
+      const parts = [
+        `Client="${identity.clientName || 'IINA Jellyfin Plugin'}"`,
+        `Device="${identity.deviceName || 'IINA'}"`,
+        `DeviceId="${identity.deviceId || this.fallbackDeviceId}"`,
+        `Version="${identity.version || '0.0.0'}"`,
+      ];
+
+      if (token) {
+        parts.push(`Token="${token}"`);
+      }
+
+      return `MediaBrowser ${parts.join(', ')}`;
+    },
+
+    handleServersList(data) {
+      if (!data) return;
+      this.servers = data.servers || [];
+      this.activeServerId = data.activeServerId || null;
+      // The plugin answers switches in the order they were requested, so while
+      // this view still waits for one, any list it sends predates that switch.
+      // A request for a server the plugin no longer has will never be answered.
+      this.requestedSwitches = (this.requestedSwitches || []).filter((id) =>
+        this.servers.some((server) => server.id === id)
+      );
+      if (this.requestedSwitches.length > 0) {
+        this.activeServerId = this.requestedSwitches[this.requestedSwitches.length - 1];
+      }
+      this.adoptStoredServerId();
+      // The other browser view removed the server this one is connecting to.
+      if (
+        this.connectingServerId &&
+        !this.servers.some((server) => server.id === this.connectingServerId)
+      ) {
+        debugLog(`Server ${this.connectingServerId} was removed while connecting`);
+        this.abandonConnect();
+      }
+      this.renderServerList();
+
+      if (!this.initialAutoConnectDone && !this.currentServer) {
+        // A userId is not required: a session captured from a played URL only
+        // gains one once connectToServer has read /Users/Me.
+        const validServers = this.servers.filter((server) => server.accessToken);
+        if (validServers.length > 0) {
+          const activeServer =
+            validServers.find((server) => server.id === this.activeServerId) || validServers[0];
+          this.connectToServer(activeServer);
+          // Only an attempted connection counts as done. An empty list simply
+          // means the plugin has not sent the servers yet.
+          this.initialAutoConnectDone = true;
+        }
+      }
+    },
+
+    /**
+     * Password, Quick Connect and legacy-session connections start without the
+     * plugin's stored id; it only exists once the plugin has saved the session
+     * and sent the list back. Without it, removing or disconnecting that server
+     * cannot tell it is the connected one.
+     */
+    adoptStoredServerId() {
+      if (!this.currentServer || this.currentServer.serverId) return;
+
+      const url = String(this.currentServer.url || '').replace(/\/$/, '');
+      const stored = this.servers.find(
+        (server) =>
+          server.serverUrl &&
+          server.serverUrl.replace(/\/$/, '') === url &&
+          server.userId === this.currentServer.userId
+      );
+      if (stored) {
+        this.currentServer.serverId = stored.id;
+        debugLog(`Connected server identified as: ${stored.id}`);
+      }
+    },
+
+    renderServerList() {
+      const listEl = document.getElementById('savedServerList');
+
+      const validServers = this.servers.filter((server) => server.accessToken);
+
+      if (validServers.length === 0) {
+        listEl.style.display = 'none';
+        return;
+      }
+
+      listEl.style.display = 'flex';
+
+      listEl.innerHTML = validServers
+        .map(
+          (server) => `
+      <div class="saved-server-item ${server.id === this.activeServerId ? 'active' : ''}" data-server-id="${server.id}">
+        <div class="saved-server-dot"></div>
+        <div class="saved-server-info">
+          <div class="saved-server-name">${this.escapeHtml(server.serverName || server.serverUrl)}</div>
+          <div class="saved-server-url">${this.escapeHtml(server.serverUrl)}</div>
+          ${server.username ? `<div class="saved-server-user">${this.escapeHtml(server.username)}</div>` : ''}
+        </div>
+        <button class="server-remove-btn" data-server-id="${server.id}" title="Remove">✕</button>
+      </div>
+    `
+        )
+        .join('');
+
+      listEl.querySelectorAll('.saved-server-item').forEach((item) => {
+        item.addEventListener('click', (event) => {
+          if (event.target.closest('.server-remove-btn')) return;
+          const serverId = item.dataset.serverId;
+          this.switchToServer(serverId);
+        });
+      });
+
+      listEl.querySelectorAll('.server-remove-btn').forEach((btn) => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const serverId = btn.dataset.serverId;
+          this.removeServerFromStorage(serverId);
+        });
+      });
+    },
+
+    switchToServer(serverId) {
+      const server = this.servers.find((item) => item.id === serverId);
+      if (!server) return;
+
+      debugLog(`Switching to server: ${server.serverName}`);
+      this.activeServerId = serverId;
+      // A chosen server replaces the initial auto-connect; otherwise the next
+      // server list would start connecting to the stored active server too.
+      this.initialAutoConnectDone = true;
+
+      this.requestSwitch(serverId);
+      this.connectToServer(server);
+      this.renderServerList();
+    },
+
+    /**
+     * The server being connected was removed. Stay on the server still
+     * connected, if any, and point the plugin's active server back at it;
+     * otherwise disconnect. Finishing the connect would store the removed
+     * server again.
+     */
+    abandonConnect() {
+      const removedId = this.connectingServerId;
+      this.cancelPendingConnect();
+      this.requestedSwitches = (this.requestedSwitches || []).filter((id) => id !== removedId);
+      if (this.currentServer && this.currentUser) {
+        const stayId = this.currentServer.serverId;
+        if (stayId && this.servers.some((server) => server.id === stayId)) {
+          this.activeServerId = stayId;
+          this.requestSwitch(stayId);
+        }
+        this.updateServerStatus(
+          `Connected to ${this.currentServer.name} as ${this.currentUser.Name}`,
+          'connected'
+        );
+      } else {
+        this.disconnectFromServer();
+      }
+    },
+
+    /**
+     * Make the plugin's stored active server follow this view. The plugin
+     * echoes the switch to both views; this view remembers its requests so it
+     * can recognise the echoes.
+     */
+    requestSwitch(serverId) {
+      if (typeof iina !== 'undefined' && iina.postMessage) {
+        this.requestedSwitches = this.requestedSwitches || [];
+        this.requestedSwitches.push(serverId);
+        iina.postMessage('switch-server', { serverId });
+      }
+    },
+
+    /**
+     * The plugin announces every switch to both browser views, including the
+     * one that asked for it and has already started connecting. Connecting
+     * again there would only race the first attempt.
+     */
+    handleServerSwitched(data) {
+      if (!data || !data.server) return;
+
+      const serverId = data.server.id;
+      // The echo of a switch this view asked for: it connected directly
+      // already, and may have switched again since, so the echo is old news.
+      const ownIndex = (this.requestedSwitches || []).indexOf(serverId);
+      if (ownIndex >= 0) {
+        this.requestedSwitches.splice(0, ownIndex + 1);
+        this.handleServersList({ ...data, activeServerId: serverId });
+        debugLog(`Echo of this view's switch to ${serverId}, already handled`);
+        return;
+      }
+
+      this.handleServersList(data);
+      // Another view switched before this view's own pending switch reached
+      // the plugin, so this view's newer choice wins.
+      if (this.requestedSwitches.length > 0) {
+        debugLog(`Switch to ${serverId} predates this view's own switch, not following it`);
+        return;
+      }
+
+      // While another server is still connecting, the current one is about to
+      // be replaced, so being connected to it does not make the echo redundant.
+      const alreadyThere = this.connectingServerId
+        ? serverId === this.connectingServerId
+        : this.isConnectedTo(serverId);
+      if (serverId && alreadyThere) {
+        debugLog(`Already connecting or connected to server ${serverId}, skipping reconnect`);
+        return;
+      }
+      this.connectToServer(data.server);
+    },
+
+    isConnectedTo(serverId) {
+      return Boolean(this.currentServer && this.currentServer.serverId === serverId);
+    },
+
+    /**
+     * Drop any connection still in flight so it cannot replace the server the
+     * user chose afterwards.
+     */
+    cancelPendingConnect() {
+      this.connectRequestCounter = (this.connectRequestCounter || 0) + 1;
+      this.connectingServerId = null;
+    },
+
+    /**
+     * A finished login replaces connects that were already running when it
+     * started, but not a server the user picked while it was in progress.
+     */
+    cancelConnectsStartedBefore(connectsAtStart) {
+      if ((this.connectRequestCounter || 0) === connectsAtStart) {
+        this.cancelPendingConnect();
+      }
+    },
+
+    async connectToServer(serverData) {
+      // Only the latest attempt may update the view: a slower response for a
+      // server the user has since switched away from must not win.
+      const requestId = (this.connectRequestCounter = (this.connectRequestCounter || 0) + 1);
+      const isStale = () => {
+        if (requestId === this.connectRequestCounter) return false;
+        debugLog(`Connect request #${requestId} is stale, ignoring`);
+        return true;
+      };
+      this.connectingServerId = serverData.id || serverData.serverId || null;
+
+      try {
+        debugLog('Connecting to server: ' + serverData.serverUrl);
+        this.updateServerStatus('Connecting...', 'connecting');
+
+        const response = await this.getHttpClient().get(`${serverData.serverUrl}/System/Info`, {
+          headers: {
+            Authorization: this.buildAuthorizationHeader(serverData.accessToken),
+          },
+        });
+        if (isStale()) return;
+
+        if (response.status === 200 && response.data) {
+          const userResponse = await this.getHttpClient().get(`${serverData.serverUrl}/Users/Me`, {
+            headers: {
+              Authorization: this.buildAuthorizationHeader(serverData.accessToken),
+            },
+          });
+          if (isStale()) return;
+
+          if (userResponse.status === 200 && userResponse.data) {
+            this.currentServer = {
+              name: response.data.ServerName || serverData.serverName || serverData.serverUrl,
+              url: serverData.serverUrl,
+              userId: userResponse.data.Id,
+              accessToken: serverData.accessToken,
+              // Stored server entries carry "id"; session payloads sent to the
+              // webview carry "serverId". Both reach this function.
+              serverId: serverData.id || serverData.serverId,
+            };
+
+            this.currentUser = userResponse.data;
+
+            if (typeof iina !== 'undefined' && iina.postMessage) {
+              iina.postMessage('store-session', {
+                serverUrl: serverData.serverUrl,
+                accessToken: serverData.accessToken,
+                serverName: response.data.ServerName || serverData.serverName || '',
+                userId: userResponse.data.Id,
+                username: userResponse.data.Name,
+              });
+            }
+
+            debugLog('Connected as: ' + this.currentUser.Name);
+            this.hideLoginForm();
+            this.showMainContent();
+            this.showLogoutButton();
+            this.updateServerStatus(
+              `Connected to ${this.currentServer.name} as ${this.currentUser.Name}`,
+              'connected'
+            );
+            this.loadHomeTab();
+            return;
+          }
+        }
+
+        debugLog('Token invalid for server, prompting re-login');
+        this.updateServerStatus('Session expired - please login again', 'error');
+        this.showLoginFormWithServer(serverData.serverUrl);
+      } catch (error) {
+        if (isStale()) return;
+        debugLog('Connection failed: ' + error.message);
+        this.updateServerStatus('Connection failed - check server', 'error');
+      } finally {
+        if (requestId === this.connectRequestCounter) {
+          this.connectingServerId = null;
+        }
+      }
+    },
+
+    showLoginFormWithServer(serverUrl) {
+      this.showLoginForm();
+      if (serverUrl) {
+        document.getElementById('serverUrl').value = serverUrl;
+        document.getElementById('qcServerUrl').value = serverUrl;
+      }
+    },
+
+    removeServerFromStorage(serverId) {
+      debugLog(`Removing server: ${serverId}`);
+
+      if (typeof iina !== 'undefined' && iina.postMessage) {
+        iina.postMessage('remove-server', { serverId });
+      }
+
+      this.servers = this.servers.filter((server) => server.id !== serverId);
+      if (this.activeServerId === serverId) {
+        this.activeServerId = this.servers.length > 0 ? this.servers[0].id : null;
+      }
+
+      if (this.isConnectedTo(serverId) && this.connectingServerId) {
+        // Already switching to another server: drop the removed one but let
+        // that connect finish.
+        this.currentServer = null;
+        this.currentUser = null;
+        this.clearAllMediaContent();
+        this.hideMainContent();
+      } else if (this.isConnectedTo(serverId)) {
+        this.disconnectFromServer();
+      } else if (this.connectingServerId === serverId) {
+        this.abandonConnect();
+      }
+
+      this.renderServerList();
+    },
+
+    /**
+     * Escape a server-provided value for interpolation into innerHTML.
+     * Quotes are escaped too so the result is also safe inside an attribute.
+     */
+    escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    },
+
+    handleSessionAvailable(sessionData) {
+      if (!sessionData || !sessionData.serverUrl || !sessionData.accessToken) {
+        debugLog('Invalid session data received');
+        return;
+      }
+
+      if (this.servers.length > 0) {
+        debugLog('Servers already loaded, skipping legacy session-available');
+        return;
+      }
+
+      debugLog('Attempting auto-login with legacy session data');
+      this.connectToServer(sessionData);
+    },
+
+    handleSessionData(sessionData) {
+      if (!sessionData) {
+        debugLog('No stored session data available');
+        return;
+      }
+
+      if (this.servers.length > 0) return;
+
+      debugLog('Retrieved stored session data, attempting auto-login');
+      this.connectToServer(sessionData);
+    },
+
+    handleSessionCleared() {
+      debugLog('Session cleared');
+      this.servers = [];
+      this.activeServerId = null;
+      this.renderServerList();
+      if (this.currentServer) {
+        this.disconnectFromServer();
+      }
+    },
+
+    storeSessionData(serverUrl, accessToken, serverName, userId, username) {
+      debugLog('Requesting session storage from main plugin');
+      if (typeof iina !== 'undefined' && iina.postMessage) {
+        iina.postMessage('store-session', {
+          serverUrl: serverUrl,
+          accessToken: accessToken,
+          serverName: serverName || '',
+          userId: userId || '',
+          username: username || '',
+        });
+      }
+    },
+
+    /**
+     * "Disconnect" in the UI: drop the connected server's stored credentials,
+     * then reset the view. Without this the access token stays in preferences
+     * and the next window silently auto-connects again.
+     */
+    logoutActiveServer() {
+      const serverId = this.currentServer?.serverId || this.activeServerId;
+
+      if (typeof iina !== 'undefined' && iina.postMessage) {
+        if (serverId) {
+          debugLog(`Removing stored credentials for server: ${serverId}`);
+          iina.postMessage('remove-server', { serverId });
+          this.servers = this.servers.filter((server) => server.id !== serverId);
+        } else {
+          // No id to target (e.g. legacy session) — clear the stored session so
+          // the token is not left behind.
+          debugLog('No server id for the active connection, clearing stored session');
+          iina.postMessage('clear-session');
+          this.servers = [];
+        }
+      }
+
+      this.disconnectFromServer();
+    },
+
+    disconnectFromServer() {
+      debugLog('Disconnecting from current server');
+      this.cancelPendingConnect();
+      this.currentUser = null;
+      this.currentServer = null;
+      this.activeServerId = null;
+      this.updateServerStatus('Not connected', '');
+      this.clearAllMediaContent();
+      this.hideMainContent();
+      this.showConnectButton();
+      this.renderServerList();
+      this.clearLoginForm();
+    },
+
+    updateServerStatus(message, status = '') {
+      const statusEl = document.getElementById('serverStatus');
+      statusEl.textContent = message;
+      statusEl.className = `server-status ${status}`;
+    },
+
+    showConnectButton() {
+      document.getElementById('connectBtn').style.display = 'block';
+      document.getElementById('addServerBtn').style.display = 'none';
+      document.getElementById('logoutBtn').style.display = 'none';
+    },
+
+    showLogoutButton() {
+      document.getElementById('connectBtn').style.display = 'none';
+      document.getElementById('addServerBtn').style.display = 'block';
+      document.getElementById('logoutBtn').style.display = 'block';
+    },
+
+    showLoginForm() {
+      document.getElementById('loginSection').style.display = 'block';
+      this.switchLoginMethod('password');
+      this.scrollToTop();
+    },
+
+    hideLoginForm() {
+      document.getElementById('loginSection').style.display = 'none';
+      this.cancelQuickConnect();
+      this.clearLoginForm();
+    },
+
+    clearLoginForm() {
+      document.getElementById('serverUrl').value = '';
+      document.getElementById('username').value = '';
+      document.getElementById('password').value = '';
+      document.getElementById('loginError').textContent = '';
+      document.getElementById('qcServerUrl').value = '';
+      document.getElementById('qcError').textContent = '';
+    },
+
+    switchLoginMethod(method) {
+      document.querySelectorAll('.login-method-tab').forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.method === method);
+      });
+
+      const passwordForm = document.getElementById('passwordLoginForm');
+      const qcForm = document.getElementById('quickConnectForm');
+
+      if (method === 'quickconnect') {
+        passwordForm.style.display = 'none';
+        qcForm.style.display = 'flex';
+        const serverUrl = document.getElementById('serverUrl').value.trim();
+        if (serverUrl && !document.getElementById('qcServerUrl').value.trim()) {
+          document.getElementById('qcServerUrl').value = serverUrl;
+        }
+      } else {
+        passwordForm.style.display = 'flex';
+        qcForm.style.display = 'none';
+        const qcUrl = document.getElementById('qcServerUrl').value.trim();
+        if (qcUrl && !document.getElementById('serverUrl').value.trim()) {
+          document.getElementById('serverUrl').value = qcUrl;
+        }
+        this.cancelQuickConnect();
+      }
+    },
+
+    async startQuickConnect() {
+      const serverUrl = document.getElementById('qcServerUrl').value.trim();
+      const errorEl = document.getElementById('qcError');
+      errorEl.textContent = '';
+
+      if (!serverUrl) {
+        errorEl.textContent = 'Please enter a server URL';
+        return;
+      }
+
+      let normalizedUrl;
+      try {
+        normalizedUrl = this.normalizeServerUrl(serverUrl);
+      } catch (error) {
+        errorEl.textContent = error.message;
+        return;
+      }
+
+      const startBtn = document.getElementById('qcStartBtn');
+      startBtn.disabled = true;
+      startBtn.textContent = 'Checking...';
+
+      try {
+        const httpClient = this.getHttpClient();
+
+        const enabledResponse = await httpClient.get(`${normalizedUrl}/QuickConnect/Enabled`);
+        debugLog('Quick Connect enabled response', {
+          status: enabledResponse.status,
+          enabled: enabledResponse.data,
+        });
+
+        if (enabledResponse.data !== true && enabledResponse.data !== 'true') {
+          errorEl.textContent =
+            'Quick Connect is not enabled on this server. Ask your server administrator to enable it, or use password login.';
+          startBtn.disabled = false;
+          startBtn.textContent = 'Start Quick Connect';
+          return;
+        }
+
+        const initiateResponse = await httpClient.post(`${normalizedUrl}/QuickConnect/Initiate`, {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: this.buildAuthorizationHeader(),
+          },
+        });
+
+        debugLog('Quick Connect initiate response', {
+          status: initiateResponse.status,
+          hasSecret: !!initiateResponse?.data?.Secret,
+          code: initiateResponse?.data?.Code,
+        });
+
+        if (
+          !initiateResponse.data ||
+          !initiateResponse.data.Secret ||
+          !initiateResponse.data.Code
+        ) {
+          errorEl.textContent = 'Failed to initiate Quick Connect. Please try again.';
+          startBtn.disabled = false;
+          startBtn.textContent = 'Start Quick Connect';
+          return;
+        }
+
+        this.qcSecret = initiateResponse.data.Secret;
+        this.qcServerUrl = normalizedUrl;
+        // A server picked while waiting for approval must outlive the login.
+        this.qcConnectsAtStart = this.connectRequestCounter || 0;
+
+        document.getElementById('qcCode').textContent = initiateResponse.data.Code;
+        document.getElementById('qcCodeSection').style.display = 'block';
+        startBtn.style.display = 'none';
+
+        this.pollQuickConnect();
+      } catch (error) {
+        debugLog('Quick Connect error: ' + error.message);
+        errorEl.textContent = 'Failed to start Quick Connect. Check your server URL.';
+        startBtn.disabled = false;
+        startBtn.textContent = 'Start Quick Connect';
+      }
+    },
+
+    pollQuickConnect() {
+      if (this.qcPollingInterval) {
+        clearInterval(this.qcPollingInterval);
+      }
+
+      let attempts = 0;
+      const maxAttempts = 60;
+      let pollInFlight = false;
+
+      const pollingInterval = setInterval(async () => {
+        attempts++;
+        if (attempts > maxAttempts) {
+          this.cancelQuickConnect();
+          document.getElementById('qcError').textContent =
+            'Quick Connect timed out. Please try again.';
+          return;
+        }
+
+        // A check slower than the interval must not overlap the next one:
+        // both could see the approval and sign in twice. Skipped ticks still
+        // count above, so the timeout stays at five minutes.
+        if (pollInFlight) return;
+        pollInFlight = true;
+
+        try {
+          const httpClient = this.getHttpClient();
+          const response = await httpClient.get(
+            `${this.qcServerUrl}/QuickConnect/Connect?secret=${this.qcSecret}`
+          );
+
+          debugLog('Quick Connect poll response', {
+            status: response.status,
+            authenticated: response?.data?.Authenticated,
+          });
+
+          // Cancelled or restarted while this check was in flight: its answer
+          // belongs to an old code, and acting on it would stop the new poll.
+          if (this.qcPollingInterval !== pollingInterval) return;
+
+          if (response.data && response.data.Authenticated === true) {
+            debugLog('Quick Connect approved! Authenticating...');
+            clearInterval(this.qcPollingInterval);
+            this.qcPollingInterval = null;
+
+            const statusEl = document.getElementById('qcPollingStatus');
+            statusEl.innerHTML = '<span style="color: #4ade80;">Approved! Logging in...</span>';
+
+            await this.authenticateWithQuickConnect();
+          }
+        } catch (error) {
+          debugLog('Quick Connect poll error: ' + error.message);
+        } finally {
+          pollInFlight = false;
+        }
+      }, 5000);
+      this.qcPollingInterval = pollingInterval;
+    },
+
+    async authenticateWithQuickConnect() {
+      // The poll that triggers this may already have been cancelled, which
+      // clears both values — without this the request would go to "null/Users/
+      // AuthenticateWithQuickConnect" and report a login failure the user
+      // never attempted.
+      if (!this.qcServerUrl || !this.qcSecret) {
+        debugLog('Quick Connect was cancelled before authentication, ignoring');
+        return;
+      }
+      // Held locally: cancelling while a request below is in flight clears
+      // the fields, and the login must neither finish nor use null values.
+      const qcServerUrl = this.qcServerUrl;
+      const qcSecret = this.qcSecret;
+      // Logging in clears the fields too, which is not a cancellation: an
+      // error after that point must still be reported.
+      let loggedIn = false;
+      const isCancelled = () => !loggedIn && this.qcSecret !== qcSecret;
+      const connectsAtStart = this.qcConnectsAtStart ?? (this.connectRequestCounter || 0);
+
+      try {
+        const httpClient = this.getHttpClient();
+        const response = await httpClient.post(
+          `${qcServerUrl}/Users/AuthenticateWithQuickConnect`,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: this.buildAuthorizationHeader(),
+            },
+            data: JSON.stringify({ Secret: qcSecret }),
+          }
+        );
+
+        if (isCancelled()) {
+          debugLog('Quick Connect was cancelled during authentication, ignoring');
+          return;
+        }
+
+        debugLog('Quick Connect auth response', {
+          status: response.status,
+          hasAccessToken: !!response?.data?.AccessToken,
+          userId: response?.data?.User?.Id,
+          userName: response?.data?.User?.Name,
+        });
+
+        if (response.data && response.data.AccessToken) {
+          const accessToken = response.data.AccessToken;
+          const user = response.data.User;
+
+          let serverName = qcServerUrl;
+          try {
+            const infoResponse = await httpClient.get(`${qcServerUrl}/System/Info/Public`);
+            if (infoResponse.data && infoResponse.data.ServerName) {
+              serverName = infoResponse.data.ServerName;
+            }
+          } catch (infoError) {
+            debugLog('Could not get server info: ' + infoError);
+          }
+
+          if (isCancelled()) {
+            debugLog('Quick Connect was cancelled during authentication, ignoring');
+            return;
+          }
+
+          this.cancelConnectsStartedBefore(connectsAtStart);
+          this.currentServer = {
+            name: serverName,
+            url: qcServerUrl,
+            userId: user.Id,
+            accessToken: accessToken,
+          };
+          this.currentUser = user;
+
+          this.storeSessionData(qcServerUrl, accessToken, serverName, user.Id, user.Name);
+
+          loggedIn = true;
+          this.qcSecret = null;
+          this.qcServerUrl = null;
+
+          this.hideLoginForm();
+          this.showMainContent();
+          this.showLogoutButton();
+          this.updateServerStatus(`Connected as ${user.Name}`, 'connected');
+          this.loadHomeTab();
+
+          debugLog(`Quick Connect login successful as ${user.Name} on ${qcServerUrl}`);
+        } else {
+          document.getElementById('qcError').textContent =
+            'Quick Connect authentication failed. Please try again.';
+          this.resetQuickConnectUI();
+        }
+      } catch (error) {
+        if (isCancelled()) return;
+        debugLog('Quick Connect auth error: ' + error.message);
+        document.getElementById('qcError').textContent = describeAuthError(error);
+        this.resetQuickConnectUI();
+      }
+    },
+
+    cancelQuickConnect() {
+      if (this.qcPollingInterval) {
+        clearInterval(this.qcPollingInterval);
+        this.qcPollingInterval = null;
+      }
+      this.qcSecret = null;
+      this.qcServerUrl = null;
+      this.resetQuickConnectUI();
+    },
+
+    resetQuickConnectUI() {
+      document.getElementById('qcCodeSection').style.display = 'none';
+      document.getElementById('qcCode').textContent = '';
+      const startBtn = document.getElementById('qcStartBtn');
+      startBtn.style.display = 'block';
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start Quick Connect';
+      const statusEl = document.getElementById('qcPollingStatus');
+      statusEl.innerHTML = '<span class="qc-spinner"></span><span>Waiting for approval...</span>';
+    },
+
+    async login() {
+      debugLog('Login function called');
+      const serverUrl = document.getElementById('serverUrl').value.trim();
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const errorEl = document.getElementById('loginError');
+
+      debugLog('Login inputs', { serverUrl, username, password: '[HIDDEN]' });
+
+      if (!serverUrl || !username || !password) {
+        errorEl.textContent = 'Please fill in all fields';
+        return;
+      }
+      const connectsAtStart = this.connectRequestCounter || 0;
+
+      let normalizedUrl;
+      try {
+        normalizedUrl = this.normalizeServerUrl(serverUrl);
+      } catch (error) {
+        errorEl.textContent = error.message || 'Invalid server URL';
+        return;
+      }
+      debugLog('Normalized URL: ' + normalizedUrl);
+
+      try {
+        document.getElementById('loginBtn').disabled = true;
+        document.getElementById('loginBtn').textContent = 'Logging in...';
+        errorEl.textContent = '';
+
+        debugLog('Starting authentication...');
+        const authResult = await this.authenticateUser(normalizedUrl, username, password);
+        debugLog('Authentication result', {
+          success: authResult?.success,
+          hasAccessToken: !!authResult?.accessToken,
+          userId: authResult?.user?.Id,
+          userName: authResult?.user?.Name,
+          serverName: authResult?.serverName,
+          error: authResult?.error,
+        });
+
+        if (authResult.success) {
+          debugLog('Authentication successful');
+
+          this.cancelConnectsStartedBefore(connectsAtStart);
+          this.currentServer = {
+            name: authResult.serverName || normalizedUrl,
+            url: normalizedUrl,
+            userId: authResult.user.Id,
+            accessToken: authResult.accessToken,
+          };
+
+          this.currentUser = authResult.user;
+
+          this.storeSessionData(
+            normalizedUrl,
+            authResult.accessToken,
+            authResult.serverName || '',
+            authResult.user.Id,
+            authResult.user.Name
+          );
+
+          this.hideLoginForm();
+          this.showMainContent();
+          this.showLogoutButton();
+          this.updateServerStatus(`Connected as ${authResult.user.Name}`, 'connected');
+          this.loadHomeTab();
+        } else {
+          debugLog('Authentication failed: ' + authResult.error);
+          errorEl.textContent = authResult.error || 'Login failed';
+        }
+      } catch (error) {
+        debugLog('Login error: ' + error);
+        errorEl.textContent = 'Connection failed. Please check your server URL.';
+      } finally {
+        document.getElementById('loginBtn').disabled = false;
+        document.getElementById('loginBtn').textContent = 'Login';
+      }
+    },
+
+    normalizeServerUrl(url) {
+      if (!url || typeof url !== 'string') {
+        throw new Error('Invalid server URL');
+      }
+
+      let normalized = url.trim();
+      if (!normalized) {
+        throw new Error('Server URL cannot be empty');
+      }
+
+      if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+        normalized = 'http://' + normalized;
+      }
+
+      const urlPattern = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
+      if (!urlPattern.test(normalized)) {
+        throw new Error('Invalid server URL format');
+      }
+
+      return normalized.replace(/\/$/, '');
+    },
+
+    async authenticateUser(serverUrl, username, password) {
+      try {
+        debugLog('Starting authentication for: ' + serverUrl);
+        const authUrl = `${serverUrl}/Users/AuthenticateByName`;
+
+        if (!username || !password) {
+          throw new Error('Username and password are required');
+        }
+
+        const authData = {
+          Username: username,
+          Pw: password,
+        };
+
+        debugLog('Auth URL: ' + authUrl);
+        debugLog('Auth data', {
+          Username: username,
+          Pw: '[HIDDEN]',
+        });
+
+        const httpClient = this.getHttpClient();
+        try {
+          debugLog('Checking server reachability...');
+          const publicInfoResponse = await httpClient.get(`${serverUrl}/System/Info/Public`);
+          debugLog('Server public info', {
+            status: publicInfoResponse.status,
+            serverName: publicInfoResponse?.data?.ServerName,
+            version: publicInfoResponse?.data?.Version,
+            startupWizardCompleted: publicInfoResponse?.data?.StartupWizardCompleted,
+          });
+          debugLog('Server is reachable');
+        } catch (serverError) {
+          debugLog('Server reachability check failed: ' + serverError);
+          debugLog('Error details', {
+            message: serverError.message,
+            status: serverError.status,
+            statusText: serverError.statusText,
+          });
+          debugLog('Warning: Server reachability check failed, but proceeding with authentication');
+        }
+
+        const response = await httpClient.post(authUrl, {
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Authorization: this.buildAuthorizationHeader(),
+          },
+          data: JSON.stringify(authData),
+        });
+
+        debugLog('Auth response status: ' + response.status);
+        debugLog('Auth response data', {
+          hasAccessToken: !!response?.data?.AccessToken,
+          userId: response?.data?.User?.Id,
+          userName: response?.data?.User?.Name,
+          serverId: response?.data?.ServerId,
+        });
+        debugLog('Auth response headers', {
+          headerCount: response?.headers ? Object.keys(response.headers).length : 0,
+        });
+
+        if (response.data && response.data.AccessToken) {
+          debugLog('Authentication successful');
+          let serverName = serverUrl;
+          try {
+            const infoResponse = await httpClient.get(`${serverUrl}/System/Info/Public`);
+            if (infoResponse.data && infoResponse.data.ServerName) {
+              serverName = infoResponse.data.ServerName;
+            }
+          } catch (infoError) {
+            debugLog('Could not get server info: ' + infoError);
+          }
+
+          return {
+            success: true,
+            user: response.data.User,
+            accessToken: response.data.AccessToken,
+            serverName: serverName,
+          };
+        }
+
+        debugLog('Authentication failed - no access token in response');
+        debugLog('Response data details', {
+          responseKeys: response?.data ? Object.keys(response.data) : [],
+        });
+
+        if (response.data && response.data.error) {
+          return {
+            success: false,
+            error: `Authentication failed: ${response.data.error}`,
+          };
+        }
+        if (response.status === 401) {
+          return {
+            success: false,
+            error: 'Invalid username or password',
+          };
+        }
+        if (response.status === 403) {
+          return {
+            success: false,
+            error: 'Access forbidden - check user permissions',
+          };
+        }
+        if (response.status === 404) {
+          return {
+            success: false,
+            error: 'Authentication endpoint not found - check server URL',
+          };
+        }
+        return {
+          success: false,
+          error: `Authentication failed with status ${response.status}`,
+        };
+      } catch (error) {
+        debugLog('Auth error details:', error);
+        debugLog('Auth error message:', error.message);
+        debugLog('Auth error status:', error.status);
+        debugLog('Auth error statusText:', error.statusText);
+
+        return {
+          success: false,
+          error: describeAuthError(error),
+        };
+      }
+    },
+  };
+};

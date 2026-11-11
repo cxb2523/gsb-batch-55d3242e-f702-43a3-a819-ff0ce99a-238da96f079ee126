@@ -1,0 +1,346 @@
+'use strict';
+
+function createAutoplayManager({
+  http,
+  mpv,
+  core,
+  preferences,
+  buildJellyfinHeaders,
+  fetchItemMetadata,
+  mediaTitleOption,
+  log,
+}) {
+  let lastProcessedEpisodeId = null;
+  let lastProcessedSeriesId = null;
+  let autoplayRequestCounter = 0;
+  let autoplayQueued = false;
+
+  // Throws when the request fails. Callers must not read a failed request as
+  // an empty season: that would skip ahead to the next season.
+  async function fetchSeriesEpisodes(serverBase, seriesId, seasonId, apiKey) {
+    log(`Fetching episodes for series: ${seriesId}, season: ${seasonId}`);
+
+    const queryParams = [
+      'seasonId=' + encodeURIComponent(seasonId),
+      'fields=' + encodeURIComponent('MediaSources,Path,LocationType,IsFolder'),
+    ].join('&');
+
+    const response = await http.get(
+      `${serverBase}/Shows/${seriesId}/Episodes?${queryParams}&ApiKey=${apiKey}`,
+      {
+        headers: buildJellyfinHeaders(apiKey, {
+          Accept: 'application/json',
+        }),
+      }
+    );
+
+    // IINA's http resolves for every status, so check it before the body.
+    if (response.statusCode >= 400) {
+      throw new Error(`Jellyfin API returned status ${response.statusCode}`);
+    }
+
+    if (!response.data) {
+      throw new Error('No data received from Jellyfin API');
+    }
+
+    const episodeData =
+      typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+
+    if (!episodeData.Items) {
+      log('No episodes found in response');
+      return [];
+    }
+
+    // Playback streams the item, so download permission is irrelevant here
+    const episodes = episodeData.Items.filter(
+      (episode) => episode.MediaSources && episode.MediaSources.length > 0
+    ).map((episode) => ({
+      id: episode.Id,
+      name: episode.Name,
+      indexNumber: Number(episode.IndexNumber) || 0,
+      duration: episode.RunTimeTicks,
+      playUrl: `${serverBase}/Videos/${episode.Id}/stream?static=true&ApiKey=${apiKey}`,
+    }));
+
+    episodes.sort((left, right) => left.indexNumber - right.indexNumber);
+
+    log(
+      `Fetched ${episodes.length} episodes from series: ${episodes.map((episode) => `E${episode.indexNumber}`).join(', ')}`
+    );
+    return episodes;
+  }
+
+  async function getSeriesInfoFromEpisode(serverBase, episodeId, apiKey) {
+    try {
+      log(`Getting series info from episode: ${episodeId}`);
+
+      const metadata = await fetchItemMetadata(serverBase, episodeId, apiKey);
+
+      if (metadata.Type !== 'Episode') {
+        log(`Item ${episodeId} is not an episode, it's a ${metadata.Type}`);
+        return null;
+      }
+
+      const seriesId = metadata.SeriesId;
+      const seasonId = metadata.SeasonId;
+      const seriesName = metadata.SeriesName || '';
+      // Specials are season 0, so a plain || 1 would relabel them as season 1
+      const parsedSeasonNumber = Number(metadata.ParentIndexNumber ?? 1);
+      const seasonNumber = Number.isFinite(parsedSeasonNumber) ? parsedSeasonNumber : 1;
+      const episodeIndexNumber = Number(metadata.IndexNumber) || 0;
+
+      if (!seriesId || !seasonId) {
+        log(`Missing series info - SeriesId: ${seriesId}, SeasonId: ${seasonId}`);
+        return null;
+      }
+
+      log(
+        `Series info: SeriesName=${seriesName}, SeriesId=${seriesId}, SeasonId=${seasonId}, SeasonNumber=${seasonNumber}, EpisodeNumber=${episodeIndexNumber}`
+      );
+
+      return {
+        seriesId,
+        seasonId,
+        seriesName,
+        seasonNumber,
+        currentEpisodeNumber: episodeIndexNumber,
+      };
+    } catch (error) {
+      log(`Error getting series info from episode: ${error.message}`);
+      return null;
+    }
+  }
+
+  async function resolveNextEpisode(serverBase, seriesId, seasonId, currentEpisodeNumber, apiKey) {
+    try {
+      const episodes = await fetchSeriesEpisodes(serverBase, seriesId, seasonId, apiKey);
+      const currentEpNum = Number(currentEpisodeNumber);
+      // The list is sorted by episode number, so the first entry above the
+      // current one is the next episode. Matching currentEpNum + 1 exactly
+      // would end the series at any gap: a missing episode, a double episode
+      // counted as two numbers, or a season that does not start at 1.
+      const nextEpisode = episodes.find((episode) => episode.indexNumber > currentEpNum);
+
+      if (nextEpisode) {
+        log(
+          `Found next episode in current season: E${nextEpisode.indexNumber} - ${nextEpisode.name}`
+        );
+        return nextEpisode;
+      }
+
+      log('No next episode in current season, checking next season...');
+
+      const seasonsResponse = await http.get(
+        `${serverBase}/Shows/${seriesId}/Seasons?ApiKey=${apiKey}`,
+        {
+          headers: buildJellyfinHeaders(apiKey, { Accept: 'application/json' }),
+        }
+      );
+
+      if (!seasonsResponse.data) return null;
+
+      const seasonsData =
+        typeof seasonsResponse.data === 'string'
+          ? JSON.parse(seasonsResponse.data)
+          : seasonsResponse.data;
+
+      if (!seasonsData.Items || seasonsData.Items.length === 0) return null;
+
+      const sortedSeasons = seasonsData.Items.filter(
+        (season) => season.IndexNumber !== null && season.IndexNumber !== undefined
+      ).sort((left, right) => (left.IndexNumber || 0) - (right.IndexNumber || 0));
+
+      const currentSeasonIndex = sortedSeasons.findIndex((season) => season.Id === seasonId);
+      if (currentSeasonIndex === -1 || currentSeasonIndex >= sortedSeasons.length - 1) {
+        log('No next season available — end of series');
+        return null;
+      }
+
+      const nextSeason = sortedSeasons[currentSeasonIndex + 1];
+      log(`Found next season: ${nextSeason.Name} (S${nextSeason.IndexNumber})`);
+
+      const nextSeasonEpisodes = await fetchSeriesEpisodes(
+        serverBase,
+        seriesId,
+        nextSeason.Id,
+        apiKey
+      );
+
+      if (nextSeasonEpisodes.length === 0) {
+        log('Next season has no episodes');
+        return null;
+      }
+
+      const firstEpisode = nextSeasonEpisodes[0];
+      log(
+        `Found first episode of next season: S${nextSeason.IndexNumber}E${firstEpisode.indexNumber} - ${firstEpisode.name}`
+      );
+
+      firstEpisode.seasonNumber = nextSeason.IndexNumber;
+
+      return firstEpisode;
+    } catch (error) {
+      log(`Error resolving next episode: ${error.message}`);
+      return null;
+    }
+  }
+
+  function queueNextEpisode(nextEpisode, seriesName, seasonNumber) {
+    try {
+      const seCode = `S${String(seasonNumber).padStart(2, '0')}E${String(nextEpisode.indexNumber).padStart(2, '0')}`;
+      const episodeTitle = seriesName
+        ? `${seriesName} ${seCode} - ${nextEpisode.name}`
+        : `${seCode} - ${nextEpisode.name}`;
+
+      log(`Queuing next episode: ${episodeTitle}`);
+
+      try {
+        const playlistCount = Number(mpv.getNumber('playlist-count') || 0);
+        const currentPos = Number(mpv.getNumber('playlist-pos'));
+
+        if (!Number.isFinite(currentPos) || currentPos < 0) {
+          log(
+            `Skipping playlist cleanup due to invalid playlist-pos=${currentPos}, playlist-count=${playlistCount}`
+          );
+        } else if (playlistCount > currentPos + 1) {
+          for (let i = playlistCount - 1; i > currentPos; i--) {
+            try {
+              mpv.command('playlist-remove', [String(i)]);
+            } catch {
+              // Ignore removal errors
+            }
+          }
+          log(`Cleaned ${playlistCount - currentPos - 1} stale playlist entries`);
+        }
+      } catch {
+        log('Could not clean playlist (non-critical)');
+      }
+
+      const args = [nextEpisode.playUrl, 'insert-next'];
+      if (preferences.get('set_video_title')) {
+        args.push('-1', mediaTitleOption(episodeTitle));
+      }
+      mpv.command('loadfile', args);
+
+      autoplayQueued = true;
+
+      log(`Queued next episode: ${episodeTitle}`);
+
+      if (preferences.get('show_notifications')) {
+        core.osd(`Up next: ${episodeTitle}`);
+      }
+    } catch (error) {
+      log(`Error queuing next episode: ${error.message}`);
+    }
+  }
+
+  function setupAutoplayForEpisode(serverBase, episodeId, apiKey) {
+    if (lastProcessedEpisodeId === episodeId) {
+      log(`Episode ${episodeId} already being processed, skipping duplicate setup`);
+      return;
+    }
+
+    lastProcessedEpisodeId = episodeId;
+    autoplayQueued = false;
+
+    autoplayRequestCounter++;
+    const thisRequestId = autoplayRequestCounter;
+
+    (async () => {
+      try {
+        log(`Setting up autoplay for episode: ${episodeId} (request #${thisRequestId})`);
+
+        const seriesInfo = await getSeriesInfoFromEpisode(serverBase, episodeId, apiKey);
+
+        if (thisRequestId !== autoplayRequestCounter) {
+          log(
+            `Autoplay request #${thisRequestId} is stale (current: #${autoplayRequestCounter}), aborting`
+          );
+          return;
+        }
+
+        if (!seriesInfo) {
+          log('Could not get series info, autoplay not available');
+          return;
+        }
+
+        log(
+          `Got series info: series=${seriesInfo.seriesId}, season=${seriesInfo.seasonId}, seasonNum=${seriesInfo.seasonNumber}, currentEp=${seriesInfo.currentEpisodeNumber}`
+        );
+
+        if (lastProcessedSeriesId !== seriesInfo.seriesId) {
+          log(`Series changed from ${lastProcessedSeriesId} to ${seriesInfo.seriesId}`);
+          lastProcessedSeriesId = seriesInfo.seriesId;
+        }
+
+        const nextEpisode = await resolveNextEpisode(
+          serverBase,
+          seriesInfo.seriesId,
+          seriesInfo.seasonId,
+          seriesInfo.currentEpisodeNumber,
+          apiKey
+        );
+
+        if (thisRequestId !== autoplayRequestCounter) {
+          log(`Autoplay request #${thisRequestId} is stale after resolve, aborting`);
+          return;
+        }
+
+        if (!nextEpisode) {
+          log('No next episode found — end of series');
+          return;
+        }
+
+        // ?? rather than ||: season 0 is a real season number
+        const seasonNum = nextEpisode.seasonNumber ?? seriesInfo.seasonNumber;
+        queueNextEpisode(nextEpisode, seriesInfo.seriesName, seasonNum);
+
+        log(`Autoplay setup complete — queued next episode: ${nextEpisode.name}`);
+      } catch (error) {
+        log(`Error setting up autoplay: ${error.message}`);
+      }
+    })();
+  }
+
+  function hasEntryAfterCurrent() {
+    try {
+      const playlistCount = Number(mpv.getNumber('playlist-count') || 0);
+      const currentPos = Number(mpv.getNumber('playlist-pos'));
+      return Number.isFinite(currentPos) && currentPos >= 0 && playlistCount > currentPos + 1;
+    } catch {
+      return false;
+    }
+  }
+
+  function resetForNewFile(episodeId) {
+    // A repeated load of the same episode keeps the guard so the next episode
+    // is not queued twice, unless nothing is queued behind it any more (e.g.
+    // it was reopened, which clears the playlist) — then queue it again.
+    if (!episodeId || lastProcessedEpisodeId !== episodeId || !hasEntryAfterCurrent()) {
+      lastProcessedEpisodeId = null;
+      // Setup runs again and sets this once it has queued the next episode.
+      // While the guard holds, setup is skipped, so the episode queued behind
+      // this one must stay marked as queued for end-file to defer its stop.
+      autoplayQueued = false;
+    }
+  }
+
+  function clearQueuedFlag() {
+    autoplayQueued = false;
+  }
+
+  function isQueued() {
+    return autoplayQueued;
+  }
+
+  return {
+    setupAutoplayForEpisode,
+    resetForNewFile,
+    clearQueuedFlag,
+    isQueued,
+  };
+}
+
+module.exports = {
+  createAutoplayManager,
+};
