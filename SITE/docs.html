@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documentation | Free Games Tracker & Notifier</title>
+  <meta name="description" content="Read the technical documentation for the Free Games Auto Notifier. Learn how the Epic Games and Steam scrapers work, how to set up notifications, and how to host the dashboard.">
+  <meta name="keywords" content="free games notifier docs, free games tracker setup, epic games notifier setup, steam freebies api, telegram game bot, discord game embed, whatsapp game notification">
+  <meta name="author" content="jaixmario">
+  <meta name="robots" content="index, follow">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://jaixmario.github.io/free-games-notifier/SITE/docs.html">
+  <meta property="og:title" content="Documentation | Free Games Tracker & Notifier">
+  <meta property="og:description" content="Read the technical documentation for the Free Games Auto Notifier. Learn how the Epic Games and Steam scrapers work, how to set up notifications, and how to host the dashboard.">
+  <meta property="og:image" content="https://raw.githubusercontent.com/jaixmario/free-games-notifier/main/SITE/preview.png">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://jaixmario.github.io/free-games-notifier/SITE/docs.html">
+  <meta property="twitter:title" content="Documentation | Free Games Tracker & Notifier">
+  <meta property="twitter:description" content="Read the technical documentation for the Free Games Auto Notifier. Learn how the Epic Games and Steam scrapers work, how to set up notifications, and how to host the dashboard.">
+  <meta property="twitter:image" content="https://raw.githubusercontent.com/jaixmario/free-games-notifier/main/SITE/preview.png">
+
+  <!-- Canonical Link -->
+  <link rel="canonical" href="https://jaixmario.github.io/free-games-notifier/SITE/docs.html">
+
+  <script>
+    (() => {
+      const savedTheme = localStorage.getItem("site-theme");
+      document.documentElement.dataset.theme = savedTheme || "light";
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body class="site-shell docs-shell">
+  <div class="page-glow page-glow-a"></div>
+  <div class="page-glow page-glow-b"></div>
+
+  <header class="topbar">
+    <a class="brand" href="../index.html">Free Games Tracker</a>
+    <nav class="nav">
+      <a class="nav-link" href="../index.html">Games</a>
+      <a class="nav-link active" href="docs.html">Docs</a>
+      <a class="icon-link" href="https://github.com/jaixmario/free-games-notifier" target="_blank" rel="noopener noreferrer" aria-label="Open GitHub repository">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.7.5.1.68-.22.68-.5 0-.24-.01-1.05-.01-1.9-2.78.62-3.37-1.21-3.37-1.21-.46-1.2-1.11-1.52-1.11-1.52-.91-.64.07-.63.07-.63 1 .08 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.64-1.37-2.22-.26-4.56-1.14-4.56-5.09 0-1.13.39-2.05 1.03-2.78-.1-.26-.45-1.31.1-2.74 0 0 .84-.28 2.75 1.06A9.3 9.3 0 0 1 12 6.89c.85 0 1.71.12 2.51.36 1.91-1.34 2.75-1.06 2.75-1.06.55 1.43.2 2.48.1 2.74.64.73 1.03 1.65 1.03 2.78 0 3.96-2.34 4.83-4.57 5.08.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .28.18.61.69.5A10.25 10.25 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z"/>
+        </svg>
+        <span>GitHub</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle dark mode">Dark mode</button>
+    </nav>
+  </header>
+
+  <main class="layout docs-layout">
+    <section class="hero docs-hero">
+      <div class="hero-copy">
+        <p class="eyebrow">A to Z Guide</p>
+        <h1>How this project works, from data collection to GitHub Pages.</h1>
+        <p class="hero-text">
+          This page documents the project architecture, scripts, workflows, data files, testing helpers, and deployment path
+          so anyone opening the repository can understand the full system quickly.
+        </p>
+      </div>
+    </section>
+
+    <section class="docs-grid">
+      <aside class="toc-panel">
+        <h2>On This Page</h2>
+        <a href="#overview">Overview</a>
+        <a href="#flow">System Flow</a>
+        <a href="#files">Main Files</a>
+        <a href="#json">JSON Data</a>
+        <a href="#notifications">Notifications</a>
+        <a href="#automation">Automation</a>
+        <a href="#pages">GitHub Pages</a>
+        <a href="#setup">Setup</a>
+        <a href="#extend">How to Extend</a>
+      </aside>
+
+      <div class="docs-content">
+        <section class="doc-block" id="overview">
+          <p class="eyebrow">Overview</p>
+          <h2>What this project does</h2>
+          <p>
+            The project tracks free game promotions from Epic Games and Steam, stores structured JSON snapshots,
+            sends notifications through email, Telegram, Discord, and WhatsApp when new offers appear, updates the README automatically, and exposes the latest
+            offers through this GitHub Pages site.
+          </p>
+        </section>
+
+        <section class="doc-block" id="flow">
+          <p class="eyebrow">System Flow</p>
+          <h2>End-to-end flow</h2>
+          <div class="timeline">
+            <div class="timeline-item">
+              <strong>1. Fetch</strong>
+              <p>`epic.PY` calls Epic's promotion endpoint and `steam.py` gathers Steam deals from web/API sources.</p>
+            </div>
+            <div class="timeline-item">
+              <strong>2. Normalize</strong>
+              <p>Each script converts the results into predictable JSON records with title, link, image, type, and timing fields.</p>
+            </div>
+            <div class="timeline-item">
+              <strong>3. Detect changes</strong>
+              <p>A signature is built from the offer list, then the scripts check whether any fetched offer is new compared with the saved JSON state.</p>
+            </div>
+            <div class="timeline-item">
+              <strong>4. Persist</strong>
+              <p>The latest state is saved into `free.json` and `free-steam.json`; expired or removed offers update state silently without sending notifications.</p>
+            </div>
+            <div class="timeline-item">
+              <strong>5. Notify</strong>
+              <p>The scripts deliver channel-specific messages for email, Telegram, Discord, and WhatsApp, including image-based WhatsApp updates when artwork is available.</p>
+            </div>
+            <div class="timeline-item">
+              <strong>6. Publish</strong>
+              <p>`generate_readme.py` refreshes the README while GitHub Pages serves the JSON-backed website, `start.py` runs normal local checks, and `test_runner.py` runs a clean-state test.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="doc-block" id="files">
+          <p class="eyebrow">Repository</p>
+          <h2>Main files</h2>
+          <div class="info-table">
+            <div class="info-row"><span>`epic.PY`</span><strong>Epic fetcher, multi-channel notifier, JSON state writer.</strong></div>
+            <div class="info-row"><span>`steam.py`</span><strong>Steam fetcher, weekend title resolver, multi-channel notifier.</strong></div>
+            <div class="info-row"><span>`start.py`</span><strong>Runs `epic.PY` and `steam.py` one after another.</strong></div>
+            <div class="info-row"><span>`test_runner.py`</span><strong>Runs `delete_state_json.py`, then `epic.PY`, then `steam.py` for clean-state testing.</strong></div>
+            <div class="info-row"><span>`delete_state_json.py`</span><strong>Deletes only `free.json` and `free-steam.json` for test resets.</strong></div>
+            <div class="info-row"><span>`generate_readme.py`</span><strong>README auto-section generator.</strong></div>
+            <div class="info-row"><span>`whatsapp.py`</span><strong>Shared WhatsApp Cloud API helper for text and image messages.</strong></div>
+            <div class="info-row"><span>`config.json`</span><strong>Notification toggles and secrets-file settings.</strong></div>
+            <div class="info-row"><span>`secrets.json`</span><strong>Optional local JSON secrets source.</strong></div>
+            <div class="info-row"><span>`free.json`</span><strong>Epic current and upcoming free game snapshot.</strong></div>
+            <div class="info-row"><span>`free-steam.json`</span><strong>Steam free-offer snapshot.</strong></div>
+            <div class="info-row"><span>`index.html`</span><strong>GitHub Pages homepage for the games dashboard.</strong></div>
+            <div class="info-row"><span>`SITE/docs.html`</span><strong>Full documentation page.</strong></div>
+            <div class="info-row"><span>`.github/workflows/main.yml`</span><strong>Scheduled and manual production notifier workflow.</strong></div>
+            <div class="info-row"><span>`.github/workflows/tester.yml`</span><strong>Manual test workflow that clears JSON state before running notifiers.</strong></div>
+          </div>
+        </section>
+
+        <section class="doc-block" id="json">
+          <p class="eyebrow">Data</p>
+          <h2>JSON structure</h2>
+          <p>The site expects these repository files:</p>
+          <div class="code-card">
+            <pre class="code-window"><code class="language-json">free.json
+{
+  "signature": "...",
+  "updated_at": "...",
+  "current_games": [{ "title": "", "link": "", "image": "", "start": "", "end": "" }],
+  "upcoming_games": [{ "title": "", "link": "", "image": "", "start": "", "end": "" }]
+}
+
+free-steam.json
+{
+  "signature": "...",
+  "updated_at": "...",
+  "games": [{ "type": "", "title": "", "link": "", "image": "", "time": "" }]
+}</code></pre>
+          </div>
+          <p>
+            If an offer expires or disappears, the notifier saves the new JSON state without sending alerts. Alerts are sent only when at least one fetched offer is new compared with the saved snapshot.
+          </p>
+        </section>
+
+        <section class="doc-block" id="notifications">
+          <p class="eyebrow">Delivery</p>
+          <h2>Notification channels</h2>
+          <p>
+            The project can notify through email, Telegram, Discord, and WhatsApp. Each channel can be enabled or disabled
+            independently inside <code>config.json</code>.
+          </p>
+          <div class="code-card">
+            <pre class="code-window"><code class="language-json">{
+  "secrets": {
+    "use_hardcoded_secrets": true,
+    "secrets_file": "secrets.json"
+  },
+  "notifications": {
+    "email": false,
+    "telegram": false,
+    "discord": false,
+    "whatsapp": true
+  }
+}</code></pre>
+          </div>
+          <p>
+            Email, Telegram, Discord, and WhatsApp all support multiple targets separated by commas. Email supports up to
+            30 recipients per run, for example <code>first@example.com,second@example.com</code>. Telegram and
+            Discord support comma-separated chat or channel IDs like <code>-1003918180986,1845799450</code> and
+            <code>123456789012345678,987654321098765432</code>. WhatsApp recipients use international numbers such as
+            <code>919989148967,14155552671</code>.
+          </p>
+          <div class="code-card">
+            <pre class="code-window"><code class="language-json">{
+  "email": {
+    "email": "you@gmail.com",
+    "password": "your-app-password",
+    "to_email": "first@example.com,second@example.com,third@example.com"
+  },
+  "telegram": {
+    "bot_token": "123456:telegram-bot-token",
+    "chat_id": "-1003918180986,1845799450"
+  },
+  "discord": {
+    "bot_token": "YOUR_DISCORD_BOT_TOKEN",
+    "channel_id": "123456789012345678,987654321098765432"
+  },
+  "whatsapp": {
+    "access_token": "EAAG...",
+    "phone_number_id": "9123242999999",
+    "to": "919999999999,919999999999",
+    "api_version": "v25.0"
+  }
+}</code></pre>
+          </div>
+          <p>
+            WhatsApp currently sends one summary text followed by one message per game. If a game includes artwork,
+            the notifier sends an image message with a caption and store link. If no image is available, it falls back to plain text with a tappable URL preview.
+          </p>
+          <p>
+            GitHub Actions may block or interfere with WhatsApp API requests in some environments, so WhatsApp notifications are best run locally or from a VPS.
+          </p>
+        </section>
+
+        <section class="doc-block" id="automation">
+          <p class="eyebrow">Automation</p>
+          <h2>GitHub Actions</h2>
+          <p>
+            The main workflow runs every 6 hours and can also be triggered manually. It installs dependencies,
+            runs both fetcher scripts, regenerates the README, and commits updated JSON snapshots.
+          </p>
+          <p>
+            The tester workflow is manual only. It runs <code>delete_state_json.py</code> first, then runs the Epic and Steam notifiers. Use it when you intentionally want to test behavior from a clean JSON state.
+          </p>
+          <p>
+            GitHub Actions remains useful for scraping, state updates, and publishing docs, but WhatsApp delivery is more reliable when run locally or on a VPS.
+          </p>
+        </section>
+
+        <section class="doc-block" id="pages">
+          <p class="eyebrow">Deployment</p>
+          <h2>GitHub Pages setup</h2>
+          <p>
+            The public entry lives at the repository root in <code>index.html</code>, while shared site assets and
+            the documentation page live in the <code>SITE/</code> folder. This keeps GitHub Pages happy while still
+            grouping the website files cleanly.
+          </p>
+        </section>
+
+        <section class="doc-block" id="setup">
+          <p class="eyebrow">Setup</p>
+          <h2>How to run locally</h2>
+          <div class="code-card">
+            <pre class="code-window"><code class="language-powershell">pip install requests beautifulsoup4
+
+$env:WHATSAPP_ACCESS_TOKEN="EAAG..."
+$env:WHATSAPP_PHONE_NUMBER_ID="1126873913833051"
+$env:WHATSAPP_TO="919999999999"
+$env:WHATSAPP_API_VERSION="v25.0"
+
+python start.py
+python test_runner.py
+python generate_readme.py</code></pre>
+          </div>
+          <p>
+            For local runs, you can either set environment variables like the example above or keep
+            <code>use_hardcoded_secrets</code> enabled and place the same values in <code>secrets.json</code>.
+            Use <code>start.py</code> for a normal run and <code>test_runner.py</code> only when you want to delete saved JSON state first.
+          </p>
+        </section>
+
+        <section class="doc-block" id="extend">
+          <p class="eyebrow">Extend</p>
+          <h2>How to grow the project</h2>
+          <p>
+            You can add more storefronts by following the same pattern: fetch data, normalize it into JSON,
+            generate a signature, save a state file, and teach the site how to render the new data source.
+          </p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Documentation page for the Free Games Auto Notifier project.</p>
+  </footer>
+
+  <script src="site.js"></script>
+</body>
+</html>

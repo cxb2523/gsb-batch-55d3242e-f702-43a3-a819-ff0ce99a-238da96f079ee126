@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Free Games Tracker | Claim Free Epic Games & Steam Giveaways</title>
+  <meta name="description" content="Track active free games on Epic Games Store and Steam! Clean storefront board updated every 6 hours. Never miss a game giveaway or free weekend offer again.">
+  <meta name="keywords" content="free games, epic games free, free steam games, game giveaways, epic games tracker, steam freebies, free steam keys, PC free games, current epic free games, upcoming epic free games">
+  <meta name="author" content="jaixmario">
+  <meta name="robots" content="index, follow">
+  
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://jaixmario.github.io/free-games-notifier/">
+  <meta property="og:title" content="Free Games Tracker | Claim Free Epic Games & Steam Giveaways">
+  <meta property="og:description" content="Track active free games on Epic Games Store and Steam! Clean storefront board updated every 6 hours. Never miss a game giveaway or free weekend offer again.">
+  <meta property="og:image" content="https://raw.githubusercontent.com/jaixmario/free-games-notifier/main/SITE/preview.png">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://jaixmario.github.io/free-games-notifier/">
+  <meta property="twitter:title" content="Free Games Tracker | Claim Free Epic Games & Steam Giveaways">
+  <meta property="twitter:description" content="Track active free games on Epic Games Store and Steam! Clean storefront board updated every 6 hours. Never miss a game giveaway or free weekend offer again.">
+  <meta property="twitter:image" content="https://raw.githubusercontent.com/jaixmario/free-games-notifier/main/SITE/preview.png">
+
+  <!-- Canonical Link -->
+  <link rel="canonical" href="https://jaixmario.github.io/free-games-notifier/">
+
+  <script>
+    (() => {
+      const savedTheme = localStorage.getItem("site-theme");
+      document.documentElement.dataset.theme = savedTheme || "light";
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="SITE/site.css">
+</head>
+<body class="site-shell">
+  <div class="page-glow page-glow-a"></div>
+  <div class="page-glow page-glow-b"></div>
+
+  <header class="topbar">
+    <a class="brand" href="index.html">Free Games Tracker</a>
+    <nav class="nav">
+      <a class="nav-link active" href="index.html">Games</a>
+      <a class="nav-link" href="SITE/docs.html">Docs</a>
+      <a class="icon-link" href="https://github.com/jaixmario/free-games-notifier" target="_blank" rel="noopener noreferrer" aria-label="Open GitHub repository">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.7.5.1.68-.22.68-.5 0-.24-.01-1.05-.01-1.9-2.78.62-3.37-1.21-3.37-1.21-.46-1.2-1.11-1.52-1.11-1.52-.91-.64.07-.63.07-.63 1 .08 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.64-1.37-2.22-.26-4.56-1.14-4.56-5.09 0-1.13.39-2.05 1.03-2.78-.1-.26-.45-1.31.1-2.74 0 0 .84-.28 2.75 1.06A9.3 9.3 0 0 1 12 6.89c.85 0 1.71.12 2.51.36 1.91-1.34 2.75-1.06 2.75-1.06.55 1.43.2 2.48.1 2.74.64.73 1.03 1.65 1.03 2.78 0 3.96-2.34 4.83-4.57 5.08.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .28.18.61.69.5A10.25 10.25 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z"/>
+        </svg>
+        <span>GitHub</span>
+      </a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle dark mode">Dark mode</button>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">GitHub Pages Dashboard</p>
+        <h1>Free Games Tracker: Claim Free Epic Games & Steam Giveaways</h1>
+        <p class="hero-text">
+          Track active free game promotions from Epic Games Store and Steam. Surfaced instantly from auto-updated repository data snapshots.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#games-board">View Games Board</a>
+          <a class="button button-secondary" href="SITE/docs.html">Documentation</a>
+        </div>
+      </div>
+
+      <aside class="status-panel">
+        <p class="status-label">Data Sources</p>
+        <div class="status-list">
+          <div class="status-item">
+            <span>Epic</span>
+            <strong id="epic-updated-at">Loading...</strong>
+          </div>
+          <div class="status-item">
+            <span>Steam</span>
+            <strong id="steam-updated-at">Loading...</strong>
+          </div>
+        </div>
+        <p class="status-footnote">Updated by your existing GitHub Actions workflow.</p>
+      </aside>
+    </section>
+
+    <section class="summary-grid">
+      <article class="summary-card accent-epic">
+        <p class="summary-label">Epic Current</p>
+        <h2 id="epic-current-count">0</h2>
+        <p class="summary-note">Claimable right now</p>
+      </article>
+      <article class="summary-card accent-upcoming">
+        <p class="summary-label">Epic Upcoming</p>
+        <h2 id="epic-upcoming-count">0</h2>
+        <p class="summary-note">Next revealed offers</p>
+      </article>
+      <article class="summary-card accent-steam">
+        <p class="summary-label">Steam Offers</p>
+        <h2 id="steam-count">0</h2>
+        <p class="summary-note">Free to keep and weekends</p>
+      </article>
+    </section>
+
+    <section class="games-board" id="games-board">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Current Data</p>
+          <h2>Games Board</h2>
+        </div>
+      </div>
+
+      <div class="board-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Epic Games Free Now</h3>
+            <span class="pill pill-epic">Epic</span>
+          </div>
+          <div id="epic-current-list" class="card-stack">
+            <p class="empty-state">Loading Epic current offers...</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Epic Games Upcoming</h3>
+            <span class="pill pill-upcoming">Soon</span>
+          </div>
+          <div id="epic-upcoming-list" class="card-stack">
+            <p class="empty-state">Loading Epic upcoming offers...</p>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel steam-panel">
+        <div class="panel-head">
+          <h3>Steam Free Offers</h3>
+          <span class="pill pill-steam">Steam</span>
+        </div>
+        <div id="steam-list" class="card-stack steam-grid">
+          <p class="empty-state">Loading Steam offers...</p>
+        </div>
+      </section>
+    </section>
+    <!-- SEO Tags & FAQ Section -->
+    <section class="seo-section" id="seo-section">
+      <div class="seo-container">
+        <div class="tags-group">
+          <h3>Trending Tags</h3>
+          <div class="tags-list">
+            <span class="tag-pill">#free-games</span>
+            <span class="tag-pill">#epic-games-free</span>
+            <span class="tag-pill">#steam-freebies</span>
+            <span class="tag-pill">#game-giveaways</span>
+            <span class="tag-pill">#pc-gaming</span>
+            <span class="tag-pill">#epic-games-store</span>
+            <span class="tag-pill">#steam-keys</span>
+            <span class="tag-pill">#mystery-game</span>
+            <span class="tag-pill">#free-to-keep</span>
+          </div>
+        </div>
+
+        <div class="faq-group">
+          <h3>Frequently Asked Questions</h3>
+          <div class="faq-item">
+            <h4>How often are the free games updated?</h4>
+            <p>Our automation workflow runs every 6 hours to fetch the latest free game deals from Epic Games and Steam, updating the lists instantly.</p>
+          </div>
+          <div class="faq-item">
+            <h4>How do I claim these free games?</h4>
+            <p>Simply click the "Open Offer" button on any game card to go directly to the official storefront (Epic Games Store or Steam) where you can log in and claim the game permanently.</p>
+          </div>
+          <div class="faq-item">
+            <h4>Can I get notifications when new free games drop?</h4>
+            <p>Yes! This project includes notification scripts for Email, Telegram, Discord, and WhatsApp. Refer to the <a href="SITE/docs.html">Docs</a> page to configure notifications for your own server or group.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Built from repository JSON snapshots for GitHub Pages. &copy; 2026 Free Games Tracker.</p>
+  </footer>
+
+  <script src="SITE/site.js"></script>
+  <script type="text/javascript">
+    (function(c,l,a,r,i,t,y){
+        c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+        t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+    })(window, document, "clarity", "script", "y8bi4uz7f0");
+</script>
+</body>
+</html>
