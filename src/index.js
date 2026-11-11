@@ -1,7 +1,7 @@
 // @three-ws/retarget: public entry.
 // ===================================
-// Re-exports the platform's rig-agnostic humanoid animation engine from the
-// monorepo source (the seam walk-sdk's PROMOTION NOTE designates); the publish
+// The platform's rig-agnostic humanoid animation engine, vendored into this
+// package's src/ (the monorepo mirror carries no engine sources); the publish
 // build bundles everything into dist/ so npm consumers get one standalone
 // package whose only dependency is their own copy of Three.js.
 //
@@ -21,7 +21,7 @@ export {
 	canonicalizeJointNodes,
 	canonicalizeArmatureOrientation,
 	canonicalizeGLBBones,
-} from '../../../src/glb-canonicalize.js';
+} from './glb-canonicalize.js';
 
 export {
 	MIN_COVERAGE,
@@ -40,8 +40,8 @@ export {
 	retargetClipToObject,
 	scaleClipSpeed,
 	parseClipJSON,
-} from '../../../src/animation-retarget.js';
+} from './animation-retarget.js';
 
-export { AnimationManager, measureHipsTiltDeg } from '../../../src/animation-manager.js';
+export { AnimationManager, measureHipsTiltDeg } from './animation-manager.js';
 
-export { CANONICAL_REST, CANONICAL_REST_WORLD } from '../../../src/animation-canonical-rest.js';
+export { CANONICAL_REST, CANONICAL_REST_WORLD } from './animation-canonical-rest.js';
