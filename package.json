@@ -1,0 +1,10 @@
+{
+  "name": "voxelweave-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-native deterministic palette-grid texture forge: weave, render and export low-poly tile atlases with JSON manifests.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "MIT"
+}
