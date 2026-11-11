@@ -1,0 +1,30 @@
+@keyframes blink {
+
+    0%,
+    49% {
+        opacity: 1;
+    }
+
+    50%,
+    99% {
+        opacity: 0;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}
+
+@keyframes highlightCard {
+    0% {
+        background-color: var(--mint-6);
+    }
+
+    50% {
+        background-color: var(--mint-5);
+    }
+
+    100% {
+        background-color: var(--mint-2);
+    }
+}
