@@ -2,10 +2,12 @@
 
 import { useMemo } from "react";
 import { useMetronome, makeTapTempo } from "@/lib/audio/use-metronome";
+import {
+  BEATS_PER_BAR_OPTIONS,
+  MAX_BPM,
+  MIN_BPM,
+} from "@/lib/audio/metronome-engine";
 import { SuedeSocialBridge, socialAction } from "@/components/SuedeSocialBridge";
-
-const MIN_BPM = 30;
-const MAX_BPM = 280;
 
 const REGISTRY_CYAN = "#22d3ee";
 const RIGHTS_RED = "#9f101a";
@@ -137,7 +139,7 @@ export function Metronome() {
         </div>
 
         <BeatIndicator
-          beatsPerBar={m.beatsPerBar}
+          beatsPerBar={m.soundingBeatsPerBar}
           currentBeat={m.currentBeat}
           running={m.running}
         />
@@ -233,7 +235,7 @@ function TimeSignaturePicker({
   beatsPerBar: number;
   onChange: (n: number) => void;
 }) {
-  const options = [2, 3, 4, 6];
+  const options = BEATS_PER_BAR_OPTIONS;
   return (
     <div
       role="radiogroup"

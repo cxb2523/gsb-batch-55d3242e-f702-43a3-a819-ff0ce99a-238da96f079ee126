@@ -1,14 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  DEFAULT_BEATS_PER_BAR,
+  DEFAULT_BPM,
+  MetronomeEngine,
+  isSupportedBeatsPerBar,
+  normalizeBpm,
+  type ScheduledClick,
+} from "./metronome-engine";
 
-// Chris Wilson's "A Tale of Two Clocks" lookahead scheduler.
-// AudioContext.currentTime gives sample-accurate timing; setInterval drives
-// the scheduling loop (which only queues events, never plays them directly).
-// Ported from Strumly.
-
-const LOOKAHEAD_MS = 25;
-const SCHEDULE_AHEAD_S = 0.1;
+// The timing state machine lives in ./metronome-engine so it can run under
+// Node with an injected clock. This hook is the browser adapter: it owns the
+// AudioContext, turns scheduled clicks into oscillator + gain envelopes, and
+// mirrors the engine's beat events into React state.
 
 export interface UseMetronomeOptions {
   initialBpm?: number;
@@ -16,86 +21,115 @@ export interface UseMetronomeOptions {
 }
 
 export function useMetronome(opts: UseMetronomeOptions = {}) {
-  const [bpm, setBpm] = useState(opts.initialBpm ?? 90);
-  const [beatsPerBar, setBeatsPerBar] = useState(opts.initialBeatsPerBar ?? 4);
+  const [bpm, setBpmState] = useState(() =>
+    normalizeBpm(opts.initialBpm ?? DEFAULT_BPM),
+  );
+  const [beatsPerBar, setBeatsPerBarState] = useState(() => {
+    const beats = opts.initialBeatsPerBar ?? DEFAULT_BEATS_PER_BAR;
+    return isSupportedBeatsPerBar(beats) ? beats : DEFAULT_BEATS_PER_BAR;
+  });
   const [running, setRunning] = useState(false);
   const [currentBeat, setCurrentBeat] = useState<number | null>(null);
+  // The signature governing the bar currently sounding. It can lag the picker
+  // by a few beats while the old bar finishes.
+  const [soundingBeatsPerBar, setSoundingBeatsPerBar] = useState(beatsPerBar);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const nextNoteTimeRef = useRef<number>(0);
-  const beatCounterRef = useRef<number>(0);
-  const timerRef = useRef<number | null>(null);
-  const bpmRef = useRef(bpm);
-  const beatsRef = useRef(beatsPerBar);
+  const engineRef = useRef<MetronomeEngine | null>(null);
+
+  if (engineRef.current === null) {
+    engineRef.current = new MetronomeEngine(
+      {
+        audioNow: () => audioCtxRef.current?.currentTime ?? 0,
+        // Only queue audio events here. The oscillator is created at the
+        // requested audio time, so the scheduling loop never plays a click
+        // itself.
+        scheduleClick: (click: ScheduledClick) => {
+          const ctx = audioCtxRef.current;
+          if (!ctx) return;
+          const osc = ctx.createOscillator();
+          const env = ctx.createGain();
+          osc.frequency.value = click.isDownbeat ? 1200 : 800;
+          env.gain.setValueAtTime(0.0001, click.time);
+          env.gain.exponentialRampToValueAtTime(
+            click.isDownbeat ? 0.6 : 0.4,
+            click.time + 0.001,
+          );
+          env.gain.exponentialRampToValueAtTime(0.0001, click.time + 0.05);
+          osc.connect(env).connect(ctx.destination);
+          osc.start(click.time);
+          osc.stop(click.time + 0.06);
+        },
+        onBeat: (beatIndex, beatsPerBarOfBeat) => {
+          setCurrentBeat(beatIndex);
+          setSoundingBeatsPerBar(beatsPerBarOfBeat);
+        },
+        setInterval: (callback, ms) => globalThis.setInterval(callback, ms),
+        clearInterval: (handle) =>
+          globalThis.clearInterval(handle as number),
+        setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms),
+        clearTimeout: (handle) => globalThis.clearTimeout(handle as number),
+      },
+      {
+        initialBpm: bpm,
+        initialBeatsPerBar: beatsPerBar,
+      },
+    );
+  }
+
+  const engine = engineRef.current;
 
   useEffect(() => {
-    bpmRef.current = bpm;
-  }, [bpm]);
-  useEffect(() => {
-    beatsRef.current = beatsPerBar;
-  }, [beatsPerBar]);
+    return () => {
+      engine.stop();
+    };
+  }, [engine]);
 
-  useEffect(() => () => stop(), []); // cleanup on unmount
-
-  const scheduleClick = useCallback((beatIndex: number, time: number) => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    const isDownbeat = beatIndex === 0;
-    const osc = ctx.createOscillator();
-    const env = ctx.createGain();
-    osc.frequency.value = isDownbeat ? 1200 : 800;
-    env.gain.setValueAtTime(0.0001, time);
-    env.gain.exponentialRampToValueAtTime(isDownbeat ? 0.6 : 0.4, time + 0.001);
-    env.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
-    osc.connect(env).connect(ctx.destination);
-    osc.start(time);
-    osc.stop(time + 0.06);
-
-    const delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
-    window.setTimeout(() => setCurrentBeat(beatIndex), delayMs);
-  }, []);
-
-  const scheduler = useCallback(() => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    while (nextNoteTimeRef.current < ctx.currentTime + SCHEDULE_AHEAD_S) {
-      const beatIdx = beatCounterRef.current % beatsRef.current;
-      scheduleClick(beatIdx, nextNoteTimeRef.current);
-      const secondsPerBeat = 60.0 / bpmRef.current;
-      nextNoteTimeRef.current += secondsPerBeat;
-      beatCounterRef.current += 1;
-    }
-  }, [scheduleClick]);
-
-  function start() {
-    if (running) return;
+  const start = useCallback(() => {
+    if (engine.isRunning) return;
     if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
     const ctx = audioCtxRef.current;
-    if (ctx.state === "suspended") ctx.resume();
-    beatCounterRef.current = 0;
-    nextNoteTimeRef.current = ctx.currentTime + 0.05;
+    if (ctx.state === "suspended") void ctx.resume();
+    setSoundingBeatsPerBar(engine.beatsPerBar);
+    engine.start();
     setRunning(true);
-    timerRef.current = window.setInterval(scheduler, LOOKAHEAD_MS);
-  }
+  }, [engine]);
 
-  function stop() {
-    if (timerRef.current !== null) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+  const stop = useCallback(() => {
+    engine.stop();
     setRunning(false);
     setCurrentBeat(null);
-  }
+    setSoundingBeatsPerBar(engine.beatsPerBar);
+  }, [engine]);
 
-  function toggle() {
-    if (running) stop();
+  const toggle = useCallback(() => {
+    if (engine.isRunning) stop();
     else start();
-  }
+  }, [engine, start, stop]);
+
+  const setBpm = useCallback(
+    (value: number) => {
+      const normalized = engine.setBpm(value);
+      setBpmState(normalized);
+    },
+    [engine],
+  );
+
+  const setBeatsPerBar = useCallback(
+    (value: number) => {
+      if (!isSupportedBeatsPerBar(value)) return;
+      engine.setBeatsPerBar(value);
+      setBeatsPerBarState(value);
+      if (!engine.isRunning) setSoundingBeatsPerBar(value);
+    },
+    [engine],
+  );
 
   return {
     bpm,
     setBpm,
     beatsPerBar,
+    soundingBeatsPerBar,
     setBeatsPerBar,
     running,
     currentBeat,

@@ -62,6 +62,7 @@ lib/
   audio/yin.ts          # YIN pitch detector
   audio/use-tuner.ts    # React hook for the tuner
   audio/use-metronome.ts # React hook for the metronome + tap-tempo helper
+  audio/metronome-engine.ts # injectable beat/bar scheduler (Node-testable)
 public/
   tuner-audio-processor.js  # AudioWorklet for the tuner mic pump
 ```
