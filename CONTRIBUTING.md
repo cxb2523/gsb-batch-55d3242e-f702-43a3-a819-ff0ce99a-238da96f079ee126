@@ -1,0 +1,60 @@
+# Contributing
+
+Thanks for helping make MLX Audio Separator better!
+
+## Dev setup
+
+```bash
+git clone https://github.com/fdebkowski/mlx-audio-separator-gui.git
+cd mlx-audio-separator-gui
+./setup.sh                                        # venv + engine + app build
+~/.venvs/mlx-audio-separator/bin/python app.py    # run the GUI from source
+```
+
+No editable install, no build step — edit `app.py` and rerun. Rebuild the
+`.app` bundle with `./build.sh` only when you need to test Finder/Dock launch
+behavior (that's where `runner.py`'s PATH fix matters).
+
+To build the self-contained release bundle (Python + engine embedded), run
+`./build_bundle.sh` (needs `pip install pyinstaller` in the venv). It runs
+`main_bundle.py` through PyInstaller and applies `bundle_fix_record.py`; test
+its output the same way — click through a real separation.
+
+## Ground rules
+
+- **Keep the GUI stdlib-only.** The app deliberately has no runtime *Python*
+  dependencies beyond Tkinter and the engine CLI. Open an issue first if you
+  think a dependency is worth it. The one exception is the native **tkdnd** Tcl
+  extension vendored under `vendor/tkdnd/` (arm64, BSD-style licensed) for
+  drag-and-drop; it's loaded via `package require`, imports nothing on the
+  Python side, and the app runs fine without it if it fails to load.
+- **The GUI stays a thin driver.** Separation logic belongs in the
+  [engine](https://github.com/ssmall256/mlx-audio-separator), not here. This
+  repo owns UX, process management, and macOS integration.
+- **Match the existing style** — small methods on `SeparatorApp`, queue-based
+  UI updates from worker threads, comments only where the *why* isn't obvious.
+- **Design for casual users.** Plain language in labels, safe defaults,
+  technical detail behind "Show Details".
+
+## Checks
+
+CI compiles the sources and runs headless model-catalog regression tests.
+Before opening a PR:
+
+```bash
+~/.venvs/mlx-audio-separator/bin/python -m py_compile app.py runner.py
+~/.venvs/mlx-audio-separator/bin/python -m unittest discover -s tests -v
+bash -n build.sh setup.sh build_bundle.sh
+```
+
+…and click through a real separation run.
+
+## Commits & PRs
+
+- Conventional commit style: `feat:`, `fix:`, `refactor:`, `docs:`, …
+- One focused change per PR, with a screenshot for anything visual.
+
+## Reporting issues
+
+Please include your macOS version, Mac model, and the contents of the
+**Show Details** panel from the failed run.

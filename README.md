@@ -1,0 +1,231 @@
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="MLX Audio Separator icon">
+</p>
+
+<h1 align="center">MLX Audio Separator</h1>
+
+<p align="center">
+  Split any song into vocals, instrumentals, and stems — free, private, and fast on Apple&nbsp;Silicon.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%28Apple%20Silicon%29-lightgrey" alt="macOS Apple Silicon">
+  <img src="https://img.shields.io/badge/python-3.13-blue" alt="Python 3.13">
+</p>
+
+![MLX Audio Separator main window](docs/screenshot.png)
+
+## Why you might want this
+
+If you produce, DJ, remix, or sing, you've probably needed a clean acapella or
+instrumental of a finished track. Online tools charge per song and make you
+upload your music. This app does the same job on your own Mac:
+
+- **Acapellas, instrumentals, drums, bass…** — pick a model, press Separate.
+  Two-stem vocals/instrumental models sit alongside 4- and 6-stem splitters
+  (vocals · drums · bass · other, plus guitar & piano) and even a per-drum
+  splitter — the *Stems* column shows exactly what each one produces.
+- **Private and free** — your audio never leaves your computer. Processing runs
+  on the Apple Silicon GPU via [MLX](https://github.com/ml-explore/mlx).
+- **170+ community models** — the same Mel-Band RoFormer / BS-RoFormer /
+  MDX23C / Demucs models used by the stem-separation community, plus a curated
+  set of newer 2025–2026 community releases (unwa Leap and Big Beta 7,
+  becruily Deux and Guitar, Gabox INSTV9/V10, 4-stem Mel-Band RoFormers).
+  ZFTurbo Mel-Band-RoFormer Vocals v1 is included using its native MLX
+  weights and produces vocals and instrumental stems.
+  The catalog checks for newer compatible models and SDR metadata daily from
+  maintained GitHub registries and seven known Hugging Face authors, with an
+  offline cache. **4 stems** filters vocals/drums/bass/other choices, including
+  SW four-stem fold-down and the added ZFTurbo and SYH four-stem checkpoints.
+  Click any column to sort — by quality (SDR), or by *Stems* to bring the
+  models that split into the most tracks to the top. Models download
+  automatically on first use.
+- **Batch friendly** — drag songs or whole folders straight in from Finder,
+  and choose FLAC, WAV, or MP3 output.
+
+## Requirements
+
+- **Apple Silicon Mac (M1 or newer), macOS 15 (Sequoia) or later** — MLX runs on Apple GPUs only.
+
+The downloadable app is fully self-contained — Python, the MLX engine, and
+`ffmpeg` are all bundled, so there's nothing else to install. Building from
+source instead needs [Python 3.13 from python.org](https://www.python.org/downloads/)
+(it bundles the Tcl/Tk toolkit) plus [Homebrew](https://brew.sh) `ffmpeg`
+(`brew install ffmpeg`) for MP3/M4A input.
+
+## Install
+
+### Option A — download the app (easiest)
+
+1. Grab **MLX-Audio-Separator-*-macos-arm64.zip** from the
+   [latest release](https://github.com/fdebkowski/mlx-audio-separator-gui/releases/latest).
+2. Unzip it and drag **MLX Audio Separator.app** to your `/Applications` folder.
+3. The app is self-contained (Python, the MLX engine, and ffmpeg are bundled)
+   but signed ad-hoc, so on first launch macOS Gatekeeper blocks it. Clear the
+   download quarantine once, from Terminal:
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/MLX Audio Separator.app"
+   ```
+
+   Then open it normally. (Right-click → **Open** works too if you prefer.)
+
+### Option B — build from source
+
+```bash
+git clone https://github.com/fdebkowski/mlx-audio-separator-gui.git
+cd mlx-audio-separator-gui
+./setup.sh
+```
+
+`setup.sh` creates a private Python environment in `~/.venvs/mlx-audio-separator`,
+installs the [mlx-audio-separator](https://github.com/ssmall256/mlx-audio-separator)
+engine, and builds **MLX Audio Separator.app** into `/Applications`. This build
+reuses your Python install instead of bundling one, so it's much smaller.
+
+## Using the app
+
+1. **Add your music** — drag songs or folders in from Finder, or click the list
+   (or *Add Files…* / *Add Folder…*) to pick the songs to split.
+2. **Pick a model** — the ★ recommended model is a great instrumental/vocals
+   all-rounder. Click a column heading to sort — *Quality (SDR)* for the
+   cleanest split, or *Stems* to bring the models that split into the most
+   tracks (like the 4- and 6-stem Demucs models) to the top. The *Stems* column
+   shows how many tracks each model makes and what they are. Use **4 stems** to
+   find vocals/drums/bass/other models. *Quality* shows
+   the published SDR plus the benchmark it came from (MUSDB or MVSEP's harder
+   multisong set), so only compare scores carrying the same tag.
+3. **Choose what you get** — output format, all stems or just one (e.g.
+   *Vocals only* or *Drums only*), and where to save. Leave *Save to* empty to
+   put the stems next to each song.
+4. Press **Separate**. Progress shows in the bar; you can **Cancel** anytime,
+   and you'll get a notification when the stems are ready.
+
+Good to know:
+
+- A model downloads once (typically a few hundred MB) and is kept in
+  `~/Library/Application Support/MLX Audio Separator/models`. Right-click a
+  downloaded model in the list to reveal or delete it.
+- A 3–4 minute song typically separates in well under a minute on an M-series
+  Mac, after the model is downloaded.
+- Right-click a model for **Quality and model details**: exact per-stem SDR,
+  benchmark and source. Multi-stem quality is the mean of reported stems.
+- **Refresh list** checks the online catalog immediately. The app checks daily
+  automatically and keeps the last working catalog when offline. New custom
+  architectures still need engine support. See the [model audit](docs/model-audit-2026-10-05.md).
+- **Show Details** reveals the full engine log — useful when reporting issues.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| "Separation engine missing" on launch | Run `./setup.sh` again — the venv at `~/.venvs/mlx-audio-separator` is missing or broken |
+| MP3/M4A files fail to load or convert (source builds only) | `brew install ffmpeg` — the downloadable app already bundles it |
+| First run stuck on "Downloading model…" | It's fetching the model weights — watch **Show Details** for progress |
+| "App can't be opened" warning | Right-click the app → **Open** (ad-hoc signature, see above) |
+| Empty model list | Click **Refresh list**; the first fetch needs an internet connection |
+
+## For developers
+
+The GUI is intentionally boring: stdlib-only Python/Tkinter, no runtime Python
+dependencies of its own, all separation delegated to the CLI. The one native
+addition is a vendored **tkdnd** Tcl extension for drag-and-drop — loaded via
+`package require`, so nothing is imported on the Python side.
+
+| File | Role |
+| --- | --- |
+| `app.py` | The whole GUI — a thin Tkinter driver that shells out to the engine and streams its output into the log/progress UI |
+| `vendor/tkdnd/` | Native drag-and-drop (tkdnd 2.10.1, arm64) so audio can be dragged onto the window; loaded through Tcl, not imported, and the app runs fine without it |
+| `model_catalog.py` | Online registry/score refresh, Hugging Face discovery, validation and atomic offline cache |
+| `score_overrides.json` | Verified missing SDR measurements with benchmark and primary-source URLs |
+| `catalog_settings.json` | Checkpoint/config pairings, renamed-model aliases and repositories requiring review |
+| `runner.py` | Engine shim (`main()`): puts the bundled (or Homebrew) `ffmpeg` on `PATH` for Finder-launched apps and patches `mlx_audio_io.save` to tolerate 24/32-bit sources |
+| `main_bundle.py` | PyInstaller entry point; one frozen binary runs as the GUI or, with `--separator-runner`, as the engine the GUI subprocesses |
+| `setup.sh` | Source install: venv + engine + `build.sh` |
+| `build.sh` | Builds the lightweight `.app` that runs on your Python (used by `setup.sh`) |
+| `build_bundle.sh` | Builds the self-contained `.app` with PyInstaller (bundles Python + engine + ffmpeg) and zips it for release |
+| `bundle_fix_record.py` | Post-build fix: recomputes mlx_audio_io's dist-info RECORD hash, which PyInstaller invalidates by rewriting the binary |
+| `make_icon.swift` | Draws the app icon (gradient squircle + equalizer bars) with AppKit |
+
+Build the distributable bundle yourself:
+
+```bash
+~/.venvs/mlx-audio-separator/bin/pip install pyinstaller
+./build_bundle.sh    # → dist/MLX-Audio-Separator-<ver>-macos-arm64.zip
+```
+
+For a clean build, extracted-ZIP validation and gated GitHub publication, see
+[Releasing](docs/releasing.md). Release builds use the native dependency pins
+in `constraints-release.txt`; the workflow records resolved dependencies and
+checks real MLX separation before making an application ZIP public.
+
+Source setup and release builds install the engine version pinned in
+`requirements-engine.txt` (currently 0.1.20). The bundle build updates its
+environment before packaging so an older local engine cannot silently omit
+new models. Set `MLX_SEPARATOR_VENV` to build with a separate environment.
+
+Run from source (after `./setup.sh`):
+
+```bash
+~/.venvs/mlx-audio-separator/bin/python app.py
+```
+
+The app talks to the engine exclusively through the `mlx-audio-separator` CLI
+(`--list_models --list_format json` for the catalog, one subprocess per
+separation run). After changing the engine pin, bump `MODELS_REV` in `app.py`
+so existing installs refresh their cached catalog.
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Acapella/instrumental and four-stem models
+
+For acapella + instrumental, search for **HyperACE v2** (separate vocal and
+instrumental specialist checkpoints) or **Deux** (MelBand Roformer). Both
+HyperACE variants save vocals and instrumental; the complementary output is
+the original mixture minus the predicted target.
+
+For drums + bass + vocals + remaining instruments, use the **4 stems** filter:
+
+- **BS Roformer SW | 4-Stem** uses MLX and combines guitar + piano + other
+  before encoding. The six-stem and four-stem entries share one model download.
+- **SCNet XL IHF | 4-Stem** predicts drums, bass, other and vocals directly.
+  “Other” is the instruments remaining after drums, bass and vocals.
+
+**HyperACE v2 and SCNet XL IHF use a PyTorch CPU compatibility backend**, shown
+as “CPU (slower)” in the list and in model details. They are not MLX accelerated.
+The source setup and app build include that backend; no separate service or
+account is needed. Existing Deux and SW models keep their MLX execution path.
+Weights download on first use and retain their authors' licensing terms.
+
+The adapters reuse the engine's file-format support and single-stem selector.
+They use reviewed code shipped with the app, never downloaded Python scripts.
+See [adapter provenance](engine_adapters/README.md) for pinned source revisions.
+
+## Credits
+
+- [mlx-audio-separator](https://github.com/ssmall256/mlx-audio-separator) by
+  ssmall256 — the MLX separation engine this app drives.
+- [MLX](https://github.com/ml-explore/mlx) — Apple's array framework for
+  Apple Silicon.
+- The community researchers who train and share separation models (Gabox,
+  unwa, Kim, ZFTurbo, and many others) and the wider
+  [audio-separator](https://github.com/nomadkaraoke/python-audio-separator)
+  ecosystem their model index comes from.
+
+## License
+
+[MIT](LICENSE). The separation models are downloaded from their authors'
+releases and keep whatever license their authors chose. The downloadable app
+bundles static `ffmpeg`/`ffprobe` binaries from
+[eugeneware/ffmpeg-static](https://github.com/eugeneware/ffmpeg-static), which
+are licensed under the GPL v3; the license text and a written offer for the
+corresponding source ship inside the app at `Contents/Resources/ffmpeg/`.
+
+## Configure automatic model discovery
+
+The app also searches Hugging Face globally for newly updated Roformers from new authors. Edit the user `model_sources.json` to choose authors, searches and explicit repositories. Use **Newest first** and **Help → Model sources and refresh status**, or `python catalog_cli.py --refresh`. See [Model discovery](docs/model-database.md) for source configuration, compatibility checks and offline behavior.
+
+## Quality presets and advanced controls
+
+Choose **Fast**, **Balanced** (default), or **High**, or use **Advanced…** to tune segment size, overlap, Demucs shifts or VR augmentation. Settings are saved. Higher settings cost time and memory and can improve some tracks; compare an excerpt. See [Quality controls](docs/quality-settings.md) for preset values and UVR5 references.

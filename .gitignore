@@ -1,0 +1,8 @@
+__pycache__/
+build/
+.DS_Store
+dist/
+bundle_work/
+.cache/
+.hallmark/
+.release-venv/
