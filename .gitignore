@@ -1,0 +1,5 @@
+# your own reference photo, the raw target and all scratch renders live here;
+# nothing in work/ is ever committed
+work/
+node_modules/
+.DS_Store

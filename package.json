@@ -1,0 +1,13 @@
+{
+  "name": "mona-lisa-js",
+  "version": "1.0.0",
+  "description": "The Mona Lisa, painted live in the browser by 62,430 brush strokes. One HTML file: no image, no assets, no libraries, no network.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "node tools/build.js",
+    "verify": "node tools/verify.js",
+    "render": "node tools/render.js",
+    "paint": "node painter/optimize.js && node tools/build.js"
+  }
+}

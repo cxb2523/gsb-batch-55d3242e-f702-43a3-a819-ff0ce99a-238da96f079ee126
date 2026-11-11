@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>Mona Lisa — painted in pure JavaScript</title>
+<meta name="description" content="The Mona Lisa, painted live in the browser by __COUNT__ brush strokes. A single HTML file with no image, no assets, no libraries and no network.">
+<style>
+  :root{--ink:#dccfae;--mute:rgba(220,207,174,.68);--faint:rgba(220,207,174,.15);--gold:#c8a25c;
+        --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+        --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+  html,body{height:100%;margin:0;background:#0b0907;overflow:hidden}
+  body{color:var(--ink);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue","Segoe UI",Arial,sans-serif;
+       -webkit-font-smoothing:antialiased;user-select:none;-webkit-user-select:none}
+  /* the wall, lit from a picture light above the panel */
+  #wall{position:fixed;left:0;top:0;right:0;bottom:0;
+        background:radial-gradient(56% 78% at 50% 34%,#3d3223 0%,#241d14 36%,#130f0b 70%,#080605 100%);transition:filter 2.4s}
+  body.done #wall{filter:brightness(1.22) saturate(1.08)}
+  #grain{position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none}
+  #stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0}
+  #o{position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none}
+
+  /* the panel in its frame */
+  #easel{position:absolute;left:50%;top:44px;transform:translateX(-50%)}
+  #frame{padding:14px;border-radius:2px;
+         background:linear-gradient(135deg,#4d3922 0%,#20160b 42%,#36260f 68%,#170f08 100%);
+         box-shadow:0 0 0 1px #0a0704,inset 0 1px 0 rgba(255,226,170,.2),inset 0 -1px 0 rgba(0,0,0,.5),
+                    0 54px 110px rgba(0,0,0,.72),0 14px 30px rgba(0,0,0,.6),0 0 120px rgba(255,206,140,0);transition:box-shadow 2.4s}
+  body.done #frame{box-shadow:0 0 0 1px #0a0704,inset 0 1px 0 rgba(255,226,170,.34),inset 0 -1px 0 rgba(0,0,0,.5),
+                    0 54px 110px rgba(0,0,0,.72),0 14px 30px rgba(0,0,0,.6),0 0 120px rgba(255,206,140,.1)}
+  #p{display:block;width:567.79px;height:846px;background:#ded4be;cursor:crosshair;touch-action:none;
+     box-shadow:0 0 0 1px #0d0905,0 0 0 2.5px #a98547,0 0 0 3.5px #1a1209}
+  #plate{position:absolute;left:50%;top:934px;transform:translateX(-50%);padding:6px 30px 7px;text-align:center;white-space:nowrap;
+         color:#2a1c09;border-radius:1.5px;background:linear-gradient(180deg,#dcbd7a 0%,#c7a35c 55%,#a07d3c 84%,#c4a15b 100%);
+         box-shadow:0 1px 0 rgba(255,240,200,.5) inset,0 -1px 0 rgba(0,0,0,.35) inset,0 6px 14px rgba(0,0,0,.55)}
+  #plate:before,#plate:after{content:"";position:absolute;top:50%;width:5px;height:5px;margin-top:-2.5px;border-radius:50%;
+         background:radial-gradient(circle at 35% 30%,#f3dfa8,#6d5220 70%)}
+  #plate:before{left:9px}#plate:after{right:9px}
+  #plate b{display:block;font:700 13px/1.3 var(--serif);letter-spacing:.34em;text-indent:.34em}
+  #plate i{display:block;font:italic 12.5px/1.3 var(--serif);color:#1c1206}
+
+  .lab{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin:0 0 9px}
+  .cap{font-size:13px;color:var(--mute);margin-top:9px;height:19px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* left: what this is, and the seven brushes */
+  #left{position:absolute;left:72px;top:60px;width:516px}
+  #left h1{margin:6px 0 0 -4px;font:italic 400 96px/.96 var(--serif);letter-spacing:-.01em;color:#efe3c3}
+  #sub{font:italic 19px/1.3 var(--serif);color:var(--mute);margin:10px 0 0}
+  #blurb{font-size:14.5px;line-height:1.55;color:rgba(220,207,174,.82);margin:18px 0 28px;max-width:470px}
+  #blurb b{font-weight:600;color:#efe3c3}
+  .row{display:grid;grid-template-columns:150px 1fr auto;align-items:center;column-gap:16px;height:62px;position:relative;
+       border-top:1px solid var(--faint);opacity:.55;transition:opacity .5s}
+  .row:last-child{border-bottom:1px solid var(--faint)}
+  .row.done{opacity:.92}.row.cur{opacity:1}
+  .row canvas{width:150px;height:30px;display:block}
+  .row .nm{font:italic 21px/1 var(--serif);color:#efe3c3}
+  .row .mt{font:12.5px/1.4 var(--mono);color:rgba(220,207,174,.74);text-align:right}
+  .row .pg{position:absolute;left:0;bottom:-1px;height:1px;width:0;background:var(--gold)}
+  .row .ck{display:inline-block;width:22px;font-style:normal;font-size:15px;color:var(--gold);opacity:0;transform:scale(.6);transition:opacity .4s,transform .4s}
+  .row.done .ck{opacity:1;transform:none}
+  #keys{position:absolute;left:0;top:880px;margin:0;font-size:13px;line-height:1.8;color:var(--mute);white-space:nowrap}
+  #keys kbd{font:11.5px var(--mono);color:var(--ink);border:1px solid var(--faint);border-radius:4px;padding:1px 5px;margin-right:4px}
+  #keys span{margin-right:13px;white-space:nowrap}
+
+  /* right: loupe, readouts, palette, ledger */
+  #right{position:absolute;left:1332px;top:60px;width:516px}
+  #lrow{display:flex;gap:30px;align-items:flex-start}
+  #loupeWrap{position:relative;width:296px;height:296px;border-radius:50%;flex:none;
+       box-shadow:0 0 0 1px #0b0805,0 0 0 5px #6f5527,0 0 0 6px #d6b672,0 0 0 9px #7b5e2c,0 0 0 10px #0b0805,0 22px 44px rgba(0,0,0,.6)}
+  #loupe{width:296px;height:296px;border-radius:50%;display:block;background:#1c130a}
+  #loupeWrap:after{content:"";position:absolute;left:0;top:0;right:0;bottom:0;border-radius:50%;pointer-events:none;
+       background:radial-gradient(120% 90% at 30% 12%,rgba(255,255,255,.2) 0%,rgba(255,255,255,.05) 22%,rgba(255,255,255,0) 42%);
+       box-shadow:inset 0 0 26px rgba(0,0,0,.55)}
+  #read{flex:1;padding-top:2px}
+  #read .k{font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);margin-top:15px}
+  #read .k:first-child{margin-top:0}
+  #read .v{font:300 40px/1.08 var(--mono);letter-spacing:-.04em;color:#efe3c3}
+  #read .v2{font:italic 21px/1.25 var(--serif);color:#efe3c3;white-space:nowrap}
+  #read .s{font:12.5px var(--mono);color:var(--mute)}
+  #palWrap{position:relative;width:516px;height:206px;margin-top:2px}
+  #palWrap canvas{position:absolute;left:0;top:0;width:516px;height:206px}
+  #chip{display:none;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:-1px;box-shadow:0 0 0 1px rgba(255,255,255,.25)}
+  #ledger{display:grid;grid-template-columns:repeat(3,1fr);margin-top:30px;border-top:1px solid var(--faint);border-bottom:1px solid var(--faint)}
+  #ledger div{padding:11px 0 12px;border-left:1px solid var(--faint);padding-left:16px}
+  #ledger div:first-child{border-left:0;padding-left:0}
+  #ledger b{display:block;font:300 31px/1.1 var(--mono);color:#efe3c3}
+  #ledger span{font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+
+  #rec1,#rec2{font:13px/1.6 var(--mono);white-space:pre;height:21px;overflow:hidden}
+  #rec1{color:var(--ink);letter-spacing:.02em}#rec2{color:var(--mute)}
+
+  #controls{position:absolute;left:1332px;top:940px;width:516px;display:flex;gap:9px}
+  button{all:unset;cursor:pointer;box-sizing:border-box;height:34px;padding:0 15px;border:1px solid rgba(220,207,174,.3);border-radius:17px;
+         font-size:13px;letter-spacing:.05em;color:var(--ink);text-align:center;white-space:nowrap;transition:background .2s,border-color .2s}
+  #bPlay{min-width:72px}#bSpeed{min-width:54px}
+  button:hover{background:rgba(220,207,174,.12)}
+  button.on{background:var(--gold);border-color:var(--gold);color:#1a1208}
+  button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+  /* bottom: the whole sitting on one line */
+  #tl{position:absolute;left:72px;right:72px;top:1000px;height:60px}
+  #hit{position:absolute;left:0;right:0;top:0;height:30px;cursor:pointer;touch-action:none}
+  #track{position:absolute;left:0;right:0;top:14px;height:2px;border-radius:1px;background:var(--faint)}
+  #fill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:1px;background:var(--gold)}
+  #knob{position:absolute;left:0;top:9px;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:#f0e2ba;box-shadow:0 0 0 4px rgba(200,162,92,.22)}
+  .tick{position:absolute;top:10px;width:1px;height:10px;background:rgba(220,207,174,.4)}
+  .tlb{position:absolute;top:30px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);white-space:nowrap;transition:color .4s}
+  .tlb.cur{color:var(--ink)}
+
+  /* tall or narrow windows: just the panel and the controls */
+  body.compact #left,body.compact #right,body.compact #plate,body.compact .tlb{display:none}
+  body.compact #controls{left:50%;top:936px;width:auto;transform:translateX(-50%)}
+  body.compact #tl{left:36px;right:36px}
+</style>
+</head>
+<body>
+<div id="wall"></div>
+<canvas id="grain"></canvas>
+<div id="stage">
+  <div id="left">
+    <div class="lab">Painted in pure JavaScript</div>
+    <h1>Mona Lisa</h1>
+    <p id="sub">after Leonardo da Vinci, c.&nbsp;1503&ndash;19</p>
+    <p id="blurb">Every mark on the panel is one brush stroke laid down by code &mdash; <b id="nStrokes"></b> of them, biggest brush first.
+      <b>No image, no assets, no libraries, no network.</b> One file that paints.</p>
+    <div class="lab">The brushes</div>
+    <div id="rows"></div>
+    <div id="keys">
+      <span><kbd>space</kbd>pause</span><span><kbd>R</kbd>replay</span><span><kbd>S</kbd>speed</span><span><kbd>E</kbd>finish</span><br>
+      <span><kbd>L</kbd>raking light</span><span><kbd>M</kbd>sound</span><span>hover the panel to inspect &middot; scroll to zoom</span>
+    </div>
+  </div>
+
+  <div id="easel"><div id="frame"><canvas id="p"></canvas></div></div>
+  <div id="plate"><b>MONA LISA</b><i id="plateSub"></i></div>
+
+  <div id="right">
+    <div class="lab">Loupe</div>
+    <div id="lrow">
+      <div id="loupeWrap"><canvas id="loupe"></canvas></div>
+      <div id="read">
+        <div class="k">Stroke</div><div class="v" id="vStroke">0</div><div class="s" id="vOf"></div>
+        <div class="k">Per second</div><div class="v" id="vRate">0</div>
+        <div class="k">Brush</div><div class="v2" id="vBrush">&mdash;</div>
+        <div class="k">Elapsed</div><div class="v2" id="vTime">0:00</div>
+      </div>
+    </div>
+    <div class="cap" id="loupeCap"></div>
+    <div class="lab" style="margin-top:30px">Palette</div>
+    <div id="palWrap"><canvas id="pal0"></canvas><canvas id="pal1"></canvas></div>
+    <div class="cap" id="palCap"><i id="chip"></i></div>
+    <div id="ledger">
+      <div><b id="lImg">0</b><span>images</span></div>
+      <div><b id="lReq">0</b><span>network requests</span></div>
+      <div><b id="lExt">0</b><span>external files</span></div>
+    </div>
+    <div class="lab" style="margin-top:26px">Under the brush &middot; 12 bytes</div>
+    <div id="rec1">&mdash;</div><div id="rec2"></div>
+  </div>
+
+  <div id="controls">
+    <button id="bPlay" title="space">pause</button>
+    <button id="bReplay" title="R">replay</button>
+    <button id="bSpeed" title="S">1&times;</button>
+    <button id="bEnd" title="E">finish</button>
+    <button id="bLight" title="L">raking light</button>
+    <button id="bSound" title="M">sound</button>
+  </div>
+
+  <div id="tl"><div id="track"><div id="fill"></div></div><div id="knob"></div><div id="hit"></div></div>
+</div>
+<canvas id="o"></canvas>
+
+<script>
+/*__BRUSH__*/
+</script>
+<script>
+/*__TOOL__*/
+</script>
+<script>
+/*__STROKES__*/
+</script>
+<script>
+/*__APP__*/
+</script>
+</body>
+</html>
