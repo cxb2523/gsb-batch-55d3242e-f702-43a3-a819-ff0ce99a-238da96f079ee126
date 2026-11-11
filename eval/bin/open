@@ -1,0 +1,13 @@
+#!/bin/sh
+# A no-op `open`, first on PATH for every process a wave spawns.
+#
+# The models under test have bash, and a model asked to build a layout reasonably decides to look
+# at it — on macOS `open foo.html` launches the USER'S default browser. Measured during r004: a
+# `css-layout` run wrote `layout-demo.html` into its workspace and opened it, repeatedly, in the
+# face of someone who was not running the eval and had not asked to see it.
+#
+# Refusing loudly rather than silently: the model should learn its command did nothing, which is
+# information it can act on, and a silent success would have it believe the reader is looking at
+# something they are not.
+echo "open: disabled inside the ui4a eval — nothing was shown to anyone. Describe the file or read it back instead." >&2
+exit 1

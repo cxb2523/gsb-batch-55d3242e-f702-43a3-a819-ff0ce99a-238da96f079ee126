@@ -1,0 +1,122 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      increment:
+        description: Version increment
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - prepatch
+          - preminor
+          - premajor
+          - prerelease
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'MindLab-Research/dsh-generative-ui'
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - run: bun install --frozen-lockfile
+      # The bundle is what ships, and a factory that throws on load fails the whole plugin silently.
+      # This is everything `check` runs except `loads`, which needs a real dsh binary.
+      - run: bun run check:ci
+
+      - name: Bump package version
+        id: version
+        env:
+          INCREMENT: ${{ inputs.increment }}
+        run: |
+          bun pm version "$INCREMENT" --no-git-tag-version
+          version="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - run: bun pm pack --dry-run
+
+      - name: Commit and tag release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "release v${VERSION}"
+          git tag "$TAG"
+          git push origin "HEAD:${GITHUB_REF_NAME}" "$TAG"
+
+      - name: Pack package
+        id: pack
+        run: |
+          tarball_dir="$(mktemp -d)"
+          tarball="$(bun pm pack --destination "$tarball_dir" --quiet | awk 'NF { last = $0 } END { print last }')"
+          case "$tarball" in /*) tarball_path="$tarball" ;; *) tarball_path="$tarball_dir/$tarball" ;; esac
+          echo "tarball=$tarball_path" >> "$GITHUB_OUTPUT"
+
+      # Trusted publishing (OIDC): no NPM_TOKEN. The npm CLI detects the OIDC environment and
+      # exchanges the workflow's short-lived id-token for a registry token — but only if
+      # NODE_AUTH_TOKEN is ABSENT. Setting it (even to an empty secret) takes the legacy path,
+      # which is what failed here: `ENEEDAUTH … you need to authorize this machine`, after the
+      # release commit and tag had already been pushed.
+      #
+      # Four things all have to hold, and the first is not in this file:
+      #   1. npmjs.com → the package → Settings → Trusted Publisher: owner `MindLab-Research`,
+      #      repo `dsh-generative-ui`, workflow filename `publish.yml` (filename only, with the
+      #      extension), environment `npm`. All case-sensitive, and npm does NOT validate them
+      #      when saved — a typo only shows up as ENEEDAUTH at publish time.
+      #   2. `id-token: write` (declared above) and a GitHub-hosted runner. Self-hosted is unsupported.
+      #   3. npm >= 11.5.1 — the runner had 11.17.0, so this was never the problem.
+      #   4. `repository.url` in package.json matching this repo, which provenance also requires.
+      #
+      # DONE, and recorded because the failure it caused is not obvious from the error. A trusted
+      # publisher can only be attached to a package that already EXISTS, so the very first publish
+      # of a new name cannot use OIDC — a registry limitation, not a mistake in this file
+      # (npm/cli#8544; npm left first-publish out of the MVP on purpose, where PyPI and JSR both
+      # let you register a pending publisher). The 2026-08-24 run failed here with ENEEDAUTH for
+      # exactly that reason, having already built and packed a correct 0.0.1 tarball. Bootstrapped
+      # by hand on 2026-08-25: a placeholder `0.0.0` holds the name, the trusted publisher is
+      # attached, and nothing here needs a token again. And `workflow_dispatch` is named as a case where
+      # npm validates the CALLING workflow rather than the one running `npm publish`; that is only
+      # a mismatch for `workflow_call`, which this file does not use.
+      #
+      # --provenance is not passed: with trusted publishing the CLI attaches provenance by default.
+      # --access public is still required for the first publish of a new package name.
+      #
+      # The package name now EXISTS on npm and a trusted publisher is attached, which is the one
+      # thing OIDC could not bootstrap itself (npm/cli#8544 — first publish was left out of the
+      # MVP on purpose, so `0.0.0` was created by hand as a placeholder). From here every release
+      # is tokenless and carries provenance.
+      #
+      # Note what must NOT come back: a `NODE_AUTH_TOKEN` env on this step. An EMPTY one is not
+      # the same as an absent one — npm takes the legacy path either way and never attempts the
+      # OIDC exchange, so wiring it to an unset secret would silently disable trusted publishing
+      # while still appearing to work.
+      - name: Publish package
+        run: npm publish --access public "${{ steps.pack.outputs.tarball }}"

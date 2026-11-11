@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf8" />
+<div id="out"></div>
+<script type="module">
+  const log = (s) => {
+    document.getElementById("out").textContent += s + "\n";
+  };
+  const bust = (url, n) => `${url}${url.includes("?") ? "&" : "?"}ui4a-retry=${n}`;
+  // Exactly what GenUISurface's retryRef now does: same URL first, then busted on each attempt.
+  let ok = false;
+  for (let attempt = 0; attempt <= 3 && !ok; attempt++) {
+    const url = attempt === 0 ? "/dep.js" : bust("/dep.js", attempt);
+    try {
+      const m = await import(url);
+      ok = m.ready;
+      log(`attempt ${attempt}: SUCCEEDED`);
+    } catch (e) {
+      log(`attempt ${attempt}: failed`);
+    }
+  }
+  log("server saw " + (await (await fetch("/hits")).text()) + " requests for /dep.js");
+  log(ok ? "RECOVERED" : "never recovered");
+  window.__done = true;
+</script>

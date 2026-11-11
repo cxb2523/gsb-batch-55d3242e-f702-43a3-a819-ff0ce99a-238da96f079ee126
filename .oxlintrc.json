@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react", "import", "jsx-a11y"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "react/set-state-in-effect": "warn",
+    "import/no-unassigned-import": "off",
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "no-console": "off",
+    "no-shadow": "off",
+    "no-underscore-dangle": "off",
+    "no-unmodified-loop-condition": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/prefer-top-level-await": "off",
+    "import/no-empty-named-blocks": "off",
+    "unicorn/require-module-specifiers": "off",
+    "react-hooks/exhaustive-deps": "off"
+  },
+  "ignorePatterns": ["node_modules", "lib", "src/client/canvas/panel-css.ts", ".research", "test/cards/**", "test/cards-negative/**"]
+}

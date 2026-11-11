@@ -1,0 +1,500 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>问一次，记住答案</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+<script src="/umd/react.js"></script>
+<script src="/umd/react-dom.js"></script>
+<!--TOKENS-->
+<style>
+  :root {
+    --paper: #f4f5f7;
+    --raise: #ffffff;
+    --ink: #191b1f;
+    --dim: #5f666e;
+    --faint: #8b929a;
+    --rule: #dcdfe4;
+    --before: #8a5324;
+    --before-wash: #f6ede2;
+    --after: #1c6a5b;
+    --after-wash: #e3f0ec;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  :root[data-page="dark"] {
+    --paper: #121417;
+    --raise: #191c20;
+    --ink: #e7e9ec;
+    --dim: #9aa2ab;
+    --faint: #6d757e;
+    --rule: #2a2e34;
+    --before: #d09a5e;
+    --before-wash: #241d13;
+    --after: #6cc4ad;
+    --after-wash: #10231e;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a {
+    color: inherit;
+  }
+
+  .bar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    align-items: center;
+    padding: 10px max(20px, 4vw);
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule);
+  }
+  .bar .who {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-right: auto;
+  }
+  .seg {
+    display: flex;
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    overflow: hidden;
+  }
+  .seg button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--dim);
+    font: 500 12px/1 var(--mono);
+    padding: 7px 11px;
+    cursor: pointer;
+  }
+  .seg button + button {
+    border-left: 1px solid var(--rule);
+  }
+  .seg button[aria-pressed="true"] {
+    background: var(--ink);
+    color: var(--paper);
+  }
+  .ghost {
+    appearance: none;
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--dim);
+    font: 500 12px/1 var(--mono);
+    padding: 8px 11px;
+    cursor: pointer;
+  }
+  .ghost:hover {
+    color: var(--ink);
+  }
+  button:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid var(--after);
+    outline-offset: 2px;
+  }
+
+  main {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 max(20px, 4vw) 96px;
+  }
+  header.lede {
+    padding: 56px 0 8px;
+    max-width: 62ch;
+  }
+  header.lede h1 {
+    font-size: clamp(30px, 4.4vw, 46px);
+    line-height: 1.12;
+    margin: 0 0 14px;
+    text-wrap: balance;
+    letter-spacing: -0.02em;
+  }
+  header.lede p {
+    color: var(--dim);
+    margin: 0 0 10px;
+  }
+  .figures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 28px 40px;
+    margin: 30px 0 6px;
+    padding: 20px 0;
+    border-block: 1px solid var(--rule);
+  }
+  .fig {
+    min-width: 170px;
+  }
+  .fig b {
+    display: block;
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--after);
+  }
+  .fig span {
+    display: block;
+    font-size: 13px;
+    color: var(--dim);
+  }
+  .fig i {
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  section.pair {
+    padding-top: 54px;
+    scroll-margin-top: 60px;
+  }
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 14px;
+    margin-bottom: 6px;
+  }
+  .head h2 {
+    font-size: 21px;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 2px 9px;
+  }
+  .said {
+    margin: 0 0 22px;
+    color: var(--dim);
+    max-width: 72ch;
+  }
+  .said q {
+    color: var(--ink);
+    quotes: "「" "」";
+  }
+
+  .cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+    gap: 22px;
+    align-items: start;
+  }
+  .col {
+    min-width: 0;
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    background: var(--raise);
+    overflow: hidden;
+  }
+  .col > .cap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .col.b > .cap {
+    background: var(--before-wash);
+    color: var(--before);
+  }
+  .col.a > .cap {
+    background: var(--after-wash);
+    color: var(--after);
+  }
+  .cap .tag {
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .cap .note {
+    margin-left: auto;
+    color: inherit;
+    opacity: 0.8;
+    font-size: 11px;
+  }
+
+  .stagewrap {
+    padding: 18px 14px;
+    display: flex;
+    justify-content: center;
+    background: var(--dsw-alias-bg-base, var(--raise));
+  }
+  .stage {
+    width: 100%;
+    max-width: var(--stage-w, 440px);
+    container-type: inline-size;
+    color: var(--dsw-alias-label-primary, inherit);
+    font-family: var(--dsw-font-family, var(--sans));
+    font-size: 14px;
+  }
+  .stage:empty::after {
+    content: "编译中…";
+    display: block;
+    padding: 40px 0;
+    text-align: center;
+    font: 12px var(--mono);
+    color: var(--faint);
+  }
+
+  .acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .sent {
+    margin: 0;
+    padding: 0 14px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--dim);
+    word-break: break-word;
+  }
+  .sent b {
+    color: var(--after);
+    font-weight: 500;
+  }
+  .sent.none {
+    color: var(--faint);
+  }
+  details.src {
+    border-top: 1px solid var(--rule);
+  }
+  details.src > summary {
+    cursor: pointer;
+    padding: 10px 14px;
+    font: 500 12px var(--mono);
+    color: var(--dim);
+    list-style: none;
+  }
+  details.src > summary::-webkit-details-marker {
+    display: none;
+  }
+  details.src > summary::before {
+    content: "▸ ";
+    color: var(--faint);
+  }
+  details.src[open] > summary::before {
+    content: "▾ ";
+  }
+  details.src pre {
+    margin: 0;
+    padding: 0 14px 14px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.62;
+    tab-size: 2;
+  }
+  details.src pre em {
+    font-style: normal;
+    background: color-mix(in srgb, var(--after) 20%, transparent);
+    border-radius: 3px;
+    padding: 1px 2px;
+  }
+  .verdict {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+    padding: 13px 15px;
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--after);
+    border-radius: 0 10px 10px 0;
+    background: var(--raise);
+    color: var(--dim);
+    font-size: 14px;
+  }
+  .verdict b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  footer {
+    margin-top: 72px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .col {
+      transition: border-color 0.15s;
+    }
+  }
+</style>
+
+<div class="bar">
+  <span class="who">ui4a · r001 → r002 · 现场渲染</span>
+  <div class="seg" id="theme"><button data-v="light" aria-pressed="true">浅色</button><button data-v="dark" aria-pressed="false">深色</button></div>
+  <div class="seg" id="width"><button data-v="360" aria-pressed="false">360</button><button data-v="440" aria-pressed="true">440</button><button data-v="720" aria-pressed="false">720</button></div>
+  <button class="ghost" id="reload-all">全部刷新</button>
+  <button class="ghost" id="reset-all">清空记忆</button>
+</div>
+
+<main>
+  <header class="lede">
+    <h1>问一次，就别再问第二次</h1>
+    <p>同样的对话、同样的模型，只改了一句 prompt。左边是改之前模型写的卡片，右边是改之后的——都是真代码，在这一页里现场编译、现场渲染，可以直接点。</p>
+    <p>点几个选项，再按<strong>「刷新这张卡」</strong>：这是把整棵 React 树卸载重挂，等同于用户刷新页面。左边会退回到没人回答过的样子，右边记得。</p>
+    <div class="figures" id="figures"></div>
+  </header>
+  <div id="pairs"></div>
+  <footer>卡片源码取自 <code>~/.cache/ui4a-suite/rounds/r00{1,2}</code>，未作任何修改。渲染用的是插件自己的 <code>GenUISurface</code>（partial-tsx + partial-react），与 dsh 里跑的是同一套。</footer>
+</main>
+
+<script type="module">
+  const { GenUISurface, registerModules, registerUi4aHost } = await import("/surface.js");
+  const React = globalThis.React,
+    ReactDOM = globalThis.ReactDOM;
+  const pairs = await (await fetch("/data")).json();
+
+  // Real lucide when esm.sh answers — a stand-in glyph reads as a defect in the card, which is the
+  // one thing a comparison page must not invent. The shim is the offline fallback, not the default.
+  const icons = [...new Set(pairs.flatMap((p) => p.cards.flatMap((c) => [...(c.code.match(/import\s*\{([^}]*)\}\s*from\s*["']lucide-react["']/)?.[1] ?? "").matchAll(/[A-Z]\w*/g)].map((m) => m[0]))))];
+  const glyph = React.forwardRef((props, ref) => React.createElement("svg", { ref, width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": true, ...props }, React.createElement("circle", { cx: 8, cy: 8, r: 6, fill: "none", stroke: "currentColor", strokeWidth: 1.5 })));
+  const esmReachable = await fetch("https://esm.sh/lucide-react?target=es2022", { mode: "no-cors" }).then(
+    () => true,
+    () => false,
+  );
+  if (icons.length && !esmReachable) registerModules({ "lucide-react": Object.fromEntries(icons.map((n) => [n, glyph])) });
+
+  // One global host, but a click is synchronous — so whichever stage the pointer went down on is the
+  // stage whose card is calling `send`. Without this every message lands in one undifferentiated log
+  // and the page cannot show WHICH of the two cards spoke, which is half of what it is here to show.
+  let speaking = null;
+  document.addEventListener(
+    "pointerdown",
+    (e) => {
+      speaking = e.target.closest?.(".col") ?? null;
+    },
+    true,
+  );
+  registerUi4aHost({
+    send: (text) => {
+      const strip = speaking?.querySelector(".sent");
+      if (!strip) return;
+      strip.classList.remove("none");
+      strip.innerHTML = `<b>已发送 →</b> ${text.replace(/[<&]/g, (c) => ({ "<": "&lt;", "&": "&amp;" })[c])}`;
+    },
+    cwd: () => "/tmp/ui4a-compare",
+    sessionId: () => "ui4a-compare",
+  });
+
+  const el = (tag, attrs = {}, ...kids) => {
+    const node = Object.assign(document.createElement(tag), attrs);
+    for (const kid of kids.flat()) node.append(kid);
+    return node;
+  };
+  const KEY = /usePersistedState\s*(?:<[^>]*>)?\s*\(\s*(["'][^"']+["'])/g;
+
+  /** Mount one card, and hand back a `reload` that remounts it from scratch. */
+  const mountCard = (host, code) => {
+    let root = null;
+    const paint = () => {
+      root?.unmount();
+      host.textContent = "";
+      root = ReactDOM.createRoot(host);
+      root.render(React.createElement(GenUISurface, { code, streaming: false, preserveState: false }));
+    };
+    paint();
+    return paint;
+  };
+
+  const reloaders = [],
+    storageKeys = new Set();
+
+  for (const pair of pairs) {
+    const cols = el("div", { className: "cols" });
+    const section = el("section", { className: "pair" }, el("div", { className: "head" }, el("h2", { textContent: pair.title }), ...pair.chips.map((c) => el("span", { className: "chip", textContent: c }))), el("p", { className: "said", innerHTML: `用户说：<q>${pair.said}</q>` }), cols);
+
+    // Two columns is the before/after comparison; N columns is one round's models side by side.
+    // The page does not need to know which — a section is a title and a list of cards either way.
+    for (const [index, run] of pair.cards.entries()) {
+      const side = pair.cards.length === 2 ? (index === 0 ? "before" : "after") : "after";
+      const { label, note } = run;
+      for (const [, k] of run.code.matchAll(KEY)) storageKeys.add(JSON.parse(k.replace(/'/g, '"')));
+      const stage = el("div", { className: "stage" });
+      const sent = el("p", { className: "sent none", textContent: "还没点过" });
+      const reload = mountCard(stage, run.code);
+      reloaders.push(reload);
+      // The source is marked up rather than syntax-highlighted: the ONE line that differs between the
+      // two columns is the whole finding, and a full highlighter would bury it in six other colours.
+      const src = run.code.replace(/[<&]/g, (c) => ({ "<": "&lt;", "&": "&amp;" })[c]).replace(/(usePersistedState|\$dsh\/state)/g, "<em>$1</em>");
+      cols.append(
+        el(
+          "div",
+          { className: `col ${side[0]}` },
+          el("div", { className: "cap" }, el("span", { className: "tag", textContent: label }), el("span", { className: "note", textContent: note })),
+          el("div", { className: "stagewrap" }, stage),
+          el("div", { className: "acts" }, el("button", { className: "ghost", textContent: "刷新这张卡", onclick: reload })),
+          sent,
+          el("details", { className: "src" }, el("summary", { textContent: `源码 · ${run.code.split("\n").length} 行` }), el("pre", { innerHTML: src })),
+        ),
+      );
+    }
+    document.getElementById("pairs").append(section);
+  }
+
+  const FIGURES = [
+    ["+20.1", "记住答案的卡片", "14.0% → 33.8%，5.0× SE"],
+    ["−45.0", "记下了却在刷新后丢失", "58.8% → 11.3%，2.3× SE"],
+    ["+0.42", "判官给「交互」的分", "四模型评审，1.8× SE"],
+  ];
+  const isComparison = pairs.every((p) => p.cards.length === 2);
+  if (!isComparison) document.querySelector("header.lede").remove();
+  if (isComparison) document.getElementById("figures").append(...FIGURES.map(([n, t, s]) => el("div", { className: "fig" }, el("b", { textContent: n }), el("span", { textContent: t }), el("i", { textContent: s }))));
+
+  const seg = (id, apply) => {
+    const box = document.getElementById(id);
+    box.addEventListener("click", (e) => {
+      const hit = e.target.closest("button");
+      if (!hit) return;
+      for (const b of box.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b === hit));
+      apply(hit.dataset.v);
+    });
+  };
+  // The cards read the HOST's tokens, which sit on `body[data-ds-dark-theme]` exactly as dsh sets
+  // them — so one attribute has to flip both the page chrome and every card inside it.
+  seg("theme", (v) => {
+    document.documentElement.dataset.page = v;
+    document.body.toggleAttribute("data-ds-dark-theme", v === "dark");
+  });
+  seg("width", (v) => document.documentElement.style.setProperty("--stage-w", `${v}px`));
+  document.getElementById("reload-all").onclick = () => reloaders.forEach((f) => f());
+  document.getElementById("reset-all").onclick = () => {
+    for (const key of storageKeys) localStorage.removeItem(`dsh-genui:${key}`);
+    for (const strip of document.querySelectorAll(".sent")) {
+      strip.className = "sent none";
+      strip.textContent = "还没点过";
+    }
+    reloaders.forEach((f) => f());
+  };
+</script>

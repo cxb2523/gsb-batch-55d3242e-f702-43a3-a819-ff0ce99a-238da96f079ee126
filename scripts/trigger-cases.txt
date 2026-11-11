@@ -1,0 +1,33 @@
+# Prompts each trigger rule in src/prompt.ts claims should produce a card, taken from the rules'
+# own examples and from the corpus. `scripts/triggers.sh` runs them and reports the hit rate.
+#
+# These are the only rules with no screen behind them: a screen asks "is this card wrong?", and
+# these ask "should there have been a card at all?" — answerable only by generating one.
+#
+# **No demonstrative pronouns.** `比较一下这三个方案的成本` and `这个配色我想调一下` both got the
+# correct reply — "there is no such thing here" — and scored as rule failures. A standalone case
+# has no antecedent, so the thing being asked about must be named in the prompt itself. All four
+# misses in the 2026-08-24 run were this or the seed problem below; none was a rule.
+#
+# A third field, if present, is a seed directory copied into the workspace first. A prompt whose
+# SUBJECT is absent cannot measure a rule: `这个目录里都有啥` in an empty temp dir got the correct
+# answer ("basically empty, one 0-byte file") and scored as a rule failure. Browsing a set of one
+# is not browsing.
+A conversion is never asked once|换算一下 5 英里是多少公里
+A conversion is never asked once|98 华氏度是多少摄氏度
+A question does not have to say build|帮我算一下 30 年期 100 万贷款利率 4.2% 的月供
+A question does not have to say build|帮我算房贷：300万，30年，利率3.5%
+A plan is not prose|我想学吉他，从哪开始
+A plan is not prose|想开始跑步怎么循序渐进
+When they hand you an expression|这个 glob 会匹配到啥 src/**/*.{ts,tsx}
+When they hand you an expression|0 3 * * 1-5 这个 cron 是什么意思
+Asking for a few of something|给我五个猫名
+Asking for a few of something|周末晚饭吃什么好
+看看都有啥 is a request to browse|这个目录里都有啥|test/seed
+Visualise this is this block|用 inline 卡片画个柱状图，数据随便编五条
+A conversion is never asked once|5 公斤 3 两是多少磅
+A question does not have to say build|BMI 多少算超重
+A question does not have to say build|比较一下 t2.micro、t3.small、t3.medium 三种机型的月成本
+When they tell you they want to change|按钮的圆角我想调一下，看看多大合适
+看看都有啥 is a request to browse|有哪些文件，哪几个最大|test/seed
+Asking for a few of something|给我起几个产品名

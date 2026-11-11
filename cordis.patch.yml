@@ -1,0 +1,6 @@
+# Inserts one plugin row that mounts BOTH halves: the host side (serves the
+# @esm.sh/tsx wasm under /dsh-generative-ui/assets) and the browser side (the
+# client-modules node half scans dsh.client packages and serves lib/client.js).
+- insert:
+    - id: dsh-generative-ui
+      name: dsh-generative-ui

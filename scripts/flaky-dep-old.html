@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf8" />
+<div id="out"></div>
+<script type="module">
+  const log = (s) => {
+    document.getElementById("out").textContent += s + "\n";
+  };
+  // The OLD retryRef: same URL every time.
+  let ok = false;
+  for (let attempt = 0; attempt <= 3 && !ok; attempt++) {
+    try {
+      const m = await import("/dep.js");
+      ok = m.ready;
+      log(`attempt ${attempt}: SUCCEEDED`);
+    } catch {
+      log(`attempt ${attempt}: failed`);
+    }
+  }
+  log("server saw " + (await (await fetch("/hits")).text()) + " requests for /dep.js");
+  log(ok ? "RECOVERED" : "NEVER RECOVERED");
+  window.__done = true;
+</script>

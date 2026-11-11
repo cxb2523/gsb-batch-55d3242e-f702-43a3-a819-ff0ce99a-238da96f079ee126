@@ -1,0 +1,16 @@
+{
+  // `allowImportingTsExtensions` (the base config, and the source really does write `./x.ts`)
+  // requires `noEmit`, so declarations cannot be emitted from the same config that typechecks.
+  // `rewriteRelativeImportExtensions` is what makes the two compatible: it rewrites those
+  // specifiers to `.js` on the way out, which is what the emitted `.d.ts` must reference.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Everything that has to be true before a commit lands.
+#
+# Two mechanisms share this hook because a commit is now the last checkpoint before code leaves
+# this machine:
+#
+# - The record's own consistency checks, only when CLAUDE.md or docs/*.md is staged. Three times
+#   in one session a commit landed while `bun run audit` was failing — a stale denominator, a rate
+#   that no longer matched the corpus, a section inserted out of order. Each was caught minutes
+#   later and fixed in a follow-up commit, which is the cheap version; the expensive version is
+#   the one nobody notices, because a wrong number in this file is read as fact by everyone after.
+# - The full `bun run check`, unconditionally. It used to live in pre-push, written after pushing
+#   a red commit for the second time in one session: the failure count was on screen, in a
+#   `grep -c` I had just run, and I read past it. Judgement is not the control. It moved here
+#   because waiting at a commit was judged better than waiting at a push; the work is the same.
+#
+# The shuffled suite is the one step worth paying less for at a commit. `bun run check` runs the
+# whole suite in 20 random orders (37s of a 61s check, measured 2026-10-27); this hook runs 3.
+# Twenty orders is the audit that found four real order dependencies; three still catches a
+# coin-flip one seven times in eight, and `bun run check` stays the full-orders version.
+#
+# Build to a scratch dir: `lib/` is what a running wave measures, and replacing it mid-flight
+# makes that wave's verdicts mix two prompts. The check still compiles the whole tree, so it
+# proves exactly what it did before — it just does not overwrite the artefact something else
+# is reading.
+if git diff --cached --name-only | grep -qE '^(CLAUDE\.md|docs/.*\.md)$'; then
+  bun run audit >/dev/null 2>&1 || { echo "pre-commit: bun run audit fails — a quoted rate is stale"; bun run audit 2>&1 | tail -4; exit 1; }
+  bun test test/record-structure.test.ts >/dev/null 2>&1 || { echo "pre-commit: record structure is wrong (order, duplicate title, or a path that does not exist)"; bun test test/record-structure.test.ts 2>&1 | tail -6; exit 1; }
+fi
+if ! CHECK_SHUFFLED_RUNS=3 BUILD_OUTDIR="${TMPDIR:-/tmp}/dgu-precommit-build" bun run check > /tmp/precommit.log 2>&1; then
+  echo "pre-commit: 'bun run check' FAILED — not committing. Tail:"
+  grep -iE '\(fail\)|error' /tmp/precommit.log | head -5
+  echo "(full output in /tmp/precommit.log; --no-verify to override deliberately)"
+  exit 1
+fi

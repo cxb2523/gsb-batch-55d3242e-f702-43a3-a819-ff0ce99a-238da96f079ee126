@@ -1,0 +1,72 @@
+name: Deploy site
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "website/**"
+      - "scripts/site.ts"
+      # The build IS `bun run site` — the script string in package.json. Editing it without this
+      # line would change the build and not redeploy, silently.
+      - "package.json"
+      - "src/skill.ts"
+      - "src/contract.ts"
+      - "types/standalone/**"
+      - ".github/workflows/pages.yml"
+  # The same inputs on a pull request, so a change that breaks the build fails the PR rather than
+  # main. The list is written twice on purpose: an anchor here is one YAML feature away from a
+  # workflow GitHub refuses to parse, and that failure is silent until someone reads Actions.
+  pull_request:
+    paths:
+      - "website/**"
+      - "scripts/site.ts"
+      - "package.json"
+      - "src/skill.ts"
+      - "src/contract.ts"
+      - "types/standalone/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: pages
+  # A deploy already publishing is left to finish; the next run supersedes it. Cancelling it
+  # instead leaves the site half-published, which is what the official Pages template warns about
+  # with this same setting.
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      # Reads the Pages site's own metadata, and is where a repository without Pages enabled fails
+      # with a message naming that, rather than a deploy step failing later for a reason two steps
+      # removed from the cause. It cannot enable Pages itself: that needs a token other than
+      # GITHUB_TOKEN, so the setting stays a human's.
+      - uses: actions/configure-pages@v6
+      # No `bun install`: the build reads the .tsx, the committed stub map and its own source.
+      # `genui build` inlines everything, so the artifact is one HTML file.
+      - run: bun run site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: .site
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

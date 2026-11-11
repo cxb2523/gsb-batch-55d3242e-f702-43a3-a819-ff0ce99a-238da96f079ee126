@@ -1,0 +1,19 @@
+# Route the headless profile at macaron-v1-venti on the sd litellm gateway (:24000).
+# Hand-declared: pi-ai ships no catalog for this endpoint.
+- id: llm-pi-ai
+  config:
+    providers:
+      litellm-24000:
+        displayName: litellm 24000
+        api: openai-completions
+        baseURL: http://34.177.103.253:24000/v1
+        apiKeyEnv: LITELLM_24000_API_KEY
+        models:
+          - id: macaron-v1-venti
+            name: Macaron V1 Venti
+            contextWindow: 131072
+            maxTokens: 32768
+- id: agent-default-model
+  config:
+    provider: litellm-24000
+    model: macaron-v1-venti
