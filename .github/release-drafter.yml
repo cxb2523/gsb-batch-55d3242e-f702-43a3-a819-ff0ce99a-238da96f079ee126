@@ -1,0 +1,67 @@
+# Shared config for two workflows:
+#   - .github/workflows/pr-labeler.yml   (autolabeler only, on pull_request_target)
+#   - .github/workflows/release.yml      (version-resolver only, `dry-run: true`)
+#
+# Neither workflow uses release-drafter's own draft-release feature: this repo's release.yml
+# does its own version bump / CHANGELOG.md / tag / GitHub Release / publish, reading only the
+# `resolved-version` output. The name/tag/template/categories below are kept complete and
+# consistent anyway, in case release-drafter's own release body is ever wanted directly.
+
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+categories:
+  - title: '⚠️ Breaking Changes'
+    labels: ['major', 'breaking']
+  - title: '🚀 Features'
+    labels: ['feature', 'minor']
+  - title: '🐛 Bug Fixes'
+    labels: ['fix']
+  - title: '🧰 Maintenance'
+    labels: ['chore', 'dependencies']
+
+change-template: '- $TITLE (#$NUMBER)'
+exclude-labels:
+  - 'skip-changelog'
+
+version-resolver:
+  major:
+    labels: ['major', 'breaking']
+  minor:
+    labels: ['minor', 'feature']
+  patch:
+    labels: ['patch', 'fix', 'chore', 'dependencies']
+  default: patch
+
+# 'major'/'breaking' is deliberately not autolabeled from title/body text: a PR author writing
+# "breaking: ..." or "BREAKING CHANGE" in a description should not, by itself, ship a major version
+# bump. That label -- and therefore a major release -- is applied by hand only, when a human
+# explicitly decides this change is breaking.
+# Dependabot applies `major` on its own to a pull request whose dependency moved a major version;
+# release.yml removes a release-level label a bot put on a Dependabot pull request before it resolves
+# the version (.github/scripts/dependabot_release_labels.py, docs/decisions.md ADR-32).
+autolabeler:
+  - label: 'feature'
+    branch:
+      - '/^(feature|feat)\//i'
+    title:
+      - '/^(add|implement|wire|introduce|feat)\b/i'
+  - label: 'fix'
+    branch:
+      - '/^(fix|bugfix|hotfix)\//i'
+    title:
+      - '/^fix\b/i'
+  - label: 'chore'
+    branch:
+      - '/^(chore|docs|test|ci)\//i'
+    title:
+      - '/^(readme|docs?|chore|refactor|test|ci)(\(.*\))?[:\s]/i'
+    files:
+      - '*.md'
+      - 'docs/**'
+      - '.github/**'
+
+template: |
+  ## Changes
+
+  $CHANGES

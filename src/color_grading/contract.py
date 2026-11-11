@@ -1,0 +1,222 @@
+"""Machine-readable Skill / Capability / Tool contract (`color-grading skill --json`, alias `contract --json`).
+Derived from the same tables the code runs on (model.OPERATION_TYPES, executor.TOOL_FOR, errors.ERROR_TABLE);
+nothing is hand-maintained beside the implementation. Only operations this package actually executes appear here:
+there are no placeholder operations (STEP 1 of the design brief: contract/doctor expose implemented operations only)."""
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+from . import CONTRACT_SCHEMA_VERSION, DOCTOR_SCHEMA_VERSION, PACKAGE_NAME, REQUEST_SCHEMA_VERSION, RESPONSE_SCHEMA_VERSION, SKILL_ID, VERSION
+from .adapter import FLAG_ALTERNATIVES, FLAGS_USED, KNOWN_CONTRACT_VERSION, KNOWN_CONTRACT_VERSIONS, OPTIONAL_FLAGS, OPTIONAL_TOOL_FLAGS, REQUIRED_FLAGS, REQUIRED_TOOLS, TOOLS_USED
+from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
+from . import legalize as legalize_mod
+from . import ocio as ocio_mod
+from .executor import (ALPHA_GRADING_OPERATIONS, ALPHA_LINE_DEFAULT, ALPHA_LINE_ENCODERS, ALPHA_LINE_EXTENSIONS, ALPHA_LINE_FOR_CODEC, ALPHA_MODE, ALPHA_PIX_FMT_RE,
+                       DURATION_TOLERANCE, OPTIONAL_CHECKOUT_CAPABILITIES, REENCODING_OPERATIONS, TOOL_FOR, WORK_DIR_NAME)
+from .model import (CUBE_EXTENSIONS, FORBIDDEN_KEYS, ID_RE, MAX_LUT_BYTES, MAX_OPERATIONS, OPERATION_TYPES, OUTPUT_FORMATS, REF_RE,
+                    HLG_TRANSFER, OPERATION_ALIASES, TONEMAP_DEFAULT, TONEMAP_HLG_DEFAULT, TONEMAP_RULES, REQUEST_SCHEMA_ID, RETAG_TAGS, RETAG_TARGETS, TONEMAPS, UNSUPPORTED_OPERATIONS, X264_PRESETS)
+
+CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
+# request.shape's example type list, exactly as 0.4.0 published it (ADR-26: the `request` block is pinned by consumers)
+PINNED_SHAPE_TYPES = "HDR_TO_SDR|LUT_APPLY|RETAG|STRIP_DOVI|PRIMARY_CORRECTION"
+
+# Cross-repository Capability ids (kajisho5/AI-video-production-OS docs/SPEC.md
+# `CapabilityContract.provides`), matching the ids already assigned to this Skill's
+# operations in that project's own docs/CAPABILITY_MATRIX.md. Every operation type gets
+# one: this Skill has a single tool (`{SKILL_ID}/run`) and every operation always writes
+# a validated video artifact through it.
+#
+# `PRIMARY_CORRECTION` (ADR-15) postdates that matrix's own audit, so `color.
+# primary_correction` is this repository's own provisional id, following the matrix's
+# `<domain>.<verb>` convention exactly (same situation as motion-graphics-skill's `bug`/
+# `chapter` ids) -- to be reconciled if/when the OS-side matrix gains its own entry.
+CAPABILITY_IDS: Dict[str, str] = {
+    "HDR_TO_SDR": "color.hdr_to_sdr", "LUT_APPLY": "color.lut_apply", "RETAG": "color.retag", "STRIP_DOVI": "color.strip_dovi",
+    "PRIMARY_CORRECTION": "color.primary_correction", "OCIO_TRANSFORM": "color.ocio_transform",
+    "MATCH_CAMERA": "color.match_camera", "LEGALIZE": "color.legalize",
+}
+
+
+def capability_provides() -> List[Dict[str, str]]:
+    return [{"id": CAPABILITY_IDS[typ], "lifecycle": "EXPERIMENTAL", "tool_id": f"{SKILL_ID}/run", "operation": typ}
+            for typ in sorted(OPERATION_TYPES)]
+
+
+# The AI Video Production OS registry's `dependencies`: ffmpeg-skill, as a range of its contract_version (the one
+# versions this adapter reads: 1.0 for ffmpeg-skill 1.x/2.x, 2.0 for 3.x, ADR-21; ADR-19: what is actually needed is
+# checked flag by flag, not by package version).
+FFMPEG_SKILL_CONTRACT_RANGE = f">={KNOWN_CONTRACT_VERSION} <{int(KNOWN_CONTRACT_VERSIONS[-1].split('.')[0]) + 1}.0"
+
+
+def dependencies() -> List[Dict[str, Any]]:
+    return [{"skill_id": "ffmpeg-skill", "version_range": FFMPEG_SKILL_CONTRACT_RANGE, "range_of": "contract_version", "required": True,
+             "tools": [f"ffmpeg-skill/{t}" for t in REQUIRED_TOOLS], "optional_tools": [f"ffmpeg-skill/{t}" for t in OPTIONAL_TOOL_FLAGS]}]
+
+
+def optional_dependencies() -> List[Dict[str, Any]]:
+    """Python extras this skill can use, each needed by the operations listed; without one, only those are unavailable."""
+    return [{"extra": "ocio", "module": ocio_mod.MODULE, "package": "opencolorio", "licence": "BSD-3-Clause", "capability": ocio_mod.CAPABILITY,
+             "install": ocio_mod.INSTALL_HINT, "needed_by": sorted(t for t, (_, extra) in TOOL_FOR.items() if ocio_mod.CAPABILITY in extra)}]
+
+
+def operation_aliases() -> List[Dict[str, Any]]:
+    """ADR-20: request-level aliases, each resolved to its target operation type at validation (never an operation of its own)."""
+    return [{"type": a, "alias_of": s["operation"], "parameters": list(s["parameters"]), "description": s["description"],
+             "resolved_at": "validation; plan, identity, results and provenance name the target operation type"}
+            for a, s in sorted(OPERATION_ALIASES.items())]
+
+
+def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
+    """Every parameter is declared with one of the four scalar types (number, integer, string, boolean), the set a
+    consumer such as video-production-agent validates; a structured value travels as a string with a grammar (ADR-26)."""
+    d = {k: v for k, v in ps.items() if k in ("type", "required", "min", "max", "enum", "default", "description")}
+    if d.get("type") == "patches":
+        d["type"] = "string"
+        d["format"] = "x,y,w,h[/x,y,w,h](;...)"
+    return d
+
+
+def operation_specs() -> List[Dict[str, Any]]:
+    out = []
+    for typ, spec in OPERATION_TYPES.items():
+        tool, extra = TOOL_FOR[typ]
+        out.append({"type": typ, "description": spec["description"], "inputs": 1,
+                    "parameters": {k: _param_schema(v) for k, v in spec["parameters"].items()},
+                    "tool": f"ffmpeg-skill/{tool}", "required_capabilities": ["ffmpeg-skill", "ffmpeg", "ffprobe", *extra],
+                    "changes_duration": False, "changes_resolution": False, "deterministic": "content_equivalent"})
+    return out
+
+
+def skill_contract() -> Dict[str, Any]:
+    tools = [{"tool_id": f"{SKILL_ID}/run", "skill_id": SKILL_ID, "version": VERSION, "role": "execution",
+              "description": "Execute a typed ColorProject (operation graph) and write validated video artifacts with provenance",
+              "inputs": ["request document (stdin)"], "input_type": REQUEST_SCHEMA_ID, "produces_output": True, "writes_media": True, "deterministic": True,
+              "idempotency_hint": "content_equivalent; intermediates reused by deterministic operation id",
+              "operations": sorted(OPERATION_TYPES), "supports": {"dry_run": True, "timeout": True, "cancel": True, "validate": True},
+              "verification": "every artifact is probed (video stream, duration, resolution, colour tags measured and checked against the requested operation, sha256); "
+                              "HDR_TO_SDR checks the output is no longer tagged HDR, RETAG checks the exact tag triple, STRIP_DOVI checks the Dolby Vision side data is gone",
+              "provenance": "OBSERVED", "mutates_input": False, "delegates_to": [f"ffmpeg-skill/{t}" for t in TOOLS_USED]}]
+    return {
+        "schema": CONTRACT_SCHEMA_ID, "skill_id": SKILL_ID, "id": SKILL_ID, "name": PACKAGE_NAME, "package": PACKAGE_NAME, "version": VERSION,
+        "contract_version": CONTRACT_SCHEMA_VERSION, "kind": "execution", "role": "colour grading / colour correction execution (processing); not decision, not measurement, not automatic look/LUT selection",
+        "description": "Deterministic colour grading execution: HDR-to-SDR tone mapping, 3D .cube LUT application, colour-tag retagging, Dolby Vision RPU "
+                       "removal, typed primary colour correction (exposure/contrast/saturation/white balance/gamma/lift/gain/levels/curves) and OpenColorIO / "
+                       "ACES colour-space transforms (baked to a 3D LUT by the optional PyOpenColorIO, applied through ffmpeg-skill), executed as "
+                       "a typed operation graph through ffmpeg-skill's public contract, with output validation and provenance. Not an AI agent: it never "
+                       "decides which colour treatment, LUT or look to apply, nor which correction values to use.",
+        "repository": "https://github.com/kajisho5/color-grading-skill",
+        "not_provided": ["AI reasoning", "decisions", "production plans", "automatic colour grading", "automatic look selection", "automatic LUT selection",
+                         "image understanding", "scene/face detection", "automatic shot matching (MATCH_CAMERA fits camera B to a reference frame and time the caller names)", "automatic white balance (WHITE_BALANCE takes explicit temperature "
+                         "and tint values)", "container/format conversion (ffmpeg-skill/export)", "arbitrary ffmpeg filters",
+                         "shell execution", "network access"],
+        "tools": tools,
+        "provides": capability_provides(),
+        "dependencies": dependencies(),
+        "optional_dependencies": optional_dependencies(),
+        "operations": operation_specs(),
+        "operation_aliases": operation_aliases(),
+        "unsupported_operations": [{"type": t, "status": "not_implemented", "reason": r} for t, r in UNSUPPORTED_OPERATIONS.items()],
+        "output_formats": {f: {"extension": s["extension"], "note": "must match the source container; this skill does not convert containers"} for f, s in OUTPUT_FORMATS.items()},
+        "lut": {"format": "cube", "extensions": list(CUBE_EXTENSIONS), "max_bytes": MAX_LUT_BYTES, "hashed": "sha256, recorded in provenance",
+                "strength_range": [0.0, 1.0], "note": "a LUT is data read by ffmpeg's lut3d filter, never a filter string or executable; path policy applies (allowed_lut_roots)"},
+        "ocio": {"operation": "OCIO_TRANSFORM", "builtin_prefix": ocio_mod.BUILTIN_PREFIX, "default_config": ocio_mod.DEFAULT_CONFIG,
+                 "config_extensions": list(ocio_mod.CONFIG_EXTENSIONS), "lut_sizes": list(ocio_mod.LUT_SIZES), "default_lut_size": ocio_mod.DEFAULT_LUT_SIZE,
+                 "known_destination_tags": dict(ocio_mod.KNOWN_DESTINATION_TAGS),
+                 "execution": "PyOpenColorIO evaluates the transform on the cube's nodes only (no media); ffmpeg-skill/color --lut applies the cube, "
+                              "--retag writes the destination's tags when --lut's BT.709 tags are not them",
+                 "provenance": ["config (name, profile_version, resolved built-in or file sha256, serialized sha256)", "transform (source, destination or display/view, look)",
+                                "lut_size", "lut_sha256", "clamped_values", "accuracy (max/mean error against OpenColorIO's CPU processor on a test chart, 1/1023 units)"],
+                 "test_chart": ocio_mod.CHART_NAME},
+        "color_space": {"measured_fields": ["color_space", "color_primaries", "color_transfer", "color_range", "pix_fmt", "hdr", "dolby_vision"],
+                        "source": "ffmpeg-skill/probe (ffprobe); OBSERVED, never inferred", "retag_targets": list(RETAG_TARGETS), "retag_tags": {k: list(v) for k, v in RETAG_TAGS.items()},
+                        "note": "measurement of input/output colour information is kept separate from the RETAG / HDR_TO_SDR operations that change it (STEP 4 of the design brief)"},
+        "hdr_sdr": {"tonemap_curves": list(TONEMAPS), "peak_nits_range": [1.0, 10000.0], "desat_range": [0.0, 5.0],
+                    # ADR-31: reworded to say what 0.5.1 on does (ADR-28); a consumer pinning this block re-pins once
+                    "tone_mapping_selection": "an explicit typed parameter (tonemap curve, peak, desat) from the caller always wins; when the request "
+                                              "gives no tonemap, a fixed rule on the input's measured transfer picks it (hdr_sdr_defaults): mobius "
+                                              "for HLG (arib-std-b67), hable for PQ and any other or unknown transfer; never chosen from the picture",
+                    "hdr_detection": "measured via ffmpeg-skill/probe (bt2020_or_hdr, or hdr before 2.0: color_transfer/color_primaries); HDR_TO_SDR refuses a non-HDR source unless force is set"},
+        # ADR-28: the curve HDR_TO_SDR runs with when the request names none, in full (hdr_sdr.tone_mapping_selection
+        # names it in one line, ADR-31): an explicit curve is always used
+        "hdr_sdr_defaults": {"tonemap": {"when": "the request gives no tonemap", "by_input_transfer": {HLG_TRANSFER: TONEMAP_HLG_DEFAULT},
+                                         "otherwise": TONEMAP_DEFAULT, "explicit_wins": True, "rules": dict(TONEMAP_RULES),
+                                         "input_transfer": "the source's measured color_transfer, through STRIP_DOVI, or the transfer a RETAG "
+                                                           "writes; after any other operation it is not known up front (null) and the otherwise "
+                                                           "curve applies",
+                                         "recorded_as": "tonemap_selection {tonemap, rule, input_transfer} in plan steps, results and provenance; "
+                                                        "parameters.tonemap holds the curve that ran"}},
+        "alpha": {"preserved_by": ["RETAG", "STRIP_DOVI"], "refused_for": list(REENCODING_OPERATIONS), "pix_fmt_pattern": ALPHA_PIX_FMT_RE.pattern,
+                  "policy": "a source with an alpha plane is refused (UNSUPPORTED_FORMAT, reason alpha_not_preserved) for every operation that re-encodes "
+                            "through ffmpeg-skill/color without keeping the alpha; a stream copy keeps it and an output without it fails validation (alpha_lost). "
+                            "Where ffmpeg-skill/color has --keep-alpha, LUT_APPLY and PRIMARY_CORRECTION grade with the alpha kept (keep_alpha; "
+                            "docs/decisions.md ADR-25, ADR-30)",
+                  # ADR-30: additive keys; `refused_for` above stays the list for an ffmpeg-skill without --keep-alpha
+                  "keep_alpha": {"operations": list(ALPHA_GRADING_OPERATIONS), "requires": "ffmpeg-skill/color:keep-alpha (--keep-alpha, --alpha-codec, --alpha-mode)",
+                                 "refused_for_with_keep_alpha": [t for t in REENCODING_OPERATIONS if t not in ALPHA_GRADING_OPERATIONS],
+                                 "alpha_codec_by_input_codec": dict(ALPHA_LINE_FOR_CODEC), "alpha_codec_default": ALPHA_LINE_DEFAULT,
+                                 "containers": {k: list(v) for k, v in ALPHA_LINE_EXTENSIONS.items()}, "alpha_mode": ALPHA_MODE,
+                                 "encoders": dict(ALPHA_LINE_ENCODERS), "precision_bits": 8,
+                                 "precision": "ffmpeg-skill/color keeps the alpha at 8 bits: a deeper source alpha comes back within one 8-bit "
+                                              "code (a warning says so); an 8-bit alpha is bit-identical",
+                                 "not_detected": "a VP9 stream with an alpha layer probes as yuv420p through ffmpeg-skill/probe: it is graded without "
+                                                 "--keep-alpha and color's failed alpha step makes it a VALIDATION_ERROR (alpha_lost)",
+                                 "premultiplied_source": "not un-premultiplied: the source's colour is taken as straight, as ffmpeg-skill/color takes it",
+                                 "verification": "ffmpeg-skill/color's alpha step (written alpha against the source's, every frame) must pass, else "
+                                                 "VALIDATION_ERROR (alpha_lost / alpha_mismatch / alpha_unverified); the output must store an alpha plane",
+                                 "output": "the alpha line's pixel format (e.g. yuva444p12le for ProRes 4444) with the source's colour tags, not yuv420p",
+                                 "recorded_as": "alpha {kept, precision_bits, alpha_codec, alpha_mode, source_colour, tool, verification} in results and provenance"}},
+        # ADR-29: what LEGALIZE adds where the located ffmpeg-skill offers it; without it, the soft clip alone and no shares
+        "legalize": {"clamp": {"requires": "ffmpeg-skill/color:legalize", "how": "color --lut <soft clip> --legalize <profile>: one encode, clamped after the 4:2:0 conversion",
+                               "verification": "ffmpeg-skill/color's legal_levels step must pass (at most 1 % of one frame's luma or chroma samples out), else "
+                                               "VALIDATION_ERROR legal_levels_failed", "identity": "the clamp's profile (or null without it) is part of the operation identity"},
+                     "out_of_range_share": {"requires": "ffmpeg-skill/check:levels", "measured_on": ["the operation's input (before)", "the written file (after)"],
+                                            "keys": list(legalize_mod.LEVELS_KEYS), "not_measured": "{measured: false, reason} on a checkout without check --levels, "
+                                                                                                    "or when a file cannot be measured (an RGB picture)"}},
+        "optional_capabilities": list(OPTIONAL_CHECKOUT_CAPABILITIES),
+        "x264": {"crf_range": [0, 51], "presets": list(X264_PRESETS)},
+        "geometry": {"changes": "no implemented operation changes duration or frame geometry", "duration_tolerance": DURATION_TOLERANCE,
+                    "work_dir": f"<workspace>/{WORK_DIR_NAME}/<project_id>/"},
+        "execution": {"mode": "local", "canonical_invocation": ["color-grading", "run", "-", "--json"], "stdin": REQUEST_SCHEMA_ID,
+                      "stdout": f"exactly one {SKILL_ID}/response@{RESPONSE_SCHEMA_VERSION} document", "stderr": "diagnostics only",
+                      "executables": ["python3 <ffmpeg-skill>/scripts/{probe,color}.py (argv lists)"],
+                      "executable_resolution": "ffmpeg-skill directory: --ffmpeg-skill, COLOR_GRADING_FFMPEG_SKILL_DIR, VIDEO_AGENT_FFMPEG_SKILL_DIR, "
+                                               "~/.claude/skills/ffmpeg-skill, ./vendor/ffmpeg-skill, ../ffmpeg-skill; ffmpeg/ffprobe: PATH lookup by ffmpeg-skill",
+                      "shell": False, "arbitrary_executables": False, "arbitrary_filters": False, "network": False, "input_mutation": False, "ai": False},
+        "ffmpeg_skill": {"contract_version": KNOWN_CONTRACT_VERSION, "contract_versions_known": list(KNOWN_CONTRACT_VERSIONS), "version_window": None,
+                         "compatibility": "capability detection, no version window: a checkout of any version is used when every required flag is "
+                                          "present in its contract (or --help); doctor reports what was detected (docs/decisions.md ADR-19)",
+                         "tools_used": list(TOOLS_USED), "flags_used": {k: list(v) for k, v in FLAGS_USED.items()},
+                         "required_flags": {k: list(v) for k, v in REQUIRED_FLAGS.items()},
+                         "flag_alternatives": {t: {g: list(a) for g, a in groups.items()} for t, groups in FLAG_ALTERNATIVES.items()},
+                         "optional_flags": {t: {g: list(a) for g, a in groups.items()} for t, groups in OPTIONAL_FLAGS.items()},
+                         "probe_hdr_key": "bt2020_or_hdr when present (ffmpeg-skill >= 2.0), else hdr: BT.2020 primaries or a PQ/HLG transfer either way"},
+        "request": {"schema": REQUEST_SCHEMA_ID, "id_pattern": ID_RE.pattern, "reference_pattern": REF_RE.pattern, "forbidden_fields": sorted(FORBIDDEN_KEYS),
+                    "max_operations": MAX_OPERATIONS,
+                    "shape": {"schema": REQUEST_SCHEMA_ID, "project": {"project_id": "id", "source": {"source_id": "id", "path": "file"},
+                              "operations": [{"op_id": "id", "type": PINNED_SHAPE_TYPES, "input": "source|op:<id>", "parameters": {}}],
+                              "outputs": [{"output_id": "id", "operation": "source|op:<id>", "path": "file", "format": "mp4|mov|m4v|mkv", "overwrite?": False,
+                                           "expect?": {"width?": 1920, "height?": 1080, "duration?": 0, "duration_tolerance?": 0.2, "pix_fmt?": "yuv420p"}}]},
+                              "options?": {"reuse_intermediates?": True, "timeout?": 600}}},
+        "response": {"schema": f"{SKILL_ID}/response@{RESPONSE_SCHEMA_VERSION}", "success": {"ok": True, "status": "ok", "dry_run": "bool", "plan": "...", "results": "[OperationResult]", "outputs": "[output artifact + provenance]"},
+                     "failure": {"ok": False, "status": "error|cancelled", "error": {"code": "one of errors.codes", "message": "str", "retryable": "bool", "details": {}}}},
+        "provenance": {"per_operation": ["operation_id", "type", "tool", "tool_versions", "parameters", "input_hash", "output_hash", "status", "measurements", "tool_commands_observed", "lut (LUT_APPLY only)"],
+                       "per_output": ["skill", "skill_version", "tool_versions", "output_hash", "operations (chain)", "source (sha256)"],
+                       "identity": "sha256 over canonical JSON of {type, parameters, input identity, tool versions}; a LUT_APPLY identity uses the LUT's sha256, not its path; "
+                                   "the source's identity is its file sha256; no timestamps, no UUIDs"},
+        # additions to `provenance` and `request` live here, not in those blocks: video-production-agent pins them and treats
+        # any change there as a protocol change that makes this skill unavailable until it re-pins (its ADR-045; ADR-26)
+        "provenance_extensions": {"per_operation": ["lut (also OCIO_TRANSFORM, MATCH_CAMERA)", "ocio (OCIO_TRANSFORM)", "retagged (OCIO_TRANSFORM)",
+                                                    "reference (MATCH_CAMERA)", "measurements.delta_e2000 / fit / frames (MATCH_CAMERA)",
+                                                    "legalize (LEGALIZE: profile, limits, knee, lut_sha256, clamp {applied, tool, standard, verification, residual} "
+                                                    "or {applied: false, reason}, out_of_range_share {measured, tool, standard, unit, before, after} "
+                                                    "or {measured: false, reason})",
+                                                    "alpha (LUT_APPLY / PRIMARY_CORRECTION on an alpha source: kept, alpha_codec, alpha_mode, verification)",
+                                                    "tonemap_selection (HDR_TO_SDR: tonemap, rule request | hlg_default | default, input_transfer)"],
+                                  "identity": "OCIO_TRANSFORM: the config's serialized sha256 and the baked LUT's sha256; MATCH_CAMERA: the reference video's sha256; "
+                                              "LEGALIZE: the LUT's sha256 and the clamp's profile (null without the clamp)"},
+        "request_types": {"operation_types": sorted(OPERATION_TYPES), "aliases": sorted(OPERATION_ALIASES),
+                          "note": "request.shape lists the 0.4.0 types as an example; every type above is accepted"},
+        "schema_versions": {"contract": str(CONTRACT_SCHEMA_VERSION), "request": str(REQUEST_SCHEMA_VERSION), "response": str(RESPONSE_SCHEMA_VERSION), "doctor": str(DOCTOR_SCHEMA_VERSION)},
+        "errors": {"codes": list(ERROR_CODES), "exit_codes": dict(EXIT_CODES), "retryable": {c: ERROR_TABLE[c][1] for c in ERROR_CODES}, "success_exit_code": 0},
+        "deterministic": True,
+    }
