@@ -457,24 +457,24 @@ router.delete('/profiles/:profileId', (req, res) => {
         return res.sendStatus(500)
       }
 
-      if (row.user.toString() !== req.user.id) {
+      if (!row || row.user.toString() !== req.user.id) {
         return res.sendStatus(401)
       }
-
-      db.run('DELETE FROM profiles WHERE id = ?', [req.params.profileId], (err) => {
-        if (err) {
-          logger.error(err)
-          return res.sendStatus(500)
-        }
-      })
 
       db.run('DELETE FROM profiles_samples WHERE profile = ?', [req.params.profileId], (err) => {
         if (err) {
           logger.error(err)
           return res.sendStatus(500)
-        } else {
-          return res.sendStatus(200)
         }
+
+        db.run('DELETE FROM profiles WHERE id = ?', [req.params.profileId], (err) => {
+          if (err) {
+            logger.error(err)
+            return res.sendStatus(500)
+          }
+
+          return res.sendStatus(200)
+        })
       })
     })
   })

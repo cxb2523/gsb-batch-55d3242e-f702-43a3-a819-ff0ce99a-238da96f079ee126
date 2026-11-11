@@ -126,6 +126,10 @@ router.get('/samples/:sampleId', (req, res) => {
       return res.sendStatus(500)
     }
 
+    if (!row) {
+      return res.sendStatus(401)
+    }
+
     const sample = {}
 
     sample.id = row.id
@@ -152,7 +156,7 @@ router.put('/samples/:sampleId', (req, res) => {
         return res.sendStatus(500)
       }
 
-      if (row.user.toString() !== req.user.id) {
+      if (!row || row.user.toString() !== req.user.id) {
         return res.sendStatus(401)
       }
 
