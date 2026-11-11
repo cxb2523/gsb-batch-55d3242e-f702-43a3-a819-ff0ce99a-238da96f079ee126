@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="icon" type="image/png" href="assets/favicon/favicon-96x96.png" sizes="96x96">
+<link rel="icon" type="image/svg+xml" href="assets/favicon/favicon.svg">
+<link rel="shortcut icon" href="assets/favicon/favicon.ico">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+<link rel="canonical" href="https://neovid.top">
+<link rel="manifest" href="site.webmanifest">
+<link href="libs/fontawesome/css/all.min.css" rel="stylesheet" type="text/css">
+<link href="libs/sweetalert2/sweetalert2.min.css" rel="stylesheet" type="text/css">
+<link href="style.css" rel="stylesheet" type="text/css">
+<title>🎬 Neovid: Minimal Web Video Player</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-title" content="Neovid">
+<meta name="description" content="Neovid is a minimal, mobile-responsive video player that supports online and local playback with subtitle and progress tracking.">
+<meta name="author" content="Sepand Haghighi">
+<meta name="robots" content="index, follow">
+<meta property="og:site_name" content="Neovid">
+<meta property="og:title" content="Neovid: Minimal Web Video Player">
+<meta property="og:description" content="Play videos instantly from the web or your device with Neovid.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://neovid.top">
+<meta property="og:image" content="https://neovid.top/assets/og-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Neovid: Minimal Web Video Player">
+<meta name="twitter:description" content="Play videos instantly from the web or your device with Neovid.">
+<meta name="twitter:image" content="https://neovid.top/assets/og-preview.png">
+<meta name="theme-color" content="#ffffff">
+</head>
+<body>
+<div id="install-banner">
+<button id="install-button"><i class="fa-solid fa-download"></i> Install Neovid</button>
+<button id="close-install">&times;</button>
+</div>
+<h1><i class="fa-solid fa-clapperboard"></i> Neovid: Minimal Web Video Player</h1>
+<div class="version">Version 1.4</div>
+<div class="notice">
+<i class="fa-solid fa-triangle-exclamation"></i> <strong>Notice:</strong> Only external or local <code>.vtt</code>/<code>.srt</code> subtitle files are supported.<br>
+Embedded subtitles inside video files are not supported.
+</div>
+
+<form id="video-form">
+  <fieldset>
+    <legend>Video</legend>
+    <div class="switch-container">
+      <label for="video-load-type">Load Type:</label>
+      <select id="video-load-type">
+        <option value="url">URL</option>
+        <option value="local">Local File</option>
+      </select>
+    </div>
+    <input type="url" id="video-url" placeholder="Enter video URL">
+    <input type="file" id="video-file" accept="video/*" style="display:none" aria-label="Select local video file">
+  </fieldset>
+  <fieldset>
+    <legend>Subtitle (optional)</legend>
+    <div class="switch-container">
+      <label for="subtitle-load-type">Load Type:</label>
+      <select id="subtitle-load-type">
+        <option value="url">URL</option>
+        <option value="local">Local File</option>
+      </select>
+    </div>
+    <input type="url" id="subtitle-url" placeholder="Enter subtitle URL (.vtt/.srt)">
+    <input type="file" id="subtitle-file" accept=".vtt,.srt" style="display:none" aria-label="Select local subtitle file">
+  </fieldset>
+  <div class="action-buttons">
+    <button type="submit" id="play-button"><i class="fa-solid fa-play"></i> Play Video</button>
+    <button type="button" id="watch-later-button"><i class="fa-regular fa-clock"></i> Watch Later</button>
+    <button type="button" id="resume-button"><i class="fa-solid fa-rotate-left"></i> Resume Last</button>
+  </div>
+  <div class="download-buttons">
+    <button type="button" id="download-video-button"><i class="fa-solid fa-download"></i> Download Video</button>
+    <button type="button" id="download-subtitle-button"><i class="fa-solid fa-download"></i> Download Subtitle</button>
+  </div>
+</form>
+
+<div class="video-wrapper">
+  <video id="video-player" controls preload="auto"></video>
+  <button id="skip-button" aria-label="Skip video ending"><i class="fa-solid fa-forward"></i> Skip Ending</button>
+</div>
+
+<div class="watch-time-container">
+  <p id="watch-time-label">Total Watch Time</p>
+  <p id="watch-time" aria-live="polite"></p>
+  <button id="reset-watch-time-button" aria-label="Reset watch time" title="Reset watch time"> <i class="fa-solid fa-refresh"></i></button>
+</div>
+
+<div id="recent-list">
+  <p id="recent-header">Recently Played</p>
+  <div class="recent-actions">
+    <button id="export-button" type="button" aria-label="Export recently played list"><i class="fa-solid fa-file-export"></i> Export</button>
+    <button id="import-button" type="button" aria-label="Import recently played list"><i class="fa-solid fa-file-import"></i> Import</button>
+    <button id="remove-all-button" type="button" aria-label="Remove all recent videos"><i class="fa-solid fa-broom"></i> Remove All</button>
+    <input id="recent-file" type="file" accept="application/json" aria-label="Import recently played list file" hidden>
+  </div>
+  <div class="notice" id="recent-notice">
+      <p><i class="fa-solid fa-hard-drive"></i> Local Video</p>
+      <p><i class="fa-regular fa-file-lines"></i> Local Subtitle</p>
+      <p><i class="fa-solid fa-globe"></i> URL Video</p>
+      <p><i class="fa-solid fa-closed-captioning"></i> URL Subtitle</p>
+      <p><i class="fa-solid fa-check"></i> Completed Video</p>
+  </div>
+  <ul id="recent-items"></ul>
+</div>
+
+<footer>
+  &copy; 2026 <i class="fa-solid fa-clapperboard"></i> Neovid | Open-Source on 
+  <a href="https://github.com/sepandhaghighi/neovid" target="_blank" rel="noopener noreferrer">
+    GitHub
+  </a>
+</footer>
+
+<script src="libs/sweetalert2/sweetalert2.min.js"></script>
+<script src="script.js"></script>
+<!-- Default Statcounter code for Neovid https://www.neovid.top -->
+<script type="text/javascript">
+var sc_project=13184108; 
+var sc_invisible=1; 
+var sc_security="76eb29d4"; 
+</script>
+<script type="text/javascript"
+src="https://www.statcounter.com/counter/counter.js" async></script>
+<noscript><div class="statcounter"><a title="Web Analytics"
+href="https://statcounter.com/" target="_blank"><img class="statcounter"
+src="https://c.statcounter.com/13184108/0/76eb29d4/1/" alt="Web Analytics"
+referrerPolicy="no-referrer-when-downgrade"></a></div></noscript>
+<!-- End of Statcounter Code -->
+</body>
+</html>
