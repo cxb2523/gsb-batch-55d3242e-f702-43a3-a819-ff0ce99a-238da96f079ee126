@@ -1,0 +1,132 @@
+@import 'tailwindcss';
+
+/* One scheme only - the site is designed dark; light-mode phones got a broken white page. */
+:root {
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate(-3px, 2px) rotate(-1.2deg);
+  }
+  50% {
+    transform: translate(3px, -2px) rotate(1.2deg);
+  }
+  75% {
+    transform: translate(-2px, -3px) rotate(0.6deg);
+  }
+}
+
+.animate-shake {
+  animation: shake 0.16s infinite;
+}
+
+@keyframes creep-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 4px currentColor);
+    opacity: 0.82;
+  }
+  50% {
+    filter: drop-shadow(0 0 14px currentColor) drop-shadow(0 0 28px currentColor);
+    opacity: 1;
+  }
+}
+
+.animate-creep-glow {
+  animation: creep-glow 1.4s ease-in-out infinite;
+}
+
+@keyframes beak-talk {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(15deg);
+  }
+}
+
+.animate-beak {
+  animation: beak-talk 0.22s ease-in-out infinite;
+}
+
+@keyframes listen-pulse {
+  0% {
+    opacity: 0.28;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.15);
+  }
+}
+
+.animate-listen {
+  animation: listen-pulse 1.2s ease-out infinite;
+  transform-box: view-box;
+  transform-origin: 100px 130px;
+}
+
+@keyframes listen-ring {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 100;
+  }
+}
+
+.animate-listen-ring {
+  animation: listen-ring linear forwards;
+}
+
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-bob {
+  animation: bob 0.7s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shake,
+  .animate-creep-glow,
+  .animate-beak,
+  .animate-listen,
+  .animate-listen-ring,
+  .animate-bob {
+    animation: none;
+  }
+}

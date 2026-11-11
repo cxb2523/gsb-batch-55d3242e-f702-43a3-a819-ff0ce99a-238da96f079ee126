@@ -1,0 +1,190 @@
+'use client';
+
+import { useFrame, useThree } from '@react-three/fiber';
+import { useMemo, useRef, type RefObject } from 'react';
+import { type Group, Vector3 } from 'three';
+
+import type { PlayerLook } from '@/lib/crystal-player-look';
+import { collide, doorBox, PLAYER_R, type Level } from '@/lib/crystal-rooms-level';
+
+import type { MoveInput } from './controls';
+
+const SPEED = 4.6;
+const CAMERA_OFFSET = new Vector3(0, 6.5, 7.2);
+const PICKUP_DIST = 1.25;
+
+type Props = {
+  level: Level;
+  input: RefObject<MoveInput>;
+  collected: number[];
+  onCollect: (roomId: number) => void;
+  frozen: boolean;
+  look: PlayerLook;
+};
+
+function Hat({ hat }: { hat: PlayerLook['hat'] }) {
+  if (hat === 'wizard') {
+    return (
+      <mesh position={[0, 1.72, 0]} rotation={[0, 0, 0.08]}>
+        <coneGeometry args={[0.16, 0.34, 5]} />
+        <meshLambertMaterial color="#38bdf8" emissive="#38bdf8" emissiveIntensity={0.5} />
+      </mesh>
+    );
+  }
+  if (hat === 'crown') {
+    return (
+      <group position={[0, 1.62, 0]}>
+        <mesh>
+          <cylinderGeometry args={[0.2, 0.23, 0.13, 12]} />
+          <meshLambertMaterial color="#fbbf24" emissive="#fbbf24" emissiveIntensity={0.35} />
+        </mesh>
+        {[0, 2.09, 4.19].map((a) => (
+          <mesh key={a} position={[Math.sin(a) * 0.18, 0.12, Math.cos(a) * 0.18]}>
+            <coneGeometry args={[0.05, 0.13, 6]} />
+            <meshLambertMaterial color="#fbbf24" emissive="#fbbf24" emissiveIntensity={0.35} />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
+  if (hat === 'bow') {
+    return (
+      <group position={[0, 1.63, 0]}>
+        {[-1, 1].map((s) => (
+          <mesh key={s} position={[s * 0.13, 0, 0]} rotation={[0, 0, (s * Math.PI) / 2]}>
+            <coneGeometry args={[0.09, 0.2, 8]} />
+            <meshLambertMaterial color="#f472b6" emissive="#f472b6" emissiveIntensity={0.4} />
+          </mesh>
+        ))}
+        <mesh>
+          <sphereGeometry args={[0.06, 10, 8]} />
+          <meshLambertMaterial color="#ec4899" />
+        </mesh>
+      </group>
+    );
+  }
+  return null;
+}
+
+function Outfit({ look }: { look: PlayerLook }) {
+  if (look.outfit === 'dress') {
+    return (
+      <group>
+        <mesh position={[0, 0.78, 0]}>
+          <capsuleGeometry args={[0.26, 0.35, 6, 14]} />
+          <meshLambertMaterial color={look.color} />
+        </mesh>
+        <mesh position={[0, 0.34, 0]}>
+          <coneGeometry args={[0.48, 0.72, 16]} />
+          <meshLambertMaterial color={look.color} />
+        </mesh>
+      </group>
+    );
+  }
+  if (look.outfit === 'cape') {
+    return (
+      <group>
+        <mesh position={[0, 0.55, 0]}>
+          <capsuleGeometry args={[0.34, 0.45, 6, 14]} />
+          <meshLambertMaterial color={look.color} />
+        </mesh>
+        <mesh position={[0, 0.68, -0.27]} scale={[1, 1, 0.32]}>
+          <coneGeometry args={[0.42, 0.85, 12]} />
+          <meshLambertMaterial color={look.color} emissive={look.color} emissiveIntensity={0.25} />
+        </mesh>
+      </group>
+    );
+  }
+  return (
+    <mesh position={[0, 0.55, 0]}>
+      <capsuleGeometry args={[0.34, 0.45, 6, 14]} />
+      <meshLambertMaterial color={look.color} />
+    </mesh>
+  );
+}
+
+export function Player({ level, input, collected, onCollect, frozen, look }: Props) {
+  const group = useRef<Group>(null);
+  const facing = useRef(Math.PI);
+  const camera = useThree((s) => s.camera);
+  const lookTarget = useRef(new Vector3(level.start[0], 0.8, level.start[1]));
+
+  const colliders = useMemo(
+    () => [
+      ...level.walls,
+      ...level.pillars,
+      ...level.doors.filter((d) => !collected.includes(d.id)).map(doorBox),
+    ],
+    [level, collected]
+  );
+
+  useFrame((state, rawDelta) => {
+    const body = group.current;
+    if (!body) return;
+    const delta = Math.min(rawDelta, 0.05);
+    const move = input.current;
+    const moving = !frozen && (move.x !== 0 || move.z !== 0);
+
+    if (moving) {
+      const [nx, nz] = collide(
+        body.position.x + move.x * SPEED * delta,
+        body.position.z + move.z * SPEED * delta,
+        PLAYER_R,
+        colliders
+      );
+      body.position.x = nx;
+      body.position.z = nz;
+      const target = Math.atan2(move.x, move.z);
+      let diff = target - facing.current;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      facing.current += diff * Math.min(1, delta * 12);
+      body.rotation.y = facing.current;
+      body.position.y = Math.abs(Math.sin(state.clock.elapsedTime * 9)) * 0.08;
+    } else {
+      body.position.y += (0 - body.position.y) * Math.min(1, delta * 10);
+    }
+
+    for (const room of level.rooms) {
+      if (collected.includes(room.id)) continue;
+      const kx = room.center[0] + room.keyPos[0];
+      const kz = room.center[1] + room.keyPos[1];
+      if (Math.hypot(body.position.x - kx, body.position.z - kz) < PICKUP_DIST) {
+        onCollect(room.id);
+      }
+    }
+
+    const camTarget = new Vector3(body.position.x, 0, body.position.z).add(CAMERA_OFFSET);
+    const ease = 1 - Math.exp(-3.5 * delta);
+    camera.position.lerp(camTarget, ease);
+    lookTarget.current.lerp(new Vector3(body.position.x, 0.8, body.position.z), ease);
+    camera.lookAt(lookTarget.current);
+  });
+
+  return (
+    <group ref={group} position={[level.start[0], 0, level.start[1]]} rotation={[0, Math.PI, 0]}>
+      <pointLight position={[0, 3.2, -0.5]} intensity={26} distance={17} color="#dbeafe" />
+      <Outfit look={look} />
+      <mesh position={[0, 1.32, 0]}>
+        <sphereGeometry args={[0.3, 20, 16]} />
+        <meshLambertMaterial color="#fcd34d" />
+      </mesh>
+      {[-0.11, 0.11].map((x) => (
+        <group key={x}>
+          <mesh position={[x, 1.38, 0.26]}>
+            <sphereGeometry args={[0.06, 10, 8]} />
+            <meshLambertMaterial color="#ffffff" />
+          </mesh>
+          <mesh position={[x, 1.38, 0.31]}>
+            <sphereGeometry args={[0.028, 8, 6]} />
+            <meshLambertMaterial color="#1c1917" />
+          </mesh>
+        </group>
+      ))}
+      <Hat hat={look.hat} />
+      <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[0.42, 24]} />
+        <meshBasicMaterial color="#000000" transparent opacity={0.3} />
+      </mesh>
+    </group>
+  );
+}
