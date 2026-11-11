@@ -1,0 +1,50 @@
+{
+  "name": "@foleyjs/vue",
+  "version": "2.9.0",
+  "description": "Vue 3 bindings for Foley \u2014 sound effects for the interface, performed live.",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "peerDependencies": {
+    "@foleyjs/core": "^2.9.0",
+    "vue": ">=3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eakbulut/foley.git",
+    "directory": "packages/vue"
+  },
+  "homepage": "https://usefoley.dev/",
+  "keywords": [
+    "ui sounds",
+    "sound effects",
+    "web audio",
+    "interaction sounds",
+    "audio feedback",
+    "sound design",
+    "microinteractions",
+    "haptics",
+    "ui sound library",
+    "sound set",
+    "vue",
+    "directive",
+    "plugin"
+  ],
+  "author": "eakbulut",
+  "license": "MIT"
+}

@@ -1,0 +1,42 @@
+name: Deploy demo to GitHub Pages
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install dev dependencies
+        run: npm install --no-audit --no-fund
+      - name: Tests must pass before deploy
+        run: npm test
+      - name: Assemble site (demo only, no node_modules)
+        run: |
+          mkdir -p _site
+          npm run docs
+          cp index.html agents.md _site/
+          cp dist/docs.html _site/
+          cp -r src assets _site/
+          echo "usefoley.dev" > _site/CNAME
+          printf 'User-agent: *\nAllow: /\nSitemap: https://usefoley.dev/sitemap.xml\n' > _site/robots.txt
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>https://usefoley.dev/</loc></url>\n<url><loc>https://usefoley.dev/docs.html</loc></url>\n</urlset>\n' > _site/sitemap.xml
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: "_site"
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,2082 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foley: UI sound effects for JavaScript, synthesized live</title>
+<meta name="description" content="Add sound effects to any web interface. Foley is a tiny JavaScript library of 28 UI sounds synthesized live with Web Audio. No audio files. React and Vue too.">
+<link rel="canonical" href="https://usefoley.dev/">
+<meta name="theme-color" content="#FFE01B">
+<meta property="og:site_name" content="Foley">
+<meta property="og:title" content="Foley: UI sound effects, performed live">
+<meta property="og:description" content="Comics had to draw the KA-CHUNK. Your buttons get to make it. 28 interface cues synthesized in the browser, no audio files anywhere.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://usefoley.dev/">
+<meta property="og:image" content="https://usefoley.dev/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The word THOCK lettered in comic sound-effect type above the Foley wordmark">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Foley: UI sound effects, performed live">
+<meta name="twitter:description" content="28 interface cues synthesized in the browser with Web Audio. No audio files, one attribute per button.">
+<meta name="twitter:image" content="https://usefoley.dev/assets/og-image.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+{"@type":"SoftwareApplication","name":"Foley","url":"https://usefoley.dev/",
+"applicationCategory":"DeveloperApplication","operatingSystem":"Web","softwareVersion":"2.9.0",
+"license":"https://opensource.org/license/mit","isAccessibleForFree":true,
+"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},
+"sameAs":["https://github.com/eakbulut/foley","https://www.npmjs.com/package/@foleyjs/core"],
+"description":"A tiny, dependency-free JavaScript library of 28 UI interaction sounds synthesized live with Web Audio. Declarative data-foley attributes, React and Vue bindings, a visual cue designer, WAV export, and sound sets."},
+{"@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Does Foley ship audio files?","acceptedAnswer":{"@type":"Answer","text":"No. Every cue is built at play time from Web Audio oscillators and filtered noise, so there is nothing to download, cache, or license."}},
+{"@type":"Question","name":"How do I add a sound to a button?","acceptedAnswer":{"@type":"Answer","text":"Install @foleyjs/core, add an attribute such as data-foley-press to the button, and call bind() once at startup. bind() covers markup rendered later too."}},
+{"@type":"Question","name":"Will UI sounds annoy my users?","acceptedAnswer":{"@type":"Answer","text":"Foley is built not to. A master limiter caps loudness, a 60 ms cooldown stops repeats from stacking, pitch is humanized by up to 30 cents, loops go quiet in background tabs, and set({ muted: true }) silences everything."}},
+{"@type":"Question","name":"Does Foley work with React and Vue?","acceptedAnswer":{"@type":"Answer","text":"Yes. @foleyjs/react provides a useFoley() hook and @foleyjs/vue provides a plugin and a v-foley directive. Both wrap the same core."}},
+{"@type":"Question","name":"Can I design my own sounds?","acceptedAnswer":{"@type":"Answer","text":"Yes. Cues are data. Edit one in the cue designer or with getSpec() and playSpec(), export it as WAV or JSON, or ship a sound set: your product's sonic identity as JSON."}},
+{"@type":"Question","name":"Why does nothing play until I click?","acceptedAnswer":{"@type":"Answer","text":"Browsers block audio until a user gesture. bind() installs a one-time unlock listener, and play() resumes the audio context on its own."}}
+]}]}
+</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 1l3.6 7.4 8-2.6-2.6 8L32 16l-7 2.2 2.6 8-8-2.6L16 31l-3.6-7.4-8 2.6 2.6-8L0 16l7-2.2-2.6-8 8 2.6z' fill='%23FFE01B' stroke='%23121212' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="https://usefoley.dev/assets/apple-touch-icon.png">
+<link rel="preload" href="assets/fonts/bangers.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/schibsted-grotesk.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face{font-family:'Bangers';src:url(assets/fonts/bangers.woff2) format('woff2');font-display:swap}
+@font-face{font-family:'Patrick Hand SC';src:url(assets/fonts/patrick-hand-sc.woff2) format('woff2');font-display:swap}
+@font-face{font-family:'Schibsted Grotesk';src:url(assets/fonts/schibsted-grotesk.woff2) format('woff2');font-weight:400 900;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url(assets/fonts/jetbrains-mono.woff2) format('woff2');font-weight:100 800;font-display:swap}
+:root{
+  --paper:#FFFFFF;          /* bright stock: modern process printing, not newsprint */
+  --ink:#121212;            /* line art, lettering, body                         */
+  --ink-soft:#3B3B3B;
+  --ink-faint:#666663;
+  --rule:#DADAD6;           /* gutters inside instruments (canvas grids)          */
+  --yellow:#FFE01B;         /* process yellow: the page's signal colour          */
+  --yellow-deep:#F5C800;
+  --cyan:#0EA5D9;
+  --magenta:#E0137F;
+  --night:#121212;          /* night panels: code                                */
+  --night-ink:#F4F4F0;
+  --c-pointer:#F5B700;      /* family flats, coloured like a comic's spot plates */
+  --c-press:#E8362B;
+  --c-toggle:#2563EB;
+  --c-feedback:#13A04F;
+  --c-notify:#E0137F;
+  --c-motion:#0EA5D9;
+  --c-state:#7C3AED;
+  --err:#D7261E;
+  --line:3px;               /* panel border weight                               */
+  --gut:14px;               /* the one gutter, everywhere                        */
+  --sfx:'Bangers', 'Schibsted Grotesk', system-ui, sans-serif;
+  --hand:'Patrick Hand SC', 'Schibsted Grotesk', system-ui, sans-serif;
+  --body:'Schibsted Grotesk', system-ui, sans-serif;
+  --mono:'JetBrains Mono', ui-monospace, monospace;
+  --dots:radial-gradient(circle, rgb(18 18 18 / .16) 1.3px, transparent 1.7px);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+  .quotes-track{animation:none}
+}
+body{background:var(--paper);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;caret-color:var(--magenta)}
+::selection{background:var(--yellow);color:var(--ink)}
+:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
+html{scrollbar-color:var(--ink) var(--paper)}
+a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+kbd,code,pre{font-family:var(--mono)}
+.wrap{max-width:1280px;margin:0 auto;padding:0 24px}
+
+/* lettering: the SFX voice. Outline + extrusion in text-shadow so it works on any engine */
+.sfx{font-family:var(--sfx);font-weight:400;letter-spacing:.02em;line-height:.9;color:var(--fc,var(--yellow));
+  text-shadow:
+   -.035em -.035em 0 var(--ink), 0 -.035em 0 var(--ink), .035em -.035em 0 var(--ink), .035em 0 0 var(--ink),
+   .035em .035em 0 var(--ink), 0 .035em 0 var(--ink), -.035em .035em 0 var(--ink), -.035em 0 0 var(--ink),
+   .05em .06em 0 var(--ink), .065em .08em 0 var(--ink)}
+
+/* caption box: every panel names what it does */
+.cap{display:inline-block;font-family:var(--hand);font-size:16.5px;line-height:1.2;background:var(--yellow);border:2px solid var(--ink);padding:4px 9px}
+
+/* ============ masthead ============ */
+.top{position:sticky;top:0;z-index:50;background:var(--paper);border-bottom:var(--line) solid var(--ink)}
+.top-in{display:flex;align-items:center;gap:16px;height:68px}
+.logo{display:flex;align-items:baseline;text-decoration:none;font-size:38px;--fc:var(--yellow)}
+.ver{font-family:var(--mono);font-size:12px;font-weight:600;border:2px solid var(--ink);padding:3px 7px;white-space:nowrap;background:var(--paper)}
+.top-nav{margin-left:auto;display:flex;align-items:center;gap:2px}
+.top-nav a{font-weight:700;font-size:15px;text-decoration:none;padding:8px 11px;border-radius:8px;white-space:nowrap}
+.top-nav a:hover{background:var(--yellow)}
+.top-nav .gh{display:flex;align-items:center;gap:7px;border:2px solid var(--ink);margin-left:6px;padding:6px 11px}
+.menu-btn{display:none;margin-left:auto;background:var(--paper);border:2px solid var(--ink);border-radius:8px;width:44px;height:40px;align-items:center;justify-content:center}
+@media (max-width:1040px){ .nav-agents{display:none!important} }
+@media (max-width:920px){
+  .menu-btn{display:flex}
+  .top-nav{display:none;position:absolute;top:100%;left:0;right:0;flex-direction:column;align-items:stretch;gap:0;background:var(--paper);border-bottom:var(--line) solid var(--ink);padding:8px 16px 16px}
+  .top-nav.open{display:flex}
+  .top-nav a{padding:12px 8px;font-size:17px}
+  .top-nav .nav-agents{display:block!important}
+  .top-nav .gh{margin:8px 0 0;justify-content:center}
+}
+
+/* ============ splash ============ */
+.splash{margin-top:var(--gut);display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:var(--gut)}
+.panel{border:var(--line) solid var(--ink);background:var(--paper);min-width:0}
+.splash-copy{padding:40px 36px 34px;display:flex;flex-direction:column;gap:22px}
+h1{font-family:var(--sfx);font-weight:400;font-size:clamp(52px,6.4vw,92px);line-height:.92;letter-spacing:.01em;text-wrap:balance}
+h1 .lit{display:block;--fc:var(--yellow);font-size:1.08em}
+.lede{font-size:19px;line-height:1.5;color:var(--ink-soft);max-width:44ch}
+.lede strong{color:var(--ink)}
+.install{display:flex;align-items:center;gap:10px;background:var(--night);color:var(--night-ink);border:var(--line) solid var(--ink);padding:6px 6px 6px 16px;font-family:var(--mono);font-size:15px;max-width:440px}
+.install code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.install code b{color:var(--yellow);font-weight:600}
+.cta-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.hint-audio{align-self:flex-start;margin-top:auto}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:800;font-size:16px;line-height:1;text-decoration:none;padding:13px 20px;border:2.5px solid var(--ink);border-radius:10px;background:var(--paper);transition:transform .12s cubic-bezier(.2,.9,.3,1),background-color .15s}
+.btn:hover{background:var(--dots) 0 0/6px 6px,var(--yellow)}
+.btn:active{transform:translateY(2px)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-primary{background:var(--yellow)}
+.btn-primary:hover{background:var(--dots) 0 0/6px 6px,var(--yellow-deep)}
+.btn-sm{height:38px;padding:0 13px;font-size:14px;border-width:2px;border-radius:8px}
+.copy-btn{font-family:var(--body);font-weight:800;font-size:13px;border:2px solid var(--night-ink);background:transparent;color:var(--night-ink);border-radius:7px;padding:7px 11px}
+.copy-btn:hover{background:var(--yellow);color:var(--ink);border-color:var(--yellow)}
+
+/* the stage: the last cue, lettered. Its family colour floods the panel */
+.stage{--fc:var(--c-press);position:relative;overflow:hidden;min-height:520px;display:flex;flex-direction:column;container-type:inline-size;
+  background:radial-gradient(circle, color-mix(in srgb,var(--fc) 70%,var(--paper)) 2.2px, transparent 2.7px) 0 0/11px 11px, color-mix(in srgb,var(--fc) 22%,var(--paper));transition:background-color .2s}
+.stage-burst{position:absolute;left:50%;top:44%;width:min(96%,720px);transform:translate(-50%,-50%) rotate(-4deg);overflow:visible}
+.stage-burst polygon{fill:var(--paper);stroke:var(--ink);stroke-width:2.2;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.stage-word{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%) rotate(-5deg);white-space:nowrap;font-size:min(10rem,calc(88cqi / (var(--len,6) * .56)))}
+.stage.hit .stage-word{animation:slam .5s cubic-bezier(.16,1,.3,1)}
+.stage.hit .stage-burst{animation:burst .5s cubic-bezier(.16,1,.3,1)}
+@keyframes slam{0%{transform:translate(-50%,-50%) rotate(-11deg) scale(1.35)}100%{transform:translate(-50%,-50%) rotate(-5deg) scale(1)}}
+@keyframes burst{0%{transform:translate(-50%,-50%) rotate(4deg) scale(.82)}100%{transform:translate(-50%,-50%) rotate(-4deg) scale(1)}}
+.stage-cap{position:absolute;left:14px;top:14px}
+.hero-pills{position:absolute;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:16px;border-top:var(--line) solid var(--ink);background:var(--paper)}
+.hero-pill{font-family:var(--sfx);font-size:24px;letter-spacing:.03em;line-height:1;padding:9px 14px 7px;border:2.5px solid var(--ink);border-radius:999px;background:var(--paper);transform:rotate(var(--r,0deg));transition:transform .14s cubic-bezier(.2,.9,.3,1),background-color .15s}
+.hero-pill:hover{background:var(--pc);transform:rotate(0deg) scale(1.06)}
+.hero-pill:active{transform:scale(.96)}
+.hero-pill-hint{font-family:var(--hand);font-size:19px;margin-left:auto;display:flex;align-items:center;gap:6px}
+.hero-pill-hint svg{width:34px;height:18px}
+
+/* the floating word at the source of a sound */
+.pop-word{position:fixed;z-index:90;pointer-events:none;font-size:34px;transform:translate(-50%,-100%) rotate(var(--r));animation:popword .85s cubic-bezier(.16,1,.3,1) forwards}
+@keyframes popword{0%{opacity:0;transform:translate(-50%,-80%) rotate(var(--r)) scale(.4)}14%{opacity:1;transform:translate(-50%,-110%) rotate(var(--r)) scale(1.08)}70%{opacity:1}100%{opacity:0;transform:translate(-50%,-150%) rotate(var(--r)) scale(1)}}
+
+/* letters page: the testimonials as balloons */
+.letters{margin-top:var(--gut);display:grid;grid-template-columns:220px minmax(0,1fr);gap:var(--gut)}
+.letters-cap{padding:20px;display:flex;flex-direction:column;justify-content:center;gap:8px;background:var(--dots) 0 0/7px 7px,var(--yellow)}
+.letters-cap b{font-family:var(--sfx);font-weight:400;font-size:30px;line-height:1}
+.letters-cap span{font-family:var(--hand);font-size:16.5px;line-height:1.25}
+.quotes{overflow:hidden;padding:20px 0 18px}
+.quotes-track{display:flex;gap:28px;width:max-content;animation:marquee 70s linear infinite}
+.quotes:hover .quotes-track{animation-play-state:paused}
+@keyframes marquee{to{transform:translateX(-50%)}}
+.quote{width:300px;display:flex;flex-direction:column;gap:14px}
+.quote q{position:relative;display:block;font-family:var(--hand);font-size:18px;line-height:1.25;background:var(--paper);border:2.5px solid var(--ink);border-radius:26px;padding:14px 18px;quotes:none}
+.quote q::before,.quote q::after{content:"";position:absolute;left:34px;bottom:-16px;width:22px;height:16px;background:var(--ink);clip-path:polygon(0 0,100% 0,10% 100%)}
+.quote q::after{left:36.5px;bottom:-11px;width:16px;height:12px;background:var(--paper)}
+.who{font-family:var(--hand);font-size:16px;color:var(--ink-soft);padding-left:62px}
+
+/* ============ sections ============ */
+.block{margin-top:var(--gut);padding:64px 0 0}
+.blk-head{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:24px 48px;align-items:end;margin-bottom:32px}
+h2.blk{font-family:var(--sfx);font-weight:400;font-size:clamp(40px,4.6vw,64px);line-height:.95;letter-spacing:.01em;text-wrap:balance}
+.blk-sub{font-size:17px;color:var(--ink-soft);max-width:52ch}
+.blk-sub b,.blk-sub strong{color:var(--ink)}
+h3{font-family:var(--sfx);font-weight:400;font-size:28px;letter-spacing:.02em;line-height:1}
+
+/* ============ cue board: a page of 7 tiers ============ */
+.board{display:grid;gap:var(--gut)}
+.cat{display:grid;grid-template-columns:190px repeat(4,minmax(0,1fr));gap:var(--gut)}
+.chip-row{display:contents}
+.cat-head{border:var(--line) solid var(--ink);padding:14px;display:flex;flex-direction:column;gap:6px;background:color-mix(in srgb,var(--cc) 16%,var(--paper))}
+.cat-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--ink)}
+.cat-name{font-family:var(--sfx);font-size:28px;line-height:1;letter-spacing:.03em}
+.cat-desc{font-family:var(--hand);font-size:16px;line-height:1.2;color:var(--ink-soft);margin-top:auto}
+.chip{position:relative;min-width:0;border:var(--line) solid var(--ink);background:var(--paper);padding:12px 12px 12px;display:flex;flex-direction:column;gap:6px;cursor:pointer;transition:background-color .2s}
+.chip:hover{background:var(--dots) 0 0/7px 7px,var(--paper)}
+.chip kbd{position:absolute;top:10px;left:10px;font-size:12px;font-weight:600;min-width:24px;height:24px;display:grid;place-items:center;border:2px solid var(--ink);border-radius:6px;background:var(--paper)}
+.chip .nm{font-family:var(--sfx);font-size:34px;line-height:1;letter-spacing:.03em;margin-top:30px;transition:transform .2s cubic-bezier(.16,1,.3,1);transform-origin:0 100%}
+.chip .env{width:100%;height:28px;display:block}
+.chip .ds{font-size:13.5px;line-height:1.35;color:var(--ink-soft);margin-top:auto}
+.chip .dl{position:absolute;top:8px;right:8px;width:32px;height:32px;display:grid;place-items:center;border:2px solid transparent;border-radius:7px;background:none}
+.chip .dl:hover{border-color:var(--ink);background:var(--yellow)}
+.chip .dl.busy{animation:pulse .8s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.chip.playing{background:radial-gradient(circle, color-mix(in srgb,var(--cc) 75%,var(--paper)) 2px, transparent 2.5px) 0 0/9px 9px, color-mix(in srgb,var(--cc) 30%,var(--paper))}
+.chip.playing .nm{transform:scale(1.12) rotate(-3deg)}
+.board-tools{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:22px}
+.board-note{flex:1 1 380px;font-size:14px;color:var(--ink-soft)}
+.board-note kbd{font-size:12px;border:1.5px solid var(--ink);border-radius:5px;padding:0 5px}
+
+/* mixing desk */
+.inspector{margin-top:var(--gut);border:var(--line) solid var(--ink);display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:0}
+.insp-top,.insp-bottom{display:contents}
+.inspector .knob,.insp-toggles{padding:18px 20px;border-right:2px solid var(--ink);border-bottom:2px solid var(--ink)}
+.insp-top .knob{grid-column:span 2}
+.insp-toggles{border-right:0;display:flex;flex-direction:column;gap:10px;justify-content:center}
+.insp-bottom .knob{border-bottom:0}
+.insp-bottom .knob:last-child{border-right:0}
+.knob{display:flex;flex-direction:column;gap:9px;min-width:0}
+.knob label{display:flex;align-items:center;gap:8px;font-weight:800;font-size:14px}
+.knob output{margin-left:auto;font-family:var(--mono);font-size:13px;font-weight:600;background:var(--yellow);border:1.5px solid var(--ink);border-radius:5px;padding:1px 6px}
+.knob .sub{font-family:var(--hand);font-size:16px;color:var(--ink-soft);line-height:1.2}
+.seg{display:inline-flex;flex-wrap:wrap;border:2.5px solid var(--ink);border-radius:10px;overflow:hidden;background:var(--paper);align-self:flex-start;max-width:100%}
+.seg button{border:0;background:none;padding:9px 14px;font-weight:700;font-size:14.5px;border-right:2px solid var(--ink)}
+.seg button:last-child{border-right:0}
+.seg button:hover{background:var(--dots) 0 0/6px 6px,var(--paper)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.pill-toggle{display:flex;align-items:center;gap:10px;border:0;background:none;font-weight:700;font-size:14.5px;text-align:left}
+.pill-toggle .sw{flex:none;width:40px;height:24px;border:2.5px solid var(--ink);border-radius:999px;position:relative;background:var(--paper);transition:background-color .15s}
+.pill-toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--ink);transition:transform .18s cubic-bezier(.2,.9,.3,1)}
+.pill-toggle[aria-pressed="true"] .sw{background:var(--yellow)}
+.pill-toggle[aria-pressed="true"] .sw::after{transform:translateX(16px)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:12px;border:2px solid var(--ink);border-radius:999px;background:linear-gradient(90deg,var(--yellow) var(--fill,50%),var(--paper) var(--fill,50%));cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--paper);border:2.5px solid var(--ink)}
+input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--paper);border:2.5px solid var(--ink)}
+input[type=range]:active::-webkit-slider-thumb{background:var(--yellow)}
+.midi-bar{margin-top:var(--gut);display:flex;flex-wrap:wrap;align-items:center;gap:12px;border:2px dashed var(--ink);padding:12px 16px}
+.midi-bar label{font-weight:800;font-size:14px}
+.dz-seed{-webkit-appearance:none;appearance:none;height:38px;border:2px solid var(--ink);border-radius:8px;padding:0 34px 0 12px;font-weight:700;font-size:14px;min-width:0;max-width:100%;cursor:pointer;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23121212' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E") right 10px center/14px no-repeat,var(--paper)}
+.dz-seed:hover{background-color:var(--yellow)}
+.dz-set .dz-seed{flex:1 1 100%}
+.mini-status{font-family:var(--hand);font-size:16.5px;color:var(--ink-soft)}
+
+/* ============ playground: a 4x2 page ============ */
+.play-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--gut)}
+.demo-card{border:var(--line) solid var(--ink);padding:20px 18px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.demo-card p{font-size:14.5px;color:var(--ink-soft);min-height:4.4em}
+.demo-stage{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;min-height:110px;padding:16px;margin:0 -18px;background:var(--dots) 0 0/9px 9px,var(--paper)}
+.demo-stage .seg{flex-wrap:nowrap}
+.demo-stage .seg button{padding:8px 11px}
+.demo-card .attr{margin-top:auto;align-self:flex-start;font-family:var(--mono);font-size:12px;font-weight:600;background:var(--yellow);border:2px solid var(--ink);padding:3px 8px;max-width:100%;overflow-wrap:anywhere}
+.save-btn{font-weight:800;font-size:15px;padding:12px 18px;border:2.5px solid var(--ink);border-radius:10px;background:var(--yellow);transition:transform .08s}
+.save-btn:active{transform:translateY(3px) scale(.98)}
+.save-btn.done{background:var(--c-feedback);color:var(--paper)}
+.switch{width:60px;height:34px;border:2.5px solid var(--ink);border-radius:999px;background:var(--paper);position:relative;transition:background-color .15s}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:23px;height:23px;border-radius:50%;background:var(--ink);transition:transform .2s cubic-bezier(.2,.9,.3,1)}
+.switch[aria-pressed="true"]{background:var(--c-toggle)}
+.switch[aria-pressed="true"]::after{transform:translateX(26px);background:var(--paper);box-shadow:inset 0 0 0 2.5px var(--ink)}
+.type-input{width:100%;border:2.5px solid var(--ink);border-radius:10px;padding:11px 12px;font-size:15px;background:var(--paper)}
+.type-input::placeholder{color:var(--ink-faint)}
+.notif-stack{display:flex;flex-direction:column;gap:8px;width:100%}
+.notif-btn{display:flex;align-items:center;gap:10px;border:2px solid var(--ink);border-radius:9px;background:var(--paper);padding:8px 12px;font-weight:700;font-size:14.5px}
+.notif-btn:hover{background:var(--yellow)}
+.notif-btn .d{width:12px;height:12px;border-radius:50%;border:2px solid var(--ink)}
+.upload-zone{width:100%;border:2.5px dashed var(--ink);border-radius:10px;padding:14px;text-align:center;font-size:14px;font-weight:600;cursor:pointer;background:var(--paper)}
+.upload-zone.busy{border-style:solid}
+.upload-zone .bar{margin-top:10px;height:12px;border:2px solid var(--ink);border-radius:999px;overflow:hidden}
+.upload-zone .bar i{display:block;height:100%;width:0;background:var(--c-state);transition:width .16s}
+.stepper{display:flex;align-items:center;border:2.5px solid var(--ink);border-radius:10px;overflow:hidden;background:var(--paper)}
+.stepper button{width:46px;height:46px;border:0;background:none;font-size:22px;font-weight:800}
+.stepper button:hover{background:var(--yellow)}
+.stepper .val{min-width:52px;text-align:center;font-family:var(--sfx);font-size:30px;border-left:2px solid var(--ink);border-right:2px solid var(--ink);line-height:46px}
+
+/* ============ designer ============ */
+.designer{border:var(--line) solid var(--ink);padding:24px}
+.dz-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px}
+.dz-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:14px}
+.dz-row > label{font-weight:800;font-size:14px;min-width:74px}
+.dz-add,.dz-layer{border:2px solid var(--ink);border-radius:8px;background:var(--paper);padding:6px 11px;font-weight:700;font-size:14px;display:inline-flex;align-items:center;gap:6px}
+.dz-add:hover,.dz-layer:hover{background:var(--yellow)}
+#dz-presets{display:inline-flex;flex-wrap:wrap;gap:8px}
+.dz-layer[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.dz-params{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 24px;margin-top:6px}
+.dz-layers{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.dz-reroll{margin-left:6px;width:26px;height:26px;display:grid;place-items:center;border:2px solid var(--ink);border-radius:6px;background:var(--paper)}
+.dz-reroll:hover{background:var(--yellow)}
+.dz-reroll svg{width:13px;height:13px}
+.dz-modebtn,.dz-kill{margin-top:20px;border:0;background:none;font-weight:800;font-size:14.5px;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:4px}
+.dz-kill{color:var(--err);margin-right:16px}
+#dz-canvas{width:100%;height:200px;display:block;background:var(--dots) 0 0/9px 9px,var(--paper);border-bottom:2px solid var(--ink)}
+.dz-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.dz-set{margin-top:20px;border-top:2px solid var(--ink);padding-top:18px}
+.dz-set .dz-row{margin-bottom:0}
+.dz-note{margin-top:18px}
+
+/* ============ get started ============ */
+.steps{display:grid;gap:var(--gut)}
+.step{min-width:0}
+.step-head{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.step-num{width:44px;height:44px;flex:none;display:grid;place-items:center;border:2.5px solid var(--ink);border-radius:50%;background:var(--yellow);font-family:var(--sfx);font-size:26px;line-height:1;padding-top:3px}
+.pm-row{display:inline-flex;border:2.5px solid var(--ink);border-radius:10px;overflow:hidden;margin-bottom:12px}
+.pm-row button{border:0;border-right:2px solid var(--ink);background:var(--paper);padding:8px 14px;font-weight:700;font-size:14px}
+.pm-row button:last-child{border-right:0}
+.pm-row button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.api-cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--gut)}
+.api-cols.wide-right{grid-template-columns:minmax(0,5fr) minmax(0,7fr)}
+.code{position:relative;background:var(--night);color:var(--night-ink);border:var(--line) solid var(--ink);border-radius:0;padding:52px 20px 18px;font-size:13.5px;line-height:1.75;overflow-x:auto;white-space:pre;min-width:0}
+.code::before{content:attr(data-label);box-sizing:border-box;position:absolute;left:0;right:0;top:0;height:40px;border-bottom:2px solid #3A3A37;padding:10px 16px;font-family:var(--hand);font-size:16px;color:#C9C9C2}
+.code .copy-btn{position:absolute;top:5px;right:6px;height:28px;display:inline-flex;align-items:center;padding:0 10px;border:0;border-radius:6px;color:#C9C9C2;font-size:13px}
+.code .copy-btn:hover{background:var(--yellow);color:var(--ink)}
+.code .cm{color:#A3A39D}
+.code .kw{color:#FF7AB8}
+.code .st{color:var(--yellow)}
+.code .at{color:#6CD3FF}
+.code::-webkit-scrollbar{height:8px}
+.code::-webkit-scrollbar-thumb{background:#4A4A46;border-radius:4px}
+
+/* ============ questions ============ */
+/* one column: an opened answer never stretches a neighbour */
+.faq{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--gut);max-width:920px}
+.faq details{border:var(--line) solid var(--ink);min-width:0}
+.faq summary{list-style:none;cursor:pointer;display:flex;align-items:flex-start;gap:12px;padding:18px 20px;font-weight:800;font-size:17px;line-height:1.3}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"";flex:none;margin-left:auto;margin-top:2px;width:22px;height:22px;border:2px solid var(--ink);border-radius:6px;background:linear-gradient(var(--ink),var(--ink)) center/10px 2.5px no-repeat,linear-gradient(var(--ink),var(--ink)) center/2.5px 10px no-repeat,var(--yellow)}
+.faq details[open] summary{padding-bottom:10px}
+.faq details[open] summary::after{background:linear-gradient(var(--ink),var(--ink)) center/10px 2.5px no-repeat,var(--paper)}
+.faq summary:hover{background:var(--dots) 0 0/7px 7px,var(--paper)}
+.faq details p{padding:0 20px 20px;font-size:15.5px;color:var(--ink-soft);max-width:62ch}
+.faq code{font-size:.9em;background:var(--yellow);border:1.5px solid var(--ink);border-radius:4px;padding:0 4px}
+
+/* ============ the end ============ */
+.the-end{margin-top:var(--gut);display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:var(--gut)}
+.end-cap{position:absolute;left:14px;top:14px;background:var(--paper)}
+.end-word{position:relative;display:flex;align-items:center;justify-content:center;min-height:300px;overflow:hidden;background:radial-gradient(circle, var(--yellow-deep) 2.4px, transparent 2.9px) 0 0/11px 11px, var(--yellow);container-type:inline-size}
+.end-word .sfx{--fc:var(--paper);font-size:min(9rem,17cqi);transform:rotate(-4deg)}
+.end-copy{padding:32px;display:flex;flex-direction:column;justify-content:center;gap:18px}
+.end-copy h2{font-family:var(--sfx);font-weight:400;font-size:44px;line-height:.95}
+.end-copy p{color:var(--ink-soft);font-size:16px}
+
+footer.site{margin-top:var(--gut);border-top:var(--line) solid var(--ink);padding:26px 0 40px}
+.foot-in{display:flex;flex-wrap:wrap;gap:10px 32px;font-size:14px;color:var(--ink-soft)}
+.foot-in strong{color:var(--ink)}
+.foot-in a{font-weight:700;color:var(--ink)}
+
+/* toasts: balloons that arrive on their own */
+.toasts{position:fixed;right:20px;bottom:20px;z-index:85;display:flex;flex-direction:column;gap:12px;align-items:flex-end;pointer-events:none}
+.toast{display:flex;gap:12px;align-items:flex-start;width:min(340px,calc(100vw - 40px));background:var(--paper);border:2.5px solid var(--ink);border-radius:18px;padding:13px 16px;animation:toastin .35s cubic-bezier(.16,1,.3,1)}
+.toast .td{flex:none;width:14px;height:14px;border-radius:50%;border:2px solid var(--ink);margin-top:3px}
+.toast b{display:block;font-family:var(--sfx);font-weight:400;font-size:22px;letter-spacing:.03em;line-height:1}
+.toast span{font-size:14px;color:var(--ink-soft)}
+@keyframes toastin{from{opacity:0;transform:translateY(14px) rotate(2deg)}}
+.tour-stop{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:80}
+
+/* ============ responsive: shed, never wrap the frame ============ */
+@media (max-width:1180px){
+  .cat{grid-template-columns:150px repeat(4,minmax(0,1fr))}
+  .play-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:960px){
+  .splash{grid-template-columns:minmax(0,1fr)}
+  .stage{min-height:440px}
+  .blk-head{grid-template-columns:minmax(0,1fr);gap:14px}
+  .cat{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .cat-head{grid-column:1 / -1;flex-direction:row;align-items:center;gap:10px}
+  .cat-desc{margin:0 0 0 auto;text-align:right}
+  .inspector{grid-template-columns:minmax(0,1fr)}
+  .inspector .knob,.insp-toggles,.insp-top .knob{grid-column:auto;border-right:0;border-bottom:2px solid var(--ink)}
+  .insp-bottom .knob:last-child{border-bottom:0}
+  .dz-grid,.api-cols,.api-cols.wide-right,.the-end{grid-template-columns:minmax(0,1fr)}
+  .letters{grid-template-columns:minmax(0,1fr)}
+  .letters-cap{flex-direction:row;align-items:baseline;flex-wrap:wrap;gap:4px 12px;padding:14px 18px}
+}
+@media (max-width:600px){
+  :root{--gut:10px}
+  .wrap{padding:0 12px}
+  .top-in{height:60px;gap:10px}
+  .logo{font-size:32px}
+  .splash-copy{padding:26px 20px 24px}
+  .lede{font-size:17px}
+  .install{font-size:13px;padding-left:12px}
+  .block{padding:44px 0 0}
+  .stage{min-height:380px}
+  .hero-pill{font-size:20px;padding:8px 12px 6px}
+  .hero-pill-hint{margin-left:0;width:100%}
+  .play-grid{grid-template-columns:minmax(0,1fr)}
+  .seg{flex-wrap:nowrap}
+  .seg button{padding:8px 9px;font-size:13.5px}
+  .demo-card p{min-height:0}
+  .chip .nm{font-size:28px}
+  .cat-desc{display:none}
+  .designer{padding:16px}
+  .dz-params{grid-template-columns:minmax(0,1fr)}
+  .end-copy{padding:22px}
+}
+@media (max-width:380px){ .ver{display:none} }
+</style>
+<script data-goatcounter="https://foley.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+</head>
+<body>
+<!--
+THESIS: Comics solved silent sound by lettering it. Foley's cues are already onomatopoeia, so every cue is lettered as it plays; refuses the dark dev-library hero with a centered code block.
+OWN-WORLD: bright white stock, 3px ink panel line art, one 14px gutter, process yellow plus seven flat family plates, Ben-Day halftone floods, Bangers SFX lettering with ink outline and extrusion, Patrick Hand SC caption boxes and balloons, night panels for code.
+STORY: a developer or designer hears a cue in seconds, sees the word shaped by the sound, learns it is one attribute and no audio files, then installs or designs a sound set.
+FIRST VIEWPORT: masthead with lettered logo and issue box; splash of two panels, left caption with H1, lede, install line, actions; right the stage, a starburst with the last cue lettered by its real envelope, cue pills along its foot.
+FORM: grounded candidate 4 of 7 (Sound Words), seed ce1894a9.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+-->
+<header class="top">
+  <div class="wrap top-in">
+    <a class="logo sfx" href="#" aria-label="Foley home">FOLEY</a>
+    <span class="ver" title="Version and size, minified and gzipped">v2.9.0 · 7.6 kB</span>
+    <nav class="top-nav" id="top-nav" aria-label="Site">
+      <a href="#cues">Cues</a>
+      <a href="#playground">Playground</a>
+      <a href="#designer">Designer</a>
+      <a href="#start">Install</a>
+      <a href="https://usefoley.dev/docs.html">Docs</a>
+      <a class="nav-agents" href="agents.md" target="_blank" rel="noopener">agents.md</a>
+      <a class="gh" href="https://github.com/eakbulut/foley" target="_blank" rel="noopener" aria-label="Foley on GitHub">
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub
+      </a>
+    </nav>
+    <button class="menu-btn" id="menu-btn" aria-label="Menu" aria-expanded="false" aria-controls="top-nav">
+      <svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ============ SPLASH ============ -->
+  <section class="splash" aria-labelledby="hero-title">
+    <div class="panel splash-copy">
+      <h1 id="hero-title">UI sound effects, <span class="lit sfx">performed live.</span></h1>
+      <p class="lede">Comics had to draw the KA-CHUNK. Your buttons get to make it. Foley is a JavaScript library of <strong>28 cues</strong>, synthesized with Web Audio the moment someone clicks, types, or toggles. No audio files, no dependencies.</p>
+      <div class="install"><code id="hero-cmd"><b>$</b> npm install @foleyjs/core</code><button class="copy-btn" data-copy="#hero-cmd">copy</button></div>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#start" data-foley-click="complete">Get started</a>
+        <button class="btn" id="tour-btn"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M5 3l8 5-8 5z" fill="currentColor"/></svg> Play the tour</button>
+      </div>
+      <span class="cap hint-audio" id="audio-hint">Click anywhere once to unlock audio.</span>
+    </div>
+
+    <div class="panel stage" id="stage" data-cue="thock" aria-hidden="true">
+      <span class="cap stage-cap" id="stage-cap">press a cue, any cue</span>
+      <svg class="stage-burst" viewBox="-8 -2 216 124" preserveAspectRatio="none"><polygon points="204.9,60.0 175.6,66.4 193.3,76.2 155.8,75.1 176.8,89.2 156.6,89.0 165.7,104.8 134.5,91.7 143.3,116.1 120.2,100.7 113.4,115.3 100.0,99.9 86.8,114.3 80.9,98.5 57.3,115.4 61.4,95.6 33.0,105.7 51.6,84.8 22.4,89.5 32.1,78.4 8.8,75.8 39.2,65.2 -4.5,60.0 24.4,53.6 4.5,43.4 44.7,45.1 23.3,30.8 42.6,30.6 35.8,16.2 66.4,29.1 56.5,3.6 79.2,18.2 86.3,3.5 100.0,21.4 113.0,6.4 119.7,20.2 142.0,5.6 137.4,25.6 168.0,13.6 149.9,34.4 178.8,30.0 166.3,42.1 189.4,44.5 162.1,54.7"/></svg>
+      <span class="stage-word sfx" id="stage-word" style="--len:6">THOCK!</span>
+      <div class="hero-pills">
+        <button class="hero-pill" data-cue="chime" style="--pc:var(--c-notify);--r:-3deg">chime</button>
+        <button class="hero-pill" data-cue="thock" style="--pc:var(--c-press);--r:2deg">thock</button>
+        <button class="hero-pill" data-cue="success" style="--pc:var(--c-feedback);--r:-1deg">success</button>
+        <button class="hero-pill" data-cue="swoosh" style="--pc:var(--c-motion);--r:3deg">swoosh</button>
+        <button class="hero-pill" data-cue="sparkle" style="--pc:var(--c-state);--r:-2deg">sparkle</button>
+        <span class="hero-pill-hint"><svg viewBox="0 0 34 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M32 12C24 15 12 15 4 7M4 7l1 7M4 7l7-1"/></svg>go on, press one</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="letters" aria-label="Fictional testimonials, for fun">
+    <div class="panel letters-cap"><b>Letters page</b><span>All letters 100% synthesized, like everything else on this page.</span></div>
+    <div class="panel quotes">
+      <div class="quotes-track">
+        <figure class="quote"><q>I removed the entire visual UI. The app is sound only now. Revenue tripled.</q><figcaption class="who">a founder who has gone too far</figcaption></figure>
+        <figure class="quote"><q>We A/B tested ‘thock’. The B group unionized.</q><figcaption class="who">a growth lead, under oath</figcaption></figure>
+        <figure class="quote"><q>My cat answers to ‘chime’ now. I no longer control this household.</q><figcaption class="who">a cat owner, formerly in charge</figcaption></figure>
+        <figure class="quote"><q>The ‘denied’ thud healed something in me.</q><figcaption class="who">someone’s therapist, confused but supportive</figcaption></figure>
+        <figure class="quote"><q>I played ‘complete’ at my wedding. Even the CI pipeline wept.</q><figcaption class="who">a groom, deployed successfully</figcaption></figure>
+        <figure class="quote"><q>I put it on my smart fridge. ‘warning’ plays at 2am. I’ve lost ten pounds.</q><figcaption class="who">an unverifiable success story</figcaption></figure>
+        <figure class="quote" aria-hidden="true"><q>I removed the entire visual UI. The app is sound only now. Revenue tripled.</q><figcaption class="who">a founder who has gone too far</figcaption></figure>
+        <figure class="quote" aria-hidden="true"><q>We A/B tested ‘thock’. The B group unionized.</q><figcaption class="who">a growth lead, under oath</figcaption></figure>
+        <figure class="quote" aria-hidden="true"><q>My cat answers to ‘chime’ now. I no longer control this household.</q><figcaption class="who">a cat owner, formerly in charge</figcaption></figure>
+        <figure class="quote" aria-hidden="true"><q>The ‘denied’ thud healed something in me.</q><figcaption class="who">someone’s therapist, confused but supportive</figcaption></figure>
+        <figure class="quote" aria-hidden="true"><q>I played ‘complete’ at my wedding. Even the CI pipeline wept.</q><figcaption class="who">a groom, deployed successfully</figcaption></figure>
+        <figure class="quote" aria-hidden="true"><q>I put it on my smart fridge. ‘warning’ plays at 2am. I’ve lost ten pounds.</q><figcaption class="who">an unverifiable success story</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CUE BOARD ============ -->
+  <section class="block" id="cues" aria-labelledby="cues-title">
+    <div class="blk-head">
+      <h2 class="blk" id="cues-title">28 cues in 7 families. Press any of them.</h2>
+      <p class="blk-sub">Each family has its own material: noise for touch, glides for motion, harmonics for news. Every cue has a key, so you can also just start typing.</p>
+    </div>
+
+    <div class="board" id="board"><!-- built by JS --></div>
+
+    <!-- mixing desk -->
+    <div class="inspector" aria-label="Sound inspector">
+      <div class="insp-top">
+        <div class="knob">
+          <label id="theme-label">Theme <output id="o-theme">Default</output></label>
+          <div class="seg" id="theme-seg" role="group" aria-labelledby="theme-label">
+            <button aria-pressed="true" data-theme="default">Default</button>
+            <button aria-pressed="false" data-theme="soft">Soft</button>
+            <button aria-pressed="false" data-theme="mechanical">Mechanical</button>
+            <button aria-pressed="false" data-theme="glass">Glass</button>
+          </div>
+          <span class="sub">Reshapes all 28 cues at once. Exports follow.</span>
+        </div>
+        <div class="insp-toggles">
+          <button class="pill-toggle" id="hover-toggle" aria-pressed="false"><span class="sw" aria-hidden="true"></span>Play cues on hover</button>
+          <button class="pill-toggle" id="localize-toggle" aria-pressed="false"><span class="sw" aria-hidden="true"></span>Pan cues to where they sit</button>
+          <button class="pill-toggle" id="mute-toggle" aria-pressed="false"><span class="sw" aria-hidden="true"></span>Mute everything</button>
+        </div>
+      </div>
+      <div class="insp-bottom">
+        <div class="knob">
+          <label for="k-vol">Volume <output id="o-vol">70</output></label>
+          <input type="range" id="k-vol" min="0" max="100" value="70">
+          <span class="sub">Global loudness for every cue.</span>
+        </div>
+        <div class="knob">
+          <label for="k-pitch">Transpose <output id="o-pitch">0 st</output></label>
+          <input type="range" id="k-pitch" min="-12" max="12" value="0">
+          <span class="sub">Shift the library ±12 semitones.</span>
+        </div>
+        <div class="knob">
+          <label for="k-space">Space <output id="o-space">22</output></label>
+          <input type="range" id="k-space" min="0" max="100" value="22">
+          <span class="sub">Synthesized room reverb.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="board-tools">
+      <button class="btn btn-sm" id="export-all"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v7.5M4.5 6.5 8 10l3.5-3.5M3 13.5h10"/></svg> Download all 28 (.zip)</button>
+      <button class="btn btn-sm" id="export-sprite" title="One WAV with all 28 cues plus a JSON offset map"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v7.5M4.5 6.5 8 10l3.5-3.5M3 13.5h10"/></svg> Audio sprite</button>
+      <p class="board-note">Keyboard mode: <kbd>1</kbd>–<kbd>0</kbd>, <kbd>Q</kbd>–<kbd>P</kbd>, <kbd>A</kbd>–<kbd>K</kbd>. The download button on each cue saves a 16-bit .wav with your current transpose, space, and theme, ready for Figma, video, or a native app.</p>
+    </div>
+
+    <div class="midi-bar" id="midi-bar" hidden>
+      <label for="midi-cue">MIDI in</label>
+      <select class="dz-seed" id="midi-cue" title="The cue your keyboard plays, chromatically"></select>
+      <button class="btn btn-sm" id="midi-connect">Connect a device</button>
+      <span class="mini-status" id="midi-status">plug in a keyboard or pads; middle C plays the cue as tuned</span>
+    </div>
+  </section>
+
+  <!-- ============ PLAYGROUND ============ -->
+  <section class="block" id="playground" aria-labelledby="play-title">
+    <div class="blk-head">
+      <h2 class="blk" id="play-title">Hear it on real controls.</h2>
+      <p class="blk-sub">A cue sounds different on a grid of samples than on a button you meant to press. Every control here uses the same attributes and calls you would ship.</p>
+    </div>
+
+    <div class="play-grid">
+      <div class="demo-card">
+        <h3>Two-part press</h3>
+        <p>Down and up are different sounds, so a click feels like a mechanism. Hold it: the release waits for you.</p>
+        <div class="demo-stage">
+          <button class="save-btn" id="save-btn">Save changes</button>
+          <span class="mini-status" id="save-status">autosave off</span>
+        </div>
+        <span class="attr">data-foley-press · data-foley-release</span>
+      </div>
+
+      <div class="demo-card">
+        <h3>Toggle</h3>
+        <p>A click and a clack. On and off are siblings, not twins, so you hear the state without looking.</p>
+        <div class="demo-stage">
+          <button class="switch" id="demo-switch" role="switch" aria-pressed="false" aria-label="Notifications"></button>
+          <span class="mini-status" id="switch-status">notifications off</span>
+        </div>
+        <span class="attr">data-foley-toggle</span>
+      </div>
+
+      <div class="demo-card">
+        <h3>Hover ticks</h3>
+        <p>A grain of feedback as the pointer crosses each option. Turn on “play cues on hover” above to hear it.</p>
+        <div class="demo-stage">
+          <div class="seg" id="demo-seg" role="group" aria-label="View">
+            <button aria-pressed="true">Day</button>
+            <button aria-pressed="false">Week</button>
+            <button aria-pressed="false">Month</button>
+          </div>
+        </div>
+        <span class="attr">data-foley-hover="tick"</span>
+      </div>
+
+      <div class="demo-card">
+        <h3>Typing</h3>
+        <p>A soft mechanical thock per keystroke and a flourish on Enter. Try writing a sentence.</p>
+        <div class="demo-stage">
+          <input class="type-input" id="demo-type" type="text" placeholder="Type here, press Enter…" autocomplete="off" aria-label="Typing demo">
+        </div>
+        <span class="attr">data-foley-type="thock"</span>
+      </div>
+
+      <div class="demo-card">
+        <h3>Notifications</h3>
+        <p>Toasts sound because they mounted. The page never calls play() for them; observe() hears them arrive.</p>
+        <div class="demo-stage">
+          <div class="notif-stack">
+            <button class="notif-btn" data-toast="info"><span class="d" style="background:var(--c-notify)"></span>Message</button>
+            <button class="notif-btn" data-toast="success"><span class="d" style="background:var(--c-feedback)"></span>Deployed</button>
+            <button class="notif-btn" data-toast="error"><span class="d" style="background:var(--err)"></span>Failed</button>
+          </div>
+        </div>
+        <span class="attr">data-foley-enter="ping"</span>
+      </div>
+
+      <div class="demo-card">
+        <h3>Progress</h3>
+        <p>Ticks while the work happens, a rise as it finishes, then the arrival chord. Start an upload.</p>
+        <div class="demo-stage">
+          <div class="upload-zone" id="upload-zone" role="button" tabindex="0">
+            <span id="upload-label">Drop a file · or click to simulate</span>
+            <div class="bar"><i id="upload-bar"></i></div>
+          </div>
+        </div>
+        <span class="attr">play("rise") → play("complete")</span>
+      </div>
+
+      <div class="demo-card">
+        <h3>Stepper</h3>
+        <p>The same tick, re-pitched with the count, so quantity has a contour. Go past the limits to hear “denied”.</p>
+        <div class="demo-stage">
+          <div class="stepper">
+            <button id="step-down" aria-label="Fewer">−</button>
+            <span class="val" id="step-val">2</span>
+            <button id="step-up" aria-label="More">+</button>
+          </div>
+          <span class="mini-status">seats (1–8)</span>
+        </div>
+        <span class="attr">play("tick", { pitch })</span>
+      </div>
+
+      <div class="demo-card">
+        <h3>Slider</h3>
+        <p>Detent ticks that rise in pitch with the value: the sound of a thumb wheel.</p>
+        <div class="demo-stage" style="flex-direction:column;align-items:stretch">
+          <input type="range" id="demo-slider" min="0" max="20" value="8" aria-label="Brightness">
+          <span class="mini-status" id="slider-status">brightness 40%</span>
+        </div>
+        <span class="attr">play("tick", { pitch })</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CUE DESIGNER ============ -->
+  <section class="block" id="designer" aria-labelledby="dz-title">
+    <div class="blk-head">
+      <h2 class="blk" id="dz-title">Not your sound? Redraw it.</h2>
+      <p class="blk-sub">Four plain dials reshape any cue while you listen. Export a .wav or JSON, share it as a link, or apply it site-wide as a <b>sound set</b> your app loads in one line.</p>
+    </div>
+
+    <div class="designer">
+      <div class="dz-grid">
+        <div>
+          <div class="dz-row">
+            <label for="dz-seed">Start from</label>
+            <select class="dz-seed" id="dz-seed"></select>
+            <button class="dz-add" id="dz-surprise" title="Random cue, random dials"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.5"/><circle cx="5.5" cy="5.5" r=".6" fill="currentColor"/><circle cx="10.5" cy="10.5" r=".6" fill="currentColor"/><circle cx="8" cy="8" r=".6" fill="currentColor"/></svg>Surprise me</button>
+          </div>
+          <div class="dz-row" id="dz-presets-row">
+            <label>Or try</label>
+            <span id="dz-presets"></span>
+          </div>
+          <div id="dz-simple">
+            <div class="dz-params" id="dz-macros"></div>
+          </div>
+          <div id="dz-adv" hidden>
+            <div class="dz-layers" id="dz-layers"></div>
+            <div class="dz-params" id="dz-params"></div>
+            <button class="dz-kill" id="dz-kill">Remove this layer</button>
+          </div>
+          <button class="dz-modebtn" id="dz-mode">Fine-tune the layers →</button>
+        </div>
+        <div>
+          <canvas id="dz-canvas" aria-label="Envelope preview"></canvas>
+          <div class="dz-actions">
+            <button class="btn btn-primary btn-sm" id="dz-play"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M5 3l8 5-8 5z" fill="currentColor"/></svg> Play</button>
+            <button class="btn btn-sm" id="dz-wav">.wav</button>
+            <button class="btn btn-sm" id="dz-json">.json</button>
+            <button class="btn btn-sm" id="dz-code">Copy code</button>
+            <button class="btn btn-sm" id="dz-import">Import</button>
+            <button class="btn btn-sm" id="dz-link">Copy link</button>
+            <input type="file" id="dz-file" accept=".json,application/json" hidden>
+          </div>
+          <div class="dz-set">
+            <div class="dz-row"><label>Sound set</label><span class="mini-status" id="set-status">no overrides yet</span></div>
+            <div class="dz-actions">
+              <select class="dz-seed" id="set-cue" title="Which cue this design replaces site-wide" aria-label="Cue to replace"></select>
+              <button class="btn btn-sm" id="set-apply">Use site-wide</button>
+              <button class="btn btn-sm" id="set-json">Save set</button>
+              <button class="btn btn-sm" id="set-import">Import set</button>
+              <button class="btn btn-sm" id="set-link">Copy set link</button>
+              <button class="btn btn-sm" id="set-clear">Clear</button>
+              <input type="file" id="set-file" accept=".json,application/json" hidden>
+            </div>
+          </div>
+          <p class="cap dz-note" id="dz-note">Space replays. Exports honor your transpose, space, and theme, and designs live in the URL, so a copied link carries the sound.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ GET STARTED ============ -->
+  <section class="block" id="start" aria-labelledby="start-title">
+    <div class="blk-head">
+      <h2 class="blk" id="start-title">Install, add an attribute, bind. That's the job.</h2>
+      <p class="blk-sub">Foley ships as one ES module. Attributes cover the common cases, play() covers the rest, and the React and Vue bindings wrap the same core.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-head"><span class="step-num">1</span><h3>Install</h3></div>
+        <div class="pm-row" role="group" aria-label="Package manager">
+          <button aria-pressed="true" data-pm="npm">npm</button>
+          <button aria-pressed="false" data-pm="pnpm">pnpm</button>
+          <button aria-pressed="false" data-pm="yarn">yarn</button>
+          <button aria-pressed="false" data-pm="bun">bun</button>
+        </div>
+        <pre class="code" id="install-code" data-label="terminal"><button class="copy-btn" data-copy="#install-cmd">copy</button><span id="install-cmd">$ npm install @foleyjs/core</span></pre>
+      </div>
+
+      <div class="step">
+        <div class="step-head"><span class="step-num">2</span><h3>Mark up and bind</h3></div>
+        <div class="api-cols wide-right">
+          <pre class="code" data-label="index.html"><button class="copy-btn" data-copy="#code-html">copy</button><code id="code-html"><span class="cm">&lt;!-- one attribute per behavior --&gt;</span>
+&lt;button <span class="at">data-foley-press</span> <span class="at">data-foley-release</span>&gt;Save&lt;/button&gt;
+&lt;a <span class="at">data-foley-hover</span>=<span class="st">"tick"</span>&gt;Docs&lt;/a&gt;
+&lt;button <span class="at">data-foley-toggle</span>&gt;Dark mode&lt;/button&gt;
+&lt;input <span class="at">data-foley-type</span>=<span class="st">"thock"</span>&gt;
+<span class="cm">&lt;!-- and things nobody clicked --&gt;</span>
+&lt;div <span class="at">data-foley-enter</span>=<span class="st">"bubble"</span>&gt;Saved&lt;/div&gt;</code></pre>
+          <pre class="code" data-label="main.js"><button class="copy-btn" data-copy="#code-js">copy</button><code id="code-js"><span class="kw">import</span> { bind, observe, play, set } <span class="kw">from</span> <span class="st">"@foleyjs/core"</span>;
+
+bind();                     <span class="cm">// wires every data-foley-*</span>
+observe();                  <span class="cm">// …and elements appearing or changing state</span>
+set({ volume: 0.7,          <span class="cm">// 0 – 1</span>
+      transpose: 0,         <span class="cm">// semitones, ±12</span>
+      space: 0.2,           <span class="cm">// reverb send</span>
+      theme: <span class="st">"glass"</span> });    <span class="cm">// a name, or your sound set object</span>
+
+play(<span class="st">"complete"</span>);           <span class="cm">// any of the 28 cues</span>
+set({ theme: brandSet });   <span class="cm">// load your identity from the designer</span>
+play(<span class="st">"tick"</span>, { pitch: 4, volume: 0.3 });
+
+<span class="kw">const</span> wav = <span class="kw">await</span> toWav(<span class="st">"chime"</span>); <span class="cm">// Blob, rendered offline</span></code></pre>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-head"><span class="step-num">3</span><h3>In React or Vue</h3></div>
+        <div class="api-cols">
+          <pre class="code" data-label="App.jsx"><button class="copy-btn" data-copy="#code-react">copy</button><code id="code-react"><span class="cm">// npm install @foleyjs/react</span>
+<span class="kw">import</span> { useFoley } <span class="kw">from</span> <span class="st">"@foleyjs/react"</span>;
+
+<span class="kw">function</span> App() {
+  <span class="kw">const</span> { play } = useFoley({ volume: 0.7 });
+  <span class="kw">return</span> &lt;button onClick={() =&gt; play(<span class="st">"success"</span>)}&gt;
+    Save
+  &lt;/button&gt;;
+}</code></pre>
+          <pre class="code" data-label="main.js · any template"><button class="copy-btn" data-copy="#code-vue">copy</button><code id="code-vue"><span class="cm">// npm install @foleyjs/vue</span>
+<span class="kw">import</span> { FoleyPlugin } <span class="kw">from</span> <span class="st">"@foleyjs/vue"</span>;
+app.use(FoleyPlugin, { theme: <span class="st">"soft"</span> });
+
+<span class="cm">&lt;!-- then in any template --&gt;</span>
+&lt;button <span class="at">v-foley</span>=<span class="st">"'success'"</span>&gt;Save&lt;/button&gt;
+&lt;a <span class="at">v-foley:hover</span>=<span class="st">"'tick'"</span>&gt;Docs&lt;/a&gt;</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ QUESTIONS ============ -->
+  <section class="block" id="faq" aria-labelledby="faq-title">
+    <div class="blk-head">
+      <h2 class="blk" id="faq-title">Questions people actually ask.</h2>
+      <p class="blk-sub">The short answers. The <a href="https://usefoley.dev/docs.html">docs</a> have the long ones, and <a href="agents.md" target="_blank" rel="noopener">agents.md</a> has the version for your coding agent.</p>
+    </div>
+    <div class="faq">
+      <details><summary>Does Foley ship audio files?</summary><p>No. Every cue is built at play time from Web Audio oscillators and filtered noise, so there is nothing to download, cache, or license.</p></details>
+      <details><summary>How do I add a sound to a button?</summary><p>Add an attribute such as <code>data-foley-press</code> and call <code>bind()</code> once at startup. It delegates from the root, so markup rendered later sounds too, and hover also fires on keyboard focus.</p></details>
+      <details><summary>Will UI sounds annoy my users?</summary><p>Foley is built not to. A master limiter caps loudness, a 60 ms cooldown stops repeats from stacking, pitch is humanized up to 30 cents, loops go quiet in background tabs, and <code>set({ muted: true })</code> silences everything.</p></details>
+      <details><summary>Does it work with React and Vue?</summary><p>Yes. <code>@foleyjs/react</code> provides a <code>useFoley()</code> hook and <code>@foleyjs/vue</code> a plugin and a <code>v-foley</code> directive. Both wrap the same core, so cues and sound sets carry over.</p></details>
+      <details><summary>Can I design my own sounds?</summary><p>Yes. Cues are data. Edit one in the designer above or with <code>getSpec()</code> and <code>playSpec()</code>, then ship a sound set: your product's sonic identity as JSON.</p></details>
+      <details><summary>Why does nothing play until I click?</summary><p>Browsers block audio until a user gesture. <code>bind()</code> installs a one-time unlock listener, and <code>play()</code> resumes the audio context on its own.</p></details>
+    </div>
+  </section>
+
+  <!-- ============ THE END ============ -->
+  <section class="the-end" aria-labelledby="end-title">
+    <div class="panel end-word" aria-hidden="true"><span class="cap end-cap">Next issue: your interface</span><span class="sfx" style="--len:8"><span>T</span><span>H</span><span>E</span>&nbsp;<span>E</span><span>N</span><span>D</span><span style="--v:.8">?</span></span></div>
+    <div class="panel end-copy">
+      <h2 id="end-title">That's the whole library.</h2>
+      <p>One module, 28 cues, and a designer for the sounds it doesn't have yet. Your interface has been miming long enough.</p>
+      <div class="install"><code id="end-cmd"><b>$</b> npm install @foleyjs/core</code><button class="copy-btn" data-copy="#end-cmd">copy</button></div>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://usefoley.dev/docs.html">Read the docs</a>
+        <a class="btn" href="https://github.com/eakbulut/foley" target="_blank" rel="noopener">Star on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<footer class="site">
+  <div class="wrap foot-in">
+    <span><strong>foley</strong> · MIT licensed · <a href="https://github.com/eakbulut/foley" target="_blank" rel="noopener">GitHub</a> · <a href="https://www.npmjs.com/package/@foleyjs/core" target="_blank" rel="noopener">npm</a> · <a href="agents.md" target="_blank" rel="noopener">agents.md</a> for your coding agent</span>
+    <span>Named for the foley artists who perform sound in sync with the picture. Sibling to <a href="https://usedolly.dev" target="_blank" rel="noopener">Dolly</a>, which does the motion.</span>
+  </div>
+</footer>
+<script type="module">
+/* ============================================================
+   Demo page wiring. Everything sonic comes from the real
+   package: this page runs exactly what `npm install foley` ships.
+   ============================================================ */
+import { bind, play, set, get, on, unlock, getAnalyser, toWav, toBuffer, cues, families, version, getSpec, playSpec, toWavSpec, toBufferSpec, normalizeSpec, toSprite, getSet, themes, panFor, observe } from "./src/foley.js";
+
+/* page-side state: colors are a design decision, so they live here, not in the library */
+/* design tokens are CSS custom properties; canvases read them here so a palette
+   change in :root repaints the drawings too - one source, both render layers */
+const cssVar = (n, fb) => (getComputedStyle(document.documentElement).getPropertyValue(n) || "").trim() || fb;
+
+const FAM = {
+  pointer:  { css: "var(--c-pointer)",  hex: cssVar("--c-pointer", "#F5B700") },
+  press:    { css: "var(--c-press)",    hex: cssVar("--c-press", "#E8362B") },
+  toggle:   { css: "var(--c-toggle)",   hex: cssVar("--c-toggle", "#2563EB") },
+  feedback: { css: "var(--c-feedback)", hex: cssVar("--c-feedback", "#13A04F") },
+  notify:   { css: "var(--c-notify)",   hex: cssVar("--c-notify", "#E0137F") },
+  motion:   { css: "var(--c-motion)",   hex: cssVar("--c-motion", "#0EA5D9") },
+  state:    { css: "var(--c-state)",    hex: cssVar("--c-state", "#7C3AED") },
+};
+const ui = { hover: false, transpose: 0, theme: "default", last: { name: null, family: null, at: 0 } };
+set({ hover: false }); /* hover cues are opt-in on this page via the inspector */
+
+/* BEGIN-STORE (settings persistence; the single-file build replaces this with in-memory) */
+const store = {
+  load() { try { return JSON.parse(localStorage.getItem("foley-demo") || "{}"); } catch (e) { return {}; } },
+  save(patch) { try { localStorage.setItem("foley-demo", JSON.stringify(Object.assign(this.load(), patch))); } catch (e) { /* private mode etc. */ } },
+};
+/* END-STORE */
+const saved = store.load();
+
+/* icons: one stroke family, drawn here so JS-built controls match the markup */
+const svg = (d) => '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + "</svg>";
+const ICON = {
+  play: svg('<path d="M5 3l8 5-8 5z" fill="currentColor"/>'),
+  stop: svg('<rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor"/>'),
+  dl: svg('<path d="M8 2.5v7.5M4.5 6.5 8 10l3.5-3.5M3 13.5h10"/>'),
+  reroll: svg('<path d="M13 8a5 5 0 1 1-1.6-3.7M13.5 2v3h-3"/>'),
+};
+
+/* sound words: every cue is lettered as it plays, like a comic SFX */
+function letterWord(el, name) {
+  el.style.setProperty("--len", name.length + 1);
+  el.textContent = name.toUpperCase() + "!";
+}
+function toStage(name, family) {
+  const st = document.getElementById("stage");
+  if (!st) return;
+  st.dataset.cue = name;
+  st.style.setProperty("--fc", FAM[family].css);
+  letterWord(document.getElementById("stage-word"), name);
+  document.getElementById("stage-cap").textContent = name + " \u00b7 " + families[family].name.toLowerCase() + " \u00b7 key " + cues[name].key;
+  st.classList.remove("hit");
+  void st.offsetWidth; /* restart the slam */
+  st.classList.add("hit");
+}
+/* a small word pops where the sound came from: the pointer, the focused
+   control, or the cue's own chip on the board */
+const calm = window.matchMedia("(prefers-reduced-motion: reduce)");
+const lastInput = { x: 0, y: 0, at: 0, key: 0 };
+document.addEventListener("pointerdown", (e) => { lastInput.x = e.clientX; lastInput.y = e.clientY; lastInput.at = performance.now(); }, true);
+document.addEventListener("keydown", () => { lastInput.key = performance.now(); }, true);
+let lastPop = 0;
+function popWord(name, family) {
+  const now = performance.now();
+  if (calm.matches || now - lastPop < 90) return;
+  let x, y;
+  const a = document.activeElement;
+  if (now - lastInput.at < 400) { x = lastInput.x; y = lastInput.y; }
+  else if (now - lastInput.key < 400 && a && a !== document.body && !a.classList.contains("chip")) {
+    const r = a.getBoundingClientRect(); x = r.left + r.width / 2; y = r.top;
+  } else {
+    const chip = document.querySelector('.chip[data-cue="' + name + '"]');
+    const r = chip && chip.getBoundingClientRect();
+    if (!r || r.bottom < 0 || r.top > window.innerHeight) return;
+    x = r.left + r.width / 2; y = r.top + r.height * 0.62; /* inside its own panel */
+  }
+  lastPop = now;
+  const el = document.createElement("span");
+  el.className = "pop-word sfx";
+  el.setAttribute("aria-hidden", "true");
+  el.style.left = x + "px";
+  el.style.top = y + "px";
+  el.style.setProperty("--fc", FAM[family].css);
+  el.style.setProperty("--r", (Math.random() * 24 - 12).toFixed(1) + "deg");
+  letterWord(el, name);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 900);
+}
+
+/* library events drive the page chrome */
+on("unlock", () => {
+  const h = document.getElementById("audio-hint");
+  if (h) h.textContent = "Audio unlocked \u2014 go loud.";
+});
+on("play", ({ name, family }) => {
+  ui.last = { name, family, at: performance.now() };
+  if (FAM[family]) { toStage(name, family); popWord(name, family); }
+  const chip = document.querySelector('.chip[data-cue="' + name + '"]');
+  if (chip) {
+    chip.classList.add("playing");
+    clearTimeout(chip._t);
+    chip._t = setTimeout(() => chip.classList.remove("playing"), 650);
+  }
+});
+
+/* mobile menu: opens with "on", closes with "off" — the nav itself is a demo */
+(function mobileMenu() {
+  const btn = document.getElementById("menu-btn");
+  const nav = document.getElementById("top-nav");
+  if (!btn || !nav) return;
+  function setOpen(open, silent) {
+    nav.classList.toggle("open", open);
+    btn.setAttribute("aria-expanded", String(open));
+    if (!silent) play(open ? "on" : "off");
+  }
+  btn.addEventListener("click", () => setOpen(!nav.classList.contains("open")));
+  nav.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => setOpen(false, true)));
+  document.addEventListener("click", (e) => {
+    if (nav.classList.contains("open") && !nav.contains(e.target) && !btn.contains(e.target)) setOpen(false, true);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && nav.classList.contains("open")) setOpen(false);
+  });
+})();
+
+/* hero pills */
+document.querySelectorAll(".hero-pill").forEach((b) => {
+  b.addEventListener("click", () => play(b.dataset.cue));
+});
+
+/* build cue board from library metadata */
+(function buildBoard() {
+  const board = document.getElementById("board");
+  Object.keys(families).forEach((famId) => {
+    const fam = families[famId];
+    const names = Object.keys(cues).filter((n) => cues[n].family === famId);
+    if (!names.length) return;
+    const sec = document.createElement("div");
+    sec.className = "cat";
+    sec.style.setProperty("--cc", FAM[famId].css);
+    sec.innerHTML =
+      '<div class="cat-head"><span class="cat-dot" style="background:' + FAM[famId].css + '"></span>' +
+      '<span class="cat-name">' + fam.name + "</span>" +
+      '<span class="cat-desc">' + fam.description + "</span></div>";
+    const row = document.createElement("div");
+    row.className = "chip-row";
+    names.forEach((name) => {
+      const c = cues[name];
+      const b = document.createElement("div");
+      b.className = "chip";
+      b.dataset.cue = name;
+      b.setAttribute("role", "button");
+      b.setAttribute("tabindex", "0");
+      b.setAttribute("aria-label", "Play " + name);
+      b.style.setProperty("--cc", FAM[famId].css);
+      b.innerHTML = "<kbd>" + c.key + '</kbd><span class="nm">' + name + '</span><canvas class="env" aria-hidden="true"></canvas><span class="ds">' + c.description + "</span>" +
+        '<button class="dl" title="Download ' + name + ' as .wav" aria-label="Download ' + name + ' as WAV">' + ICON.dl + '</button>';
+      /* the board is the demo for localize: 28 chips across the viewport, so each
+         one sounds from where it sits. panFor() is 0 unless the toggle is on. */
+      b.addEventListener("click", () => play(name, { pan: panFor(b) }));
+      b.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); play(name, { pan: panFor(b) }); } });
+      b.addEventListener("pointerenter", () => { if (ui.hover) play(name, { pan: panFor(b) }); });
+      const dl = b.querySelector(".dl");
+      dl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        play(name); /* preview exactly what the file will contain */
+        exportCue(name, dl);
+      });
+      row.appendChild(b);
+    });
+    sec.appendChild(row);
+    board.appendChild(sec);
+  });
+})();
+
+/* envelope drawings: each chip shows the real amplitude shape of its cue,
+   computed from an offline render — and recomputed when the theme changes */
+let envRun = 0;
+async function drawEnvelopes() {
+  const run = ++envRun;
+  for (const name of Object.keys(cues)) {
+    if (run !== envRun) return; /* a newer run (theme switch) superseded this one */
+    try {
+      const buf = await toBuffer(name);
+      if (run !== envRun) return;
+      paintEnv(name, buf);
+    } catch (e) { /* offline audio unavailable; chips just skip the drawing */ }
+    await new Promise((r) => setTimeout(r, 25)); /* stay off the main thread's toes */
+  }
+}
+function paintEnv(name, buf) {
+  const cv = document.querySelector('.chip[data-cue="' + name + '"] canvas.env');
+  if (!cv || !buf) return;
+  const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  let end = 0, peak = 0;
+  for (let i = 0; i < L.length; i++) {
+    const m = Math.max(Math.abs(L[i]), Math.abs(R[i]));
+    if (m > peak) peak = m;
+    if (m > 0.002) end = i;
+  }
+  end = Math.min(L.length, end + 1500);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = cv.clientWidth || 130, h = cv.clientHeight || 22;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const c = cv.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const fam = cues[name].family;
+  const color = FAM[fam].hex;
+  const N = 72, step = Math.max(1, Math.floor(end / N));
+  c.beginPath();
+  c.moveTo(0, h - 1);
+  for (let i = 0; i < N; i++) {
+    let m = 0;
+    const s0 = i * step, e0 = Math.min(end, s0 + step);
+    for (let j = s0; j < e0; j += 24) {
+      const v = Math.max(Math.abs(L[j]), Math.abs(R[j]));
+      if (v > m) m = v;
+    }
+    const y = h - 1 - (peak ? m / peak : 0) * (h - 3);
+    c.lineTo((i / (N - 1)) * w, y);
+  }
+  c.lineTo(w, h - 1);
+  c.closePath();
+  c.fillStyle = color + "38"; /* family color at ~22% alpha */
+  c.fill();
+  c.strokeStyle = color;
+  c.lineWidth = 1.4;
+  c.stroke();
+}
+setTimeout(drawEnvelopes, 500);
+
+/* keyboard mode */
+const KEYMAP = {};
+Object.keys(cues).forEach((n) => { KEYMAP[cues[n].key.toLowerCase()] = n; });
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  const cue = KEYMAP[e.key.toLowerCase()];
+  if (cue) { play(cue); e.preventDefault(); }
+});
+
+/* theme switcher */
+(function themeSwitch() {
+  const seg = document.getElementById("theme-seg");
+  const themeOut = document.getElementById("o-theme");
+  if (saved.theme && saved.theme !== "default") {
+    ui.theme = saved.theme;
+    set({ theme: saved.theme });
+    seg.querySelectorAll("button").forEach((x) => {
+      const active = x.dataset.theme === saved.theme;
+      x.setAttribute("aria-pressed", String(active));
+      if (active) themeOut.textContent = x.textContent;
+    });
+  }
+  seg.querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", () => {
+      seg.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+      ui.theme = b.dataset.theme;
+      set({ theme: ui.theme });
+      store.save({ theme: ui.theme });
+      themeOut.textContent = b.textContent;
+      drawEnvelopes(); /* the chips reshape with the sound */
+      /* a two-part preview: one noise-led cue, one tone-led cue */
+      play("thock");
+      setTimeout(() => play("chime"), 220);
+    });
+  });
+})();
+
+/* inspector */
+(function inspector() {
+  function wireRange(id, outId, fmt, cb) {
+    const el = document.getElementById(id), out = document.getElementById(outId);
+    function upd() {
+      out.textContent = fmt(el.value);
+      const pct = ((el.value - el.min) / (el.max - el.min)) * 100;
+      el.style.setProperty("--fill", pct + "%");
+      cb(Number(el.value));
+    }
+    el.addEventListener("input", upd);
+    el.addEventListener("change", () => play("tick"));
+    upd();
+  }
+  if (saved.volume != null) document.getElementById("k-vol").value = saved.volume;
+  if (saved.transpose != null) document.getElementById("k-pitch").value = saved.transpose;
+  if (saved.space != null) document.getElementById("k-space").value = saved.space;
+  wireRange("k-vol", "o-vol", (v) => v, (v) => { set({ volume: v / 100 }); store.save({ volume: v }); });
+  wireRange("k-pitch", "o-pitch", (v) => (v > 0 ? "+" + v : v) + " st", (v) => { ui.transpose = v; set({ transpose: v }); store.save({ transpose: v }); });
+  wireRange("k-space", "o-space", (v) => v, (v) => { set({ space: v / 100 }); store.save({ space: v }); });
+
+  const hov = document.getElementById("hover-toggle");
+  if (saved.hover) { hov.setAttribute("aria-pressed", "true"); ui.hover = true; set({ hover: true }); }
+  hov.addEventListener("click", () => {
+    const onNow = hov.getAttribute("aria-pressed") !== "true";
+    hov.setAttribute("aria-pressed", String(onNow));
+    ui.hover = onNow;
+    set({ hover: onNow });
+    store.save({ hover: onNow });
+    play(onNow ? "on" : "off");
+  });
+  /* localize: cues pan to where their element sits on screen. bind() does the
+     derivation, so the page only owns the on/off. */
+  const loc = document.getElementById("localize-toggle");
+  if (saved.localize) { loc.setAttribute("aria-pressed", "true"); set({ localize: 0.6 }); }
+  loc.addEventListener("click", () => {
+    const onNow = loc.getAttribute("aria-pressed") !== "true";
+    loc.setAttribute("aria-pressed", String(onNow));
+    set({ localize: onNow ? 0.6 : 0 });
+    store.save({ localize: onNow });
+    play(onNow ? "on" : "off", { pan: onNow ? panFor(loc) : 0 });
+  });
+  const mute = document.getElementById("mute-toggle");
+  mute.addEventListener("click", () => {
+    const onNow = mute.getAttribute("aria-pressed") !== "true";
+    mute.setAttribute("aria-pressed", String(onNow));
+    if (!onNow) { set({ muted: false }); play("on"); } else { play("off"); setTimeout(() => set({ muted: true }), 220); }
+  });
+})();
+
+/* WebMIDI: plug in a keyboard, play any cue chromatically. Page-only; the
+   library needs nothing new - pitch and volume options already exist. */
+(function midi() {
+  if (!("requestMIDIAccess" in navigator)) return; /* Safari et al: the bar never appears */
+  const bar = document.getElementById("midi-bar");
+  const cueSel = document.getElementById("midi-cue");
+  const status = document.getElementById("midi-status");
+  const btn = document.getElementById("midi-connect");
+  bar.hidden = false;
+
+  Object.keys(cues).forEach((n) => {
+    const o = document.createElement("option");
+    o.value = n; o.textContent = n;
+    cueSel.appendChild(o);
+  });
+  cueSel.value = "chime";
+  cueSel.addEventListener("change", () => play(cueSel.value));
+
+  const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  const noteName = (n) => NOTES[n % 12] + (Math.floor(n / 12) - 1);
+
+  function wire(access) {
+    let count = 0;
+    access.inputs.forEach((input) => {
+      count++;
+      input.onmidimessage = (e) => {
+        const [st, note, vel] = e.data;
+        if ((st & 0xF0) !== 0x90 || vel === 0) return; /* note-on only; cues are one-shots */
+        const cue = cueSel.value;
+        /* per-note cooldown ids so chords work; the id doubles as the scope label */
+        playSpec(getSpec(cue), {
+          id: cue + " " + noteName(note),
+          pitch: note - 60,                      /* middle C = the cue as tuned */
+          volume: Math.max(0.15, vel / 127),     /* velocity plays the dynamics */
+        });
+      };
+    });
+    const names = [];
+    access.inputs.forEach((i) => names.push(i.name || "device"));
+    status.textContent = count
+      ? "listening to " + names.join(", ") + " \u2014 middle C plays the cue as tuned"
+      : "connected \u2014 now plug a device in";
+    btn.textContent = count ? "Connected" : "Waiting\u2026";
+    btn.disabled = true;
+    access.onstatechange = () => wire(access);
+  }
+
+  btn.addEventListener("click", () => {
+    navigator.requestMIDIAccess().then(wire).catch(() => {
+      status.textContent = "permission denied \u2014 allow MIDI access and try again";
+      play("error");
+    });
+  });
+})();
+
+/* toasts */
+const TOASTS = {
+  info:    { cue: "ping",  color: "var(--c-notify)",   title: "New message",     body: "Riley: \u201cthe demo page slaps\u201d" },
+  success: { cue: "chime", color: "var(--c-feedback)", title: "Deploy finished", body: "production \u00b7 14s \u00b7 all checks green" },
+  error:   { cue: "error", color: "var(--err)",        title: "Build failed",    body: "tests: 2 failing \u00b7 see logs" },
+};
+/* No play() call here on purpose: the toast carries data-foley-enter, and
+   observe() sounds it because it mounted. This is the feature demonstrating
+   itself - the page has no idea which cue fired, or when. */
+function toast(kind) {
+  const t = TOASTS[kind];
+  const box = document.getElementById("toasts");
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.setAttribute("data-foley-enter", t.cue);
+  el.innerHTML = '<span class="td" style="background:' + t.color + '"></span><div><b>' + t.title + "</b><span>" + t.body + "</span></div>";
+  box.appendChild(el);
+  setTimeout(() => { el.style.opacity = "0"; el.style.transition = "opacity .3s"; setTimeout(() => el.remove(), 320); }, 3400);
+}
+document.querySelectorAll("[data-toast]").forEach((b) => b.addEventListener("click", () => toast(b.dataset.toast)));
+
+/* WAV export helpers (page-side: naming + anchor-click download) */
+function wavName(name) {
+  const t = ui.transpose;
+  const th = ui.theme !== "default" ? "-" + ui.theme : "";
+  return "foley" + th + "-" + name + (t ? (t > 0 ? "+" : "") + t + "st" : "") + ".wav";
+}
+function saveBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+async function exportCue(name, btn) {
+  if (btn) btn.classList.add("busy");
+  try {
+    const blob = await toWav(name);
+    saveBlob(blob, wavName(name));
+  } catch (e) {
+    play("error");
+  } finally {
+    if (btn) btn.classList.remove("busy");
+  }
+}
+
+/* export all cues as a zip (JSZip lazy-loaded from cdnjs) */
+(function exportAll() {
+  const btn = document.getElementById("export-all");
+  let busy = false;
+  function loadZip() {
+    if (window.JSZip) return Promise.resolve();
+    return new Promise((res, rej) => {
+      const sc = document.createElement("script");
+      sc.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+      sc.onload = res; sc.onerror = rej;
+      document.head.appendChild(sc);
+    });
+  }
+  btn.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    const orig = btn.innerHTML;
+    try {
+      btn.textContent = "Loading zip\u2026";
+      await loadZip();
+      const zip = new JSZip();
+      const names = Object.keys(cues);
+      for (let i = 0; i < names.length; i++) {
+        btn.textContent = "Rendering " + (i + 1) + "/" + names.length + "\u2026";
+        const blob = await toWav(names[i]);
+        zip.file(wavName(names[i]), blob);
+      }
+      btn.textContent = "Zipping\u2026";
+      const out = await zip.generateAsync({ type: "blob" });
+      saveBlob(out, "foley-cues" + (ui.theme !== "default" ? "-" + ui.theme : "") + ".zip");
+      play("complete");
+    } catch (e) {
+      play("error");
+      toast("error");
+    } finally {
+      btn.innerHTML = orig;
+      busy = false;
+    }
+  });
+})();
+
+/* audio sprite: one WAV + JSON offset map */
+(function spriteExport() {
+  const btn = document.getElementById("export-sprite");
+  if (!btn) return;
+  let busy = false;
+  btn.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    const orig = btn.innerHTML;
+    try {
+      btn.textContent = "Rendering sprite\u2026";
+      const { blob, map } = await toSprite();
+      saveBlob(blob, "foley-sprite.wav");
+      saveBlob(new Blob([JSON.stringify(map, null, 2)], { type: "application/json" }), "foley-sprite.json");
+      play("complete");
+    } catch (e) {
+      play("error");
+    } finally {
+      btn.innerHTML = orig;
+      busy = false;
+    }
+  });
+})();
+
+/* demo: save button */
+(function saveDemo() {
+  const btn = document.getElementById("save-btn");
+  const status = document.getElementById("save-status");
+  btn.addEventListener("pointerdown", () => play("press"));
+  btn.addEventListener("pointerup", () => play("release"));
+  btn.addEventListener("click", () => {
+    status.textContent = "saving\u2026";
+    btn.disabled = true;
+    setTimeout(() => play("loading"), 150);
+    setTimeout(() => {
+      play("success");
+      btn.classList.add("done");
+      btn.textContent = "Saved";
+      status.textContent = "saved just now";
+      setTimeout(() => { btn.classList.remove("done"); btn.textContent = "Save changes"; btn.disabled = false; }, 1400);
+    }, 800);
+  });
+})();
+
+/* demo: switch */
+(function switchDemo() {
+  const sw = document.getElementById("demo-switch");
+  const st = document.getElementById("switch-status");
+  sw.addEventListener("click", () => {
+    const onNow = sw.getAttribute("aria-pressed") !== "true";
+    sw.setAttribute("aria-pressed", String(onNow));
+    st.textContent = "notifications " + (onNow ? "on" : "off");
+    play(onNow ? "on" : "off");
+  });
+})();
+
+/* demo: segmented hover ticks */
+(function segDemo() {
+  const seg = document.getElementById("demo-seg");
+  seg.querySelectorAll("button").forEach((b, i) => {
+    b.addEventListener("pointerenter", () => { if (ui.hover) play("tick", { pitch: i }); });
+    b.addEventListener("click", () => {
+      seg.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+      play("switch", { pitch: i });
+    });
+  });
+})();
+
+/* demo: typing input */
+(function typeDemo() {
+  const inp = document.getElementById("demo-type");
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      if (inp.value.trim()) { play("swoosh"); setTimeout(() => play("complete"), 240); inp.value = ""; }
+      else play("denied");
+      return;
+    }
+    if (e.key.length === 1 || e.key === "Backspace") play("thock", { pitch: Math.random() * 2 - 1 });
+  });
+})();
+
+/* demo: upload */
+(function uploadDemo() {
+  const zone = document.getElementById("upload-zone");
+  const bar = document.getElementById("upload-bar");
+  const label = document.getElementById("upload-label");
+  let busy = false;
+  function run() {
+    if (busy) return;
+    busy = true;
+    zone.classList.add("busy");
+    label.textContent = "Uploading holiday-photos.zip\u2026";
+    play("rise");
+    let p = 0;
+    const iv = setInterval(() => {
+      p += 6 + Math.random() * 9;
+      if (p >= 100) {
+        p = 100;
+        clearInterval(iv);
+        bar.style.width = "100%";
+        play("complete");
+        label.textContent = "Uploaded \u00b7 14.2 MB";
+        setTimeout(() => {
+          zone.classList.remove("busy");
+          bar.style.width = "0";
+          label.textContent = "Drop a file \u00b7 or click to simulate";
+          busy = false;
+        }, 1600);
+      } else {
+        bar.style.width = p + "%";
+        if (Math.random() > 0.55) play("tick", { pitch: (p / 100) * 7, volume: 0.4 });
+      }
+    }, 160);
+  }
+  zone.addEventListener("click", run);
+  zone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); run(); } });
+})();
+
+/* demo: stepper */
+(function stepperDemo() {
+  let v = 2;
+  const val = document.getElementById("step-val");
+  function setVal(next) {
+    if (next < 1 || next > 8) { play("denied"); return; }
+    v = next;
+    val.textContent = v;
+    play("tick", { pitch: v });
+  }
+  document.getElementById("step-up").addEventListener("click", () => setVal(v + 1));
+  document.getElementById("step-down").addEventListener("click", () => setVal(v - 1));
+})();
+
+/* demo: slider detents */
+(function sliderDemo() {
+  const s = document.getElementById("demo-slider");
+  const st = document.getElementById("slider-status");
+  let last = Number(s.value);
+  function upd() {
+    const pct = ((s.value - s.min) / (s.max - s.min)) * 100;
+    s.style.setProperty("--fill", pct + "%");
+    st.textContent = "brightness " + Math.round(pct) + "%";
+  }
+  s.addEventListener("input", () => {
+    const now = Number(s.value);
+    if (now !== last) play("tick", { pitch: now * 0.5 });
+    last = now;
+    upd();
+  });
+  s.addEventListener("change", () => play("pop"));
+  upd();
+})();
+
+/* package manager switcher */
+(function pmSwitch() {
+  const cmds = { npm: "$ npm install @foleyjs/core", pnpm: "$ pnpm add @foleyjs/core", yarn: "$ yarn add @foleyjs/core", bun: "$ bun add @foleyjs/core" };
+  const out = document.getElementById("install-cmd");
+  document.querySelectorAll(".pm-row button").forEach((b) => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll(".pm-row button").forEach((x) => x.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+      out.textContent = cmds[b.dataset.pm];
+      play("switch");
+    });
+  });
+})();
+
+/* copy buttons */
+document.querySelectorAll(".copy-btn").forEach((b) => {
+  b.addEventListener("click", () => {
+    const src = document.querySelector(b.dataset.copy);
+    navigator.clipboard.writeText(src.textContent.trim().replace(/^\$\s*/, "")).then(() => {
+      b.textContent = "copied";
+      play("success");
+      setTimeout(() => { b.textContent = "copy"; }, 1400);
+    }).catch(() => play("error"));
+  });
+});
+
+/* the tour */
+(function tour() {
+  const btn = document.getElementById("tour-btn");
+  let running = false, timers = [];
+  /* the user's page, not the tour's: any real gesture hands control back */
+  const CANCEL_EVENTS = ["wheel", "touchmove", "keydown", "pointerdown"];
+  let stopPill = null;
+  function stopTour(quiet) {
+    if (!running) return;
+    running = false;
+    timers.forEach(clearTimeout);
+    timers = [];
+    CANCEL_EVENTS.forEach((ev) => document.removeEventListener(ev, onGesture, true));
+    btn.innerHTML = ICON.play + " Play the tour";
+    if (stopPill) { stopPill.remove(); stopPill = null; }
+    if (!quiet) play("off");
+  }
+  function onGesture(e) {
+    if (e.target === btn || btn.contains(e.target)) return; /* the button handles itself */
+    stopTour();
+  }
+  btn.addEventListener("click", () => {
+    if (running) { stopTour(); return; }
+    running = true;
+    btn.textContent = "Playing\u2026";
+    /* the tour scrolls away from the hero, so the stop control rides the viewport */
+    stopPill = document.createElement("button");
+    stopPill.className = "btn btn-primary tour-stop";
+    stopPill.innerHTML = ICON.stop + " Stop the tour";
+    document.body.appendChild(stopPill);
+    /* board order, so the page scrolls one way and never chases backwards */
+    const seq = Object.keys(cues);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    function center(el) {
+      const r = el.getBoundingClientRect();
+      const target = window.scrollY + r.top - (window.innerHeight / 2) + (r.height / 2);
+      window.scrollTo({ top: Math.max(0, target), behavior: reduced ? "auto" : "smooth" });
+    }
+    /* our own smooth scrolling fires "scroll", never wheel/touchmove/keydown - no self-cancel */
+    setTimeout(() => { if (running) CANCEL_EVENTS.forEach((ev) => document.addEventListener(ev, onGesture, true)); }, 100);
+    seq.forEach((name, i) => {
+      timers.push(setTimeout(() => {
+        const chip = document.querySelector('.chip[data-cue="' + name + '"]');
+        if (chip) center(chip);              /* scroll first\u2026 */
+        /* the chip is centered vertically by now, so its pan is meaningful */
+        timers.push(setTimeout(() => play(name, { pan: panFor(chip) }), 200));   /* \u2026so the highlight is on screen when it fires */
+        if (i === seq.length - 1) timers.push(setTimeout(() => stopTour(true), 1000));
+      }, i * 560));
+    });
+  });
+})();
+
+/* touch devices: keyboard hints don't apply, so say something true instead */
+if (window.matchMedia("(pointer:coarse)").matches) {
+  const note = document.querySelector(".board-tools .board-note");
+  if (note) note.innerHTML = "Tap any cue to hear it \u2014 the shaded shape on each cue is its real amplitude envelope, and the download button saves it as a 16-bit .wav with your current transpose, space, and theme.";
+}
+
+/* ============ cue designer ============ */
+(function designer() {
+  const seedSel = document.getElementById("dz-seed");
+  if (!seedSel) return;
+  const layersEl = document.getElementById("dz-layers");
+  const paramsEl = document.getElementById("dz-params");
+  const macrosEl = document.getElementById("dz-macros");
+  const simpleEl = document.getElementById("dz-simple");
+  const advEl = document.getElementById("dz-adv");
+  const modeBtn = document.getElementById("dz-mode");
+  const killBtn = document.getElementById("dz-kill");
+  const canvas = document.getElementById("dz-canvas");
+  const MOSS = cssVar("--c-state", "#7C3AED");
+  const GRID = cssVar("--rule", "#DADAD6");
+
+  /* state: a base spec + four perceptual macros; the layer editor edits the derived spec directly */
+  const dz = { base: [], macros: { pitch: 0, length: 1, air: 1, space: 1 }, mode: "simple", spec: [], sel: 0 };
+
+  const MACRO_DEFS = [
+    ["pitch", "Pitch", -12, 12, 1, (v) => (v > 0 ? "+" + v : v) + " st", "Slide the whole sound higher or lower."],
+    ["length", "Length", 0.4, 2.5, 0.05, (v) => Math.round(v * 100) + "%", "Snappy on the left, ringing on the right."],
+    ["air", "Air", 0, 2, 0.05, (v) => Math.round(v * 100) + "%", "The hiss, click, and glitter in the sound."],
+    ["space", "Space", 0, 2, 0.05, (v) => Math.round(v * 100) + "%", "How much room it echoes in."],
+  ];
+
+  function derive() {
+    const p = Math.pow(2, dz.macros.pitch / 12), m = dz.macros;
+    const out = JSON.parse(JSON.stringify(dz.base));
+    for (const lay of out) {
+      lay.at = (lay.at || 0) * m.length;
+      if (lay.d != null) lay.d = lay.d * m.length;
+      if (lay.kind === "cluster") {
+        lay.fMin *= p; lay.fMax *= p;
+        lay.step *= m.length;
+        lay.peak *= m.air;
+      } else {
+        lay.f *= p;
+        if (lay.f2) lay.f2 *= p;
+        if (lay.kind === "noise") lay.peak *= m.air;
+      }
+      if (lay.send != null) lay.send = lay.send * m.space;
+    }
+    return normalizeSpec(out);
+  }
+  function current() { return dz.mode === "simple" ? derive() : normalizeSpec(dz.spec); }
+  function audition() { playSpec(current(), { id: "designer" }); }
+
+  let envT = 0, envRun = 0;
+  function scheduleEnv() {
+    clearTimeout(envT);
+    envT = setTimeout(async () => {
+      const run = ++envRun;
+      try {
+        const buf = await toBufferSpec(current());
+        if (run !== envRun || !buf) return;
+        const Lc = buf.getChannelData(0), R = buf.getChannelData(1);
+        let end = 0, peak = 0;
+        for (let i = 0; i < Lc.length; i++) {
+          const m = Math.max(Math.abs(Lc[i]), Math.abs(R[i]));
+          if (m > peak) peak = m;
+          if (m > 0.002) end = i;
+        }
+        end = Math.min(Lc.length, end + 2000);
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        canvas.width = w * dpr; canvas.height = h * dpr;
+        const c = canvas.getContext("2d");
+        c.setTransform(dpr, 0, 0, dpr, 0, 0);
+        c.clearRect(0, 0, w, h);
+        c.strokeStyle = GRID;
+        c.lineWidth = 1;
+        c.beginPath();
+        for (let x = 0; x <= w; x += w / 10) { c.moveTo(x, 0); c.lineTo(x, h); }
+        for (let y = 0; y <= h; y += h / 4) { c.moveTo(0, y); c.lineTo(w, y); }
+        c.stroke();
+        const N = 110, step = Math.max(1, Math.floor(end / N));
+        c.beginPath();
+        c.moveTo(0, h - 2);
+        for (let i = 0; i < N; i++) {
+          let m = 0;
+          const s0 = i * step, e0 = Math.min(end, s0 + step);
+          for (let j = s0; j < e0; j += 24) {
+            const v = Math.max(Math.abs(Lc[j]), Math.abs(R[j]));
+            if (v > m) m = v;
+          }
+          c.lineTo((i / (N - 1)) * w, h - 2 - (peak ? m / peak : 0) * (h - 8));
+        }
+        c.lineTo(w, h - 2);
+        c.closePath();
+        c.fillStyle = MOSS + "44";
+        c.fill();
+        c.strokeStyle = MOSS;
+        c.lineWidth = 1.6;
+        c.stroke();
+      } catch (e) { /* offline audio unavailable */ }
+    }, 160);
+  }
+
+  let saveT = 0;
+  function changed(replay) {
+    if (replay !== false) audition();
+    scheduleEnv();
+    clearTimeout(saveT);
+    saveT = setTimeout(() => store.save({ dzBase: dz.base, dzMacros: dz.macros, dzMode: dz.mode, dzSpec: dz.spec }), 400);
+  }
+
+  /* ---------- simple mode: four dials ---------- */
+  function renderMacros() {
+    macrosEl.innerHTML = "";
+    MACRO_DEFS.forEach(([key, label, min, max, step, fmt, sub]) => {
+      const wrap = document.createElement("div");
+      wrap.className = "knob";
+      const lab = document.createElement("label");
+      const out = document.createElement("output");
+      lab.textContent = label + " ";
+      lab.appendChild(out);
+      const reroll = document.createElement("button");
+      reroll.className = "dz-reroll";
+      reroll.innerHTML = ICON.reroll;
+      reroll.title = "Random " + label.toLowerCase();
+      reroll.setAttribute("aria-label", "Randomize " + label.toLowerCase());
+      lab.appendChild(reroll);
+      const input = document.createElement("input");
+      input.type = "range"; input.min = min; input.max = max; input.step = step;
+      const subEl = document.createElement("span");
+      subEl.className = "sub";
+      subEl.textContent = sub;
+      function sync() {
+        input.value = dz.macros[key];
+        out.textContent = fmt(dz.macros[key]);
+        const pct = ((input.value - min) / (max - min)) * 100;
+        input.style.setProperty("--fill", pct + "%");
+      }
+      input.addEventListener("input", () => {
+        dz.macros[key] = step === 1 ? Math.round(Number(input.value)) : Number(input.value);
+        sync();
+        changed();
+      });
+      reroll.addEventListener("click", () => {
+        const span = max - min;
+        const v = min + Math.random() * span;
+        dz.macros[key] = step === 1 ? Math.round(v) : +v.toFixed(2);
+        sync();
+        changed();
+      });
+      sync();
+      wrap.appendChild(lab); wrap.appendChild(input); wrap.appendChild(subEl);
+      macrosEl.appendChild(wrap);
+    });
+  }
+
+  /* ---------- layer mode: the full engine ---------- */
+  const DEFS = {
+    tone: [
+      ["at", "Start", 0, 0.5, 0.005, "s"],
+      ["f", "Pitch", 0, 0, "log", "Hz"],
+      ["f2", "Sweep to", 0, 0, "log0", "Hz"],
+      ["glide", "Sweep time", 0.005, 0.6, 0.005, "s"],
+      ["a", "Attack", 0, 0.3, 0.002, "s"],
+      ["d", "Decay", 0.005, 1.5, 0.005, "s"],
+      ["peak", "Level", 0, 0.4, 0.005, ""],
+      ["send", "Space send", 0, 1, 0.01, ""],
+    ],
+    noise: [
+      ["at", "Start", 0, 0.5, 0.005, "s"],
+      ["f", "Filter freq", 0, 0, "log", "Hz"],
+      ["f2", "Sweep to", 0, 0, "log0", "Hz"],
+      ["glide", "Sweep time", 0.005, 0.6, 0.005, "s"],
+      ["q", "Resonance", 0.3, 12, 0.1, ""],
+      ["a", "Attack", 0, 0.3, 0.002, "s"],
+      ["d", "Decay", 0.005, 1.5, 0.005, "s"],
+      ["peak", "Level", 0, 0.4, 0.005, ""],
+      ["send", "Space send", 0, 1, 0.01, ""],
+    ],
+    cluster: [
+      ["at", "Start", 0, 0.5, 0.005, "s"],
+      ["n", "Grains", 1, 12, 1, ""],
+      ["step", "Spacing", 0, 0.2, 0.005, "s"],
+      ["fMin", "Low pitch", 0, 0, "log", "Hz"],
+      ["fMax", "High pitch", 0, 0, "log", "Hz"],
+      ["d", "Decay", 0.005, 1.5, 0.005, "s"],
+      ["peak", "Level", 0, 0.4, 0.005, ""],
+      ["send", "Space send", 0, 1, 0.01, ""],
+      ["seed", "Scatter seed", 1, 99, 1, ""],
+    ],
+  };
+  const SEGS = { tone: ["wave", ["sine", "triangle", "square", "sawtooth"]], noise: ["filter", ["bandpass", "lowpass", "highpass"]] };
+  const NEW_LAYER = {
+    tone: { kind: "tone", at: 0, wave: "sine", f: 440, f2: null, glide: 0.06, a: 0.004, d: 0.15, peak: 0.15, send: 0 },
+    noise: { kind: "noise", at: 0, filter: "bandpass", f: 2000, f2: null, glide: 0.1, q: 1, a: 0.002, d: 0.05, peak: 0.12, send: 0 },
+    cluster: { kind: "cluster", at: 0, n: 5, step: 0.035, fMin: 1600, fMax: 4600, d: 0.1, peak: 0.04, send: 0.5, seed: 1 },
+  };
+  const toHz = (v) => 40 * Math.pow(200, v / 1000);
+  const fromHz = (hz) => Math.round(1000 * Math.log(hz / 40) / Math.log(200));
+
+  function renderLayers() {
+    layersEl.innerHTML = "";
+    dz.spec.forEach((lay, i) => {
+      const b = document.createElement("button");
+      b.className = "dz-layer";
+      b.setAttribute("aria-pressed", String(i === dz.sel));
+      b.textContent = (i + 1) + " " + lay.kind;
+      b.addEventListener("click", () => { dz.sel = i; renderLayers(); renderParams(); });
+      layersEl.appendChild(b);
+    });
+    if (dz.spec.length < 8) {
+      ["tone", "noise", "cluster"].forEach((kind) => {
+        const b = document.createElement("button");
+        b.className = "dz-add";
+        b.textContent = "+ " + kind;
+        b.addEventListener("click", () => {
+          dz.spec.push(JSON.parse(JSON.stringify(NEW_LAYER[kind])));
+          dz.sel = dz.spec.length - 1;
+          renderLayers(); renderParams(); changed();
+        });
+        layersEl.appendChild(b);
+      });
+    }
+    killBtn.style.display = dz.spec.length > 1 ? "" : "none";
+  }
+
+  function renderParams() {
+    const lay = dz.spec[dz.sel];
+    paramsEl.innerHTML = "";
+    if (!lay) return;
+    const seg = SEGS[lay.kind];
+    if (seg) {
+      const wrap = document.createElement("div");
+      wrap.className = "knob";
+      wrap.style.gridColumn = "1 / -1";
+      wrap.innerHTML = '<label>' + (lay.kind === "tone" ? "Waveform" : "Filter") + "</label>";
+      const segEl = document.createElement("div");
+      segEl.className = "seg";
+      seg[1].forEach((opt) => {
+        const b = document.createElement("button");
+        b.textContent = opt;
+        b.setAttribute("aria-pressed", String(lay[seg[0]] === opt));
+        b.addEventListener("click", () => {
+          lay[seg[0]] = opt;
+          segEl.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+          changed();
+        });
+        segEl.appendChild(b);
+      });
+      wrap.appendChild(segEl);
+      paramsEl.appendChild(wrap);
+    }
+    DEFS[lay.kind].forEach(([key, label, min, max, stepOrMode, unit]) => {
+      const isLog = stepOrMode === "log", isLog0 = stepOrMode === "log0";
+      const wrap = document.createElement("div");
+      wrap.className = "knob";
+      const lab = document.createElement("label");
+      const out = document.createElement("output");
+      lab.textContent = label + " ";
+      lab.appendChild(out);
+      const input = document.createElement("input");
+      input.type = "range";
+      if (isLog || isLog0) { input.min = isLog0 ? 0 : 1; input.max = 1000; input.step = 1; }
+      else { input.min = min; input.max = max; input.step = stepOrMode; }
+      function fmt() {
+        const v = lay[key];
+        if (isLog0 && !v) return "off";
+        if (isLog || isLog0) return Math.round(v) + " Hz";
+        return (stepOrMode === 1 ? v : Number(v).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")) + (unit ? " " + unit : "");
+      }
+      function sync() {
+        input.value = (isLog || isLog0) ? (lay[key] ? fromHz(lay[key]) : 0) : lay[key];
+        out.textContent = fmt();
+        const pct = ((input.value - input.min) / (input.max - input.min)) * 100;
+        input.style.setProperty("--fill", pct + "%");
+      }
+      input.addEventListener("input", () => {
+        const v = Number(input.value);
+        if (isLog0) lay[key] = v === 0 ? null : toHz(v);
+        else if (isLog) lay[key] = toHz(v);
+        else lay[key] = stepOrMode === 1 ? Math.round(v) : v;
+        out.textContent = fmt();
+        const pct = ((v - input.min) / (input.max - input.min)) * 100;
+        input.style.setProperty("--fill", pct + "%");
+        changed();
+      });
+      sync();
+      wrap.appendChild(lab);
+      wrap.appendChild(input);
+      paramsEl.appendChild(wrap);
+    });
+  }
+
+  killBtn.addEventListener("click", () => {
+    if (dz.spec.length <= 1) return;
+    dz.spec.splice(dz.sel, 1);
+    dz.sel = Math.max(0, dz.sel - 1);
+    renderLayers(); renderParams(); changed();
+    play("whoosh");
+  });
+
+  /* ---------- mode switching: macros bake into layers, layers become the new base ---------- */
+  function setMode(mode, silent) {
+    if (mode === "layers") {
+      dz.spec = derive();          /* the dials become real layer values… */
+      dz.macros = { pitch: 0, length: 1, air: 1, space: 1 };
+      dz.sel = 0;
+      renderLayers(); renderParams();
+      modeBtn.textContent = "← Back to the simple dials";
+    } else {
+      dz.base = normalizeSpec(dz.spec.length ? dz.spec : dz.base); /* …and edits become the new base */
+      dz.macros = { pitch: 0, length: 1, air: 1, space: 1 };
+      renderMacros();
+      modeBtn.textContent = "Fine-tune the layers →";
+    }
+    dz.mode = mode;
+    simpleEl.hidden = mode !== "simple";
+    advEl.hidden = mode !== "layers";
+    if (!silent) { play("switch"); changed(false); }
+  }
+  modeBtn.addEventListener("click", () => setMode(dz.mode === "simple" ? "layers" : "simple"));
+
+  function loadBase(spec) {
+    dz.base = normalizeSpec(spec);
+    if (!dz.base.length) dz.base = [JSON.parse(JSON.stringify(NEW_LAYER.tone))];
+    dz.macros = { pitch: 0, length: 1, air: 1, space: 1 };
+    dz.spec = JSON.parse(JSON.stringify(dz.base));
+    dz.sel = 0;
+    if (dz.mode === "simple") renderMacros(); else { renderLayers(); renderParams(); }
+    changed(false);
+  }
+
+  /* seed picker + surprise */
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "a blank layer";
+  seedSel.appendChild(blank);
+  Object.keys(cues).forEach((n) => {
+    const o = document.createElement("option");
+    o.value = n; o.textContent = n + " · " + cues[n].family;
+    seedSel.appendChild(o);
+  });
+  seedSel.addEventListener("change", () => {
+    loadBase(seedSel.value ? getSpec(seedSel.value) : []);
+    audition();
+  });
+  document.getElementById("dz-surprise").addEventListener("click", () => {
+    const names = Object.keys(cues);
+    const name = names[Math.floor(Math.random() * names.length)];
+    seedSel.value = name;
+    if (dz.mode !== "simple") setMode("simple", true);
+    dz.base = getSpec(name);
+    dz.macros = {
+      pitch: Math.round(Math.random() * 10 - 5),
+      length: +(0.6 + Math.random() * 1.1).toFixed(2),
+      air: +(0.4 + Math.random() * 1.2).toFixed(2),
+      space: +(0.3 + Math.random() * 1.5).toFixed(2),
+    };
+    renderMacros();
+    changed();
+  });
+
+  /* actions */
+  document.getElementById("dz-play").addEventListener("click", audition);
+  document.getElementById("dz-wav").addEventListener("click", async () => {
+    try {
+      const blob = await toWavSpec(current());
+      const th = ui.theme !== "default" ? "-" + ui.theme : "";
+      saveBlob(blob, "foley-custom" + th + ".wav");
+    } catch (e) { play("error"); }
+  });
+  document.getElementById("dz-json").addEventListener("click", () => {
+    saveBlob(new Blob([JSON.stringify(current(), null, 2)], { type: "application/json" }), "foley-custom.json");
+  });
+  const fileInput = document.getElementById("dz-file");
+  document.getElementById("dz-import").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try { loadBase(JSON.parse(r.result)); seedSel.value = ""; audition(); }
+      catch (e) { play("error"); }
+      fileInput.value = "";
+    };
+    r.readAsText(f);
+  });
+  document.getElementById("dz-link").addEventListener("click", () => {
+    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(current()))));
+    const url = location.origin + location.pathname + "#spec=" + b64;
+    history.replaceState(null, "", "#spec=" + b64);
+    navigator.clipboard.writeText(url).then(() => {
+      play("success");
+      document.getElementById("dz-note").textContent = "Link copied — anyone who opens it lands on this exact design.";
+    }).catch(() => play("error"));
+  });
+
+  /* presets: named designs that show the range */
+  const PRESETS = {
+    marimba: [
+      { kind: "tone", at: 0, wave: "sine", f: 380, f2: null, glide: 0.06, a: 0.003, d: 0.28, peak: 0.2, send: 0.3 },
+      { kind: "tone", at: 0, wave: "sine", f: 1520, f2: null, glide: 0.06, a: 0.002, d: 0.09, peak: 0.06, send: 0.2 },
+      { kind: "noise", at: 0, filter: "lowpass", f: 1200, f2: null, glide: 0.1, q: 1, a: 0.001, d: 0.012, peak: 0.1, send: 0 },
+    ],
+    coin: [
+      { kind: "tone", at: 0, wave: "square", f: 988, f2: null, glide: 0.06, a: 0.002, d: 0.07, peak: 0.07, send: 0 },
+      { kind: "tone", at: 0.08, wave: "square", f: 1319, f2: null, glide: 0.06, a: 0.002, d: 0.3, peak: 0.07, send: 0.2 },
+    ],
+    woodblock: [
+      { kind: "tone", at: 0, wave: "sine", f: 640, f2: 600, glide: 0.02, a: 0.002, d: 0.05, peak: 0.24, send: 0.1 },
+      { kind: "noise", at: 0, filter: "bandpass", f: 1800, f2: null, glide: 0.1, q: 3, a: 0.001, d: 0.02, peak: 0.14, send: 0 },
+    ],
+    raindrop: [
+      { kind: "tone", at: 0, wave: "sine", f: 1400, f2: 700, glide: 0.08, a: 0.004, d: 0.12, peak: 0.12, send: 0.6 },
+    ],
+    laser: [
+      { kind: "tone", at: 0, wave: "sawtooth", f: 1800, f2: 200, glide: 0.12, a: 0.002, d: 0.15, peak: 0.1, send: 0.15 },
+      { kind: "noise", at: 0, filter: "highpass", f: 3000, f2: null, glide: 0.1, q: 1, a: 0.002, d: 0.05, peak: 0.04, send: 0.2 },
+    ],
+  };
+  const presetsEl = document.getElementById("dz-presets");
+  Object.keys(PRESETS).forEach((name) => {
+    const b = document.createElement("button");
+    b.className = "dz-add";
+    b.textContent = name;
+    b.addEventListener("click", () => {
+      seedSel.value = "";
+      loadBase(PRESETS[name]);
+      audition();
+    });
+    presetsEl.appendChild(b);
+  });
+
+  /* copy as code: a paste-ready playSpec() call */
+  document.getElementById("dz-code").addEventListener("click", () => {
+    const code = 'import { playSpec } from "@foleyjs/core";\n\nplaySpec(' + JSON.stringify(current()) + ');';
+    navigator.clipboard.writeText(code).then(() => {
+      play("success");
+      document.getElementById("dz-note").textContent = "Code copied \u2014 paste it anywhere @foleyjs/core is installed.";
+    }).catch(() => play("error"));
+  });
+
+  /* space replays while working in the designer */
+  document.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" && t.type !== "range" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "BUTTON")) return;
+    const active = document.activeElement;
+    if (active && active.closest && active.closest(".designer")) {
+      e.preventDefault();
+      audition();
+    }
+  });
+
+  /* ---------- sound sets: this design, applied site-wide ---------- */
+  const setCue = document.getElementById("set-cue");
+  const setStatus = document.getElementById("set-status");
+  Object.keys(cues).forEach((n) => {
+    const o = document.createElement("option");
+    o.value = n; o.textContent = "replace: " + n;
+    setCue.appendChild(o);
+  });
+  seedSel.addEventListener("change", () => { if (seedSel.value) setCue.value = seedSel.value; });
+
+  function refreshSetUI() {
+    const st = getSet();
+    const names = Object.keys(st.cues);
+    setStatus.textContent = names.length
+      ? names.length + " override" + (names.length > 1 ? "s" : "") + ": " + names.slice(0, 4).join(", ") + (names.length > 4 ? "\u2026" : "")
+      : "no overrides yet";
+    const cur = get().theme;
+    const seg = document.getElementById("theme-seg");
+    const themeOut = document.getElementById("o-theme");
+    seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === cur)));
+    themeOut.textContent = themes.includes(cur) ? cur[0].toUpperCase() + cur.slice(1) : cur;
+    drawEnvelopes(); /* the board honors overrides - keep its envelopes honest */
+    const keep = names.length > 0 || !themes.includes(cur);
+    store.save({ soundSet: keep ? st : null });
+  }
+
+  document.getElementById("set-apply").addEventListener("click", () => {
+    const merged = getSet();
+    if (themes.includes(merged.name)) merged.name = "custom set"; /* a modified identity is no longer the preset */
+    merged.cues[setCue.value] = current();
+    set({ theme: merged });
+    play(setCue.value);
+    refreshSetUI();
+  });
+  document.getElementById("set-json").addEventListener("click", () => {
+    const st = getSet();
+    const fname = (st.name || "foley").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-foley-set.json";
+    saveBlob(new Blob([JSON.stringify(st, null, 2)], { type: "application/json" }), fname);
+  });
+  const setFile = document.getElementById("set-file");
+  document.getElementById("set-import").addEventListener("click", () => setFile.click());
+  setFile.addEventListener("change", () => {
+    const f = setFile.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try { set({ theme: JSON.parse(r.result) }); play("switch"); refreshSetUI(); }
+      catch (e) { play("error"); }
+      setFile.value = "";
+    };
+    r.readAsText(f);
+  });
+  document.getElementById("set-link").addEventListener("click", () => {
+    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(getSet()))));
+    const url = location.origin + location.pathname + "#set=" + b64;
+    history.replaceState(null, "", "#set=" + b64);
+    navigator.clipboard.writeText(url).then(() => {
+      play("success");
+      setStatus.textContent = "set link copied \u2014 it carries the whole identity";
+    }).catch(() => play("error"));
+  });
+  document.getElementById("set-clear").addEventListener("click", () => {
+    set({ theme: "default" });
+    play("off");
+    refreshSetUI();
+  });
+  /* named-theme clicks in the inspector clear overrides in the engine - mirror it here */
+  document.getElementById("theme-seg").addEventListener("click", () => setTimeout(refreshSetUI, 0));
+
+  /* restore the identity: URL #set= wins, then the saved one */
+  if (location.hash.startsWith("#set=")) {
+    try { set({ theme: JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(5))))) }); } catch (e) { /* bad hash */ }
+  } else if (saved.soundSet) {
+    try { set({ theme: saved.soundSet }); } catch (e) { /* stale */ }
+  }
+  setTimeout(refreshSetUI, 0);
+
+  /* initial state: URL hash > saved design > the "on" cue */
+  let initial = null;
+  if (location.hash.startsWith("#spec=")) {
+    try { initial = JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(6))))); } catch (e) { /* bad hash */ }
+  }
+  setMode("simple", true);
+  if (initial) { loadBase(initial); seedSel.value = ""; }
+  else if (saved.dzBase) {
+    dz.base = normalizeSpec(saved.dzBase);
+    if (saved.dzMacros) dz.macros = Object.assign({ pitch: 0, length: 1, air: 1, space: 1 }, saved.dzMacros);
+    dz.spec = saved.dzSpec ? normalizeSpec(saved.dzSpec) : JSON.parse(JSON.stringify(dz.base));
+    if (saved.dzMode === "layers") setMode("layers", true); else renderMacros();
+    seedSel.value = "";
+    changed(false);
+  }
+  else { seedSel.value = "on"; loadBase(getSpec("on")); }
+})();
+
+/* FAQ answers open and close like any other binary state */
+document.querySelectorAll(".faq details").forEach((d) => d.addEventListener("toggle", () => play(d.open ? "on" : "off")));
+
+/* iOS: Web Audio is muted by the hardware silent switch by default. The library
+   respects that (UI sounds arguably should), but this page exists to be heard -
+   so the demo opts into the playback audio session where the API exists. */
+try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) { /* older iOS */ }
+
+/* unlock audio on first gesture */
+["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, () => unlock(), { once: true, capture: true }));
+
+/* wire declarative attributes used in the markup */
+bind();
+/* and watch the DOM itself, so toasts sound because they mounted, not because
+   something remembered to call play(). Safe to start now: observe() only reacts
+   to changes after this point, so the page you are reading stays silent. */
+observe();
+
+console.log("foley v" + version + " \u2014 " + Object.keys(cues).length + " cues, " + get().theme + " theme");
+</script>
+</body>
+</html>
