@@ -1,4 +1,4 @@
-from typing import Collection, List, Optional
+from typing import Collection, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,11 +14,12 @@ class Failure(BaseModel):
     actions: Optional[set] = set()
     resource_ids: Optional[set] = set()
     resource_types: Optional[set] = set()
+    context: Optional[Dict] = None
 
     model_config = ConfigDict(extra="forbid")
 
     def serializable(self):
-        return {
+        result = {
             "rule": self.rule,
             "reason": self.reason,
             "rule_mode": self.rule_mode,
@@ -28,6 +29,9 @@ class Failure(BaseModel):
             "actions": sorted(self.actions or []),
             "granularity": self.granularity,
         }
+        if self.context is not None:
+            result["context"] = self.context
+        return result
 
 
 class Result(BaseModel):
@@ -62,6 +66,7 @@ class Result(BaseModel):
         resource_ids=None,
         resource_types=None,
         actions=None,
+        context: Optional[Dict] = None,
     ):
         self.failures.append(
             Failure(
@@ -73,6 +78,7 @@ class Result(BaseModel):
                 resource_types=resource_types,
                 actions=actions,
                 granularity=granularity,
+                context=context,
             )
         )
 

@@ -7,7 +7,7 @@ from pycfmodel.model.resources.iam_policy import IAMPolicy
 from cfripper.model.enums import RuleGranularity, RuleMode, RuleRisk
 from cfripper.model.result import Failure
 from cfripper.rules.wildcard_resource_rule import WildcardResourceRule
-from tests.utils import compare_lists_of_failures, get_cfmodel_from
+from tests.utils import compare_lists_of_failures, failures_without_context, get_cfmodel_from
 
 
 @pytest.fixture()
@@ -169,7 +169,7 @@ def test_multiple_resources_with_wildcard_resources_are_detected(user_and_policy
     result = rule.invoke(user_and_policy_with_wildcard_resource)
 
     assert result.valid is False
-    assert result.failures == [
+    assert failures_without_context(result.failures) == [
         Failure(
             granularity="ACTION",
             reason='"userWithInline" is using a wildcard resource in "somePolicy" for "s3:DeleteBucket"',
@@ -860,19 +860,16 @@ def test_policy_s3_wildcard_and_all_buckets(policy_with_s3_wildcard_and_all_buck
     result = rule.invoke(policy_with_s3_wildcard_and_all_buckets)
 
     assert result.valid is False
-    assert (
-        Failure(
-            granularity="ACTION",
-            reason='"RolePolicy" is using a wildcard resource in "Policy for something." for "s3:PutObject"',
-            risk_value="MEDIUM",
-            rule="WildcardResourceRule",
-            rule_mode="BLOCKING",
-            actions={"s3:*"},
-            resource_ids={"RolePolicy"},
-            resource_types={"AWS::IAM::Policy"},
-        )
-        in result.failures
-    )
+    assert Failure(
+        granularity="ACTION",
+        reason='"RolePolicy" is using a wildcard resource in "Policy for something." for "s3:PutObject"',
+        risk_value="MEDIUM",
+        rule="WildcardResourceRule",
+        rule_mode="BLOCKING",
+        actions={"s3:*"},
+        resource_ids={"RolePolicy"},
+        resource_types={"AWS::IAM::Policy"},
+    ) in failures_without_context(result.failures)
     assert 100 < len(result.failures)
 
 
@@ -882,7 +879,7 @@ def test_policy_with_string_policy_document(policy_with_string_policy_document):
     result = rule.invoke(policy_with_string_policy_document)
 
     assert result.valid is False
-    assert result.failures == [
+    assert failures_without_context(result.failures) == [
         Failure(
             granularity="ACTION",
             reason='"GuardDutyResourcePolicy" is using a wildcard resource for "logs:CreateLogStream"',

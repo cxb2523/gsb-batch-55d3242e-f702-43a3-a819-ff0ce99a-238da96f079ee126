@@ -34,7 +34,12 @@ def get_cfmodel_from(path: str) -> CFModel:
     return parse(convert_json_or_yaml_to_dict(content))
 
 
+def failures_without_context(failures: List[Failure]) -> List[Failure]:
+    # The optional failure context is not relevant for these comparisons and is asserted separately.
+    return [failure.model_copy(update={"context": None}) for failure in failures]
+
+
 def compare_lists_of_failures(list_1: List[Failure], list_2: List[Failure]) -> bool:
-    return len(list_1) == len(list_2) and sorted(list_1, key=lambda item: item.reason, reverse=True) == sorted(
-        list_2, key=lambda item: item.reason, reverse=True
-    )
+    return len(list_1) == len(list_2) and sorted(
+        failures_without_context(list_1), key=lambda item: item.reason, reverse=True
+    ) == sorted(failures_without_context(list_2), key=lambda item: item.reason, reverse=True)

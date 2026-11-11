@@ -9,6 +9,7 @@ from cfripper.model.enums import RuleGranularity, RuleMode, RuleRisk
 from cfripper.model.result import Failure
 from cfripper.rule_processor import RuleProcessor
 from cfripper.rules import DEFAULT_RULES, EC2SecurityGroupOpenToWorldRule
+from cfripper.rules.ec2_security_group import get_open_ports_wording
 from tests.utils import compare_lists_of_failures, get_cfmodel_from
 
 
@@ -59,6 +60,18 @@ def invalid_security_group_no_ports_defined():
     return get_cfmodel_from(
         "rules/EC2SecurityGroupOpenToWorldRule/invalid_security_group_no_ports_defined.json"
     ).resolve()
+
+
+@pytest.fixture()
+def invalid_security_group_two_open_ingress_rules():
+    return get_cfmodel_from(
+        "rules/EC2SecurityGroupOpenToWorldRule/invalid_security_group_two_open_ingress_rules.json"
+    ).resolve()
+
+
+@pytest.fixture()
+def valid_security_group_port80and443():
+    return get_cfmodel_from("rules/EC2SecurityGroupOpenToWorldRule/valid_security_group_port80and443.json").resolve()
 
 
 def test_security_group_type_slash0(security_group_type_slash0):
@@ -303,3 +316,63 @@ def test_non_matching_filters_are_reported_normally(invalid_security_group_range
             )
         ],
     )
+
+
+def test_security_group_open_to_world_failure_context(security_group_type_slash0):
+    rule = EC2SecurityGroupOpenToWorldRule(None)
+    result = rule.invoke(security_group_type_slash0)
+
+    assert not result.valid
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.context is not None
+    assert failure.context["ingress_ip"] == "0.0.0.0/0"
+    assert failure.context["open_ports"] == [22]
+    assert failure.context["non_allowed_open_ports"] == [22]
+    ingress = security_group_type_slash0.Resources["SecurityGroup"].Properties.SecurityGroupIngress[0]
+    assert failure.context["ingress_obj"] == ingress
+
+
+def test_two_open_ingress_rules_produce_two_independent_failures(invalid_security_group_two_open_ingress_rules):
+    rule = EC2SecurityGroupOpenToWorldRule(None)
+    result = rule.invoke(invalid_security_group_two_open_ingress_rules)
+
+    assert not result.valid
+    assert len(result.failures) == 2
+    assert sorted(failure.reason for failure in result.failures) == [
+        "Port(s) 22 open to public IPs: (0.0.0.0/0) in security group 'SecurityGroup'",
+        "Port(s) 3389 open to public IPs: (0.0.0.0/0) in security group 'SecurityGroup'",
+    ]
+    assert sorted(failure.context["non_allowed_open_ports"] for failure in result.failures) == [[22], [3389]]
+    assert sorted(failure.context["open_ports"] for failure in result.failures) == [[22], [3389]]
+    assert {failure.context["ingress_ip"] for failure in result.failures} == {"0.0.0.0/0"}
+
+
+def test_valid_security_group_port80and443(valid_security_group_port80and443):
+    rule = EC2SecurityGroupOpenToWorldRule(
+        Config(
+            rules=["EC2SecurityGroupOpenToWorldRule"],
+            aws_account_id="123456789",
+            stack_name="mockstack",
+            rules_filters=[allow_http_ports_open_to_world_rules_config_filter],
+        )
+    )
+    result = rule.invoke(valid_security_group_port80and443)
+
+    assert result.valid
+    assert compare_lists_of_failures(result.failures, [])
+
+
+@pytest.mark.parametrize(
+    "ports, expected",
+    [
+        ([], ""),
+        ([80], "80"),
+        ([22, 23, 24, 80], "22-24, 80"),
+        ([80, 24, 23, 22], "22-24, 80"),
+        ([78, 79, 80, 81], "78-81"),
+        ([0, 65535], "0, 65535"),
+    ],
+)
+def test_get_open_ports_wording(ports, expected):
+    assert get_open_ports_wording(ports) == expected

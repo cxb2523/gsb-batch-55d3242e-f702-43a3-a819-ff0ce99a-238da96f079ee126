@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+### Additions
+- Add optional `context` field to `Failure`, threaded through `Result.add_failure` and `Rule.add_failure_to_result`. It is included in `Failure.serializable()` only when provided, so the existing serialized structure is unchanged otherwise
+- `EC2SecurityGroupOpenToWorldRule` and `EC2SecurityGroupIngressOpenToWorldRule` failures now carry a context with the ingress object, the matched IP range, the full list of open ports and the list of non-allowed open ports
+- Extract the open ports wording logic into the reusable module-level `get_open_ports_wording` function in `cfripper.rules.ec2_security_group`
+
 ## [1.19.0]
 ### Additions
 - Add support for python 3.14

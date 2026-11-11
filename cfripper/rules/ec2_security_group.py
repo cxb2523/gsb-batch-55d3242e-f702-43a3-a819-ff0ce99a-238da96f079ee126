@@ -20,6 +20,31 @@ from cfripper.model.result import Result
 from cfripper.rules.base_rules import Rule
 
 
+def get_open_ports_ranges(open_ports: List[int]) -> List[Tuple[int, int]]:
+    open_ports_ranges = []
+    for k, group in groupby(enumerate(open_ports), lambda x: x[1] - x[0]):
+        port_range = list(map(itemgetter(1), group))
+        open_ports_ranges.append((port_range[0], port_range[-1]))
+    return open_ports_ranges
+
+
+def get_open_ports_wording(open_ports: List[int]) -> str:
+    """
+    Format a collection of ports as a human-readable string, sorted numerically in ascending order and
+    with consecutive ports merged into ranges.
+
+    For example, `[22, 23, 24, 80]` becomes `"22-24, 80"`. A single port is rendered as itself
+    (`[80]` becomes `"80"`) and an empty collection becomes an empty string.
+    """
+    formatted_ports_range = []
+    for port_range_start, port_range_end in get_open_ports_ranges(sorted(set(open_ports))):
+        if port_range_start == port_range_end:
+            formatted_ports_range.append(f"{port_range_start}")
+        else:
+            formatted_ports_range.append(f"{port_range_start}-{port_range_end}")
+    return ", ".join(formatted_ports_range)
+
+
 class SecurityGroupOpenToWorldRule(Rule, ABC):
     """
     Base class not intended to be instantiated, but inherited from.
@@ -51,7 +76,7 @@ class SecurityGroupOpenToWorldRule(Rule, ABC):
                 self.add_failure_to_result(
                     result,
                     self.REASON.format(
-                        self.get_open_ports_wording(non_allowed_open_ports),
+                        get_open_ports_wording(non_allowed_open_ports),
                         ip_range,
                         logical_id,
                     ),
@@ -61,20 +86,12 @@ class SecurityGroupOpenToWorldRule(Rule, ABC):
                 )
 
     def get_open_ports_wording(self, non_allowed_open_ports: List[int]) -> str:
-        formatted_ports_range = []
-        for port_range_start, port_range_end in self.get_open_ports_ranges(non_allowed_open_ports):
-            if port_range_start == port_range_end:
-                formatted_ports_range.append(f"{port_range_start}")
-            else:
-                formatted_ports_range.append(f"{port_range_start}-{port_range_end}")
-        return ", ".join(formatted_ports_range)
+        # Kept for backwards compatibility. Use the module-level `get_open_ports_wording` function instead.
+        return get_open_ports_wording(non_allowed_open_ports)
 
     def get_open_ports_ranges(self, open_ports: List[int]) -> List[Tuple[int, int]]:
-        open_ports_ranges = []
-        for k, group in groupby(enumerate(open_ports), lambda x: x[1] - x[0]):
-            port_range = list(map(itemgetter(1), group))
-            open_ports_ranges.append((port_range[0], port_range[-1]))
-        return open_ports_ranges
+        # Kept for backwards compatibility. Use the module-level `get_open_ports_ranges` function instead.
+        return get_open_ports_ranges(open_ports)
 
     def non_compliant_ip_range(
         self, ingress: Optional[Union[SecurityGroupIngressProp, SecurityGroupIngressProperties]]

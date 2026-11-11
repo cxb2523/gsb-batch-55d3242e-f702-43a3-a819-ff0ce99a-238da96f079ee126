@@ -88,6 +88,7 @@ class Rule(ABC):
                 resource_types=resource_types,
                 actions=actions,
                 granularity=granularity,
+                context=context,
             )
 
 

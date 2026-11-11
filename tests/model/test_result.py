@@ -1,9 +1,11 @@
+import json
 from typing import List, Set, Tuple
 
 import pytest
 
 from cfripper.model.enums import RuleGranularity, RuleMode, RuleRisk
 from cfripper.model.result import Failure, Result
+from cfripper.rules.base_rules import Rule
 from tests.utils import compare_lists_of_failures
 
 
@@ -196,3 +198,62 @@ def test_get_failures(
         result.add_failure(*failure)
 
     assert compare_lists_of_failures(result.get_failures(include_rule_modes, exclude_rule_modes), expected_result)
+
+
+def test_add_failure_without_context_keeps_serializable_structure():
+    result = Result()
+    result.add_failure(
+        rule="mock_rule",
+        reason="mock_reason",
+        rule_mode=RuleMode.BLOCKING,
+        risk_value=RuleRisk.HIGH,
+        granularity=RuleGranularity.STACK,
+    )
+
+    failure = result.failures[0]
+    assert failure.context is None
+    assert failure.serializable() == {
+        "rule": "mock_rule",
+        "reason": "mock_reason",
+        "rule_mode": RuleMode.BLOCKING,
+        "risk_value": RuleRisk.HIGH,
+        "resource_ids": [],
+        "resource_types": [],
+        "actions": [],
+        "granularity": RuleGranularity.STACK,
+    }
+
+
+def test_add_failure_with_context_is_serializable():
+    context = {
+        "ingress_ip": "0.0.0.0/0",
+        "open_ports": [22],
+        "non_allowed_open_ports": [22],
+    }
+    result = Result()
+    result.add_failure(
+        rule="mock_rule",
+        reason="mock_reason",
+        rule_mode=RuleMode.BLOCKING,
+        risk_value=RuleRisk.HIGH,
+        granularity=RuleGranularity.STACK,
+        context=context,
+    )
+
+    failure = result.failures[0]
+    assert failure.context == context
+    assert failure.serializable()["context"] == context
+    # The serialized failure must be JSON serializable
+    assert json.loads(json.dumps(failure.serializable()))["context"] == context
+
+
+def test_rule_add_failure_to_result_passes_context_to_failure():
+    class MockRule(Rule):
+        def invoke(self, cfmodel, extras=None):
+            return Result()
+
+    result = Result()
+    MockRule(None).add_failure_to_result(result, "mock_reason", context={"mock_key": "mock_value"})
+
+    assert len(result.failures) == 1
+    assert result.failures[0].context == {"mock_key": "mock_value"}

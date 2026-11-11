@@ -61,7 +61,7 @@ Filter(
             {"eq": [{"ref": "principal"}, "arn:aws:iam::123456789012:role/test-role"]},
         ]
     },
-    rules={"TestRule"}
+    rules={"TestRule"},
 )
 ```
 

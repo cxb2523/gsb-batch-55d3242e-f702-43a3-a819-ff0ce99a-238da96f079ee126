@@ -2,7 +2,7 @@ import pytest
 
 from cfripper.model.result import Failure
 from cfripper.rules.public_elb_checker_rule import PublicELBCheckerRule
-from tests.utils import get_cfmodel_from
+from tests.utils import failures_without_context, get_cfmodel_from
 
 
 @pytest.mark.parametrize(
@@ -44,7 +44,7 @@ def test_invoke_public_elbs_fail(template, logical_id, resource_type, reason):
     result = rule.invoke(cfmodel=get_cfmodel_from(template).resolve())
 
     assert result.valid is False
-    assert result.failures == [
+    assert failures_without_context(result.failures) == [
         Failure(
             granularity="RESOURCE",
             reason=reason,

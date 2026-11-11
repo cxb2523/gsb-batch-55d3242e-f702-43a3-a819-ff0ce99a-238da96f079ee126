@@ -3,7 +3,7 @@ import pytest
 from cfripper.model.enums import RuleGranularity, RuleMode, RuleRisk
 from cfripper.model.result import Failure
 from cfripper.rules.storage_encrypted_rule import StorageEncryptedRule
-from tests.utils import get_cfmodel_from
+from tests.utils import failures_without_context, get_cfmodel_from
 
 
 def test_storage_encrypted_rule_valid_results():
@@ -85,4 +85,4 @@ def test_add_failure_if_db_resource_not_encrypted(template, failures):
     result = rule.invoke(resolved_model)
 
     assert result.valid
-    assert result.failures == failures
+    assert failures_without_context(result.failures) == failures
