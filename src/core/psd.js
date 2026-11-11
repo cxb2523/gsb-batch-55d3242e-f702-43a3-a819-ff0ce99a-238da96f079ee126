@@ -596,11 +596,14 @@ function unionBounds(a, b) {
 }
 
 /**
- * A product usually occupies several stacked layers (the artwork plus a
- * shadow/highlight copy a few pixels away). Such copies join one slot cluster
- * so replacing the slot hides all of them and draws the SKU once.
+ * How strongly `other` resembles a stacked shadow/highlight copy of the slot
+ * layer `base`. The gates mirror a designer's "duplicate of the product, a few
+ * pixels away": near-total overlap, close size, close position.
+ *
+ * @returns {number|null} the smaller-box overlap ratio (higher = closer), or
+ *   null when `other` fails any copy gate.
  */
-function isStackedCopy(base, other, doc) {
+function stackedCopyScore(base, other, doc) {
   const a = leafBounds(base)
   const b = leafBounds(other)
   const widthA = a.right - a.left
@@ -609,15 +612,15 @@ function isStackedCopy(base, other, doc) {
   const heightB = b.bottom - b.top
   const overlapWidth = Math.min(a.right, b.right) - Math.max(a.left, b.left)
   const overlapHeight = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
-  if (overlapWidth <= 0 || overlapHeight <= 0) return false
+  if (overlapWidth <= 0 || overlapHeight <= 0) return null
   const ratio =
     (overlapWidth * overlapHeight) / Math.min(widthA * heightA, widthB * heightB)
-  if (ratio < 0.85) return false
-  if (Math.abs(widthA - widthB) > Math.max(widthA, widthB) * 0.25) return false
-  if (Math.abs(heightA - heightB) > Math.max(heightA, heightB) * 0.25) return false
-  if (Math.abs(a.left - b.left) > doc.width * 0.03) return false
-  if (Math.abs(a.top - b.top) > doc.height * 0.03) return false
-  return true
+  if (ratio < 0.85) return null
+  if (Math.abs(widthA - widthB) > Math.max(widthA, widthB) * 0.25) return null
+  if (Math.abs(heightA - heightB) > Math.max(heightA, heightB) * 0.25) return null
+  if (Math.abs(a.left - b.left) > doc.width * 0.03) return null
+  if (Math.abs(a.top - b.top) > doc.height * 0.03) return null
+  return ratio
 }
 
 /**
@@ -639,49 +642,80 @@ export function buildScene(doc) {
   const claimed = new Set()
   const suppressed = []
 
-  // Pass 1 folds near-identical stacked copies (shadow/highlight) into their
-  // slot's cluster for EVERY slot before anything else claims them, so a
-  // later slot never loses its own copy to an earlier slot's overlap pass.
-  for (const leaf of visibleLeaves) {
-    if (!doc.slots.has(leaf.id) || claimed.has(leaf.id)) continue
+  const slotLeaves = visibleLeaves.filter((leaf) => doc.slots.has(leaf.id))
+  for (const leaf of slotLeaves) {
     claimed.add(leaf.id)
-    let rect = leafBounds(leaf)
-    for (const other of visibleLeaves) {
-      if (claimed.has(other.id) || doc.slots.has(other.id)) continue
-      if (!isStackedCopy(leaf, other, doc)) continue
-      claimed.add(other.id)
-      rect = unionBounds(rect, leafBounds(other))
-    }
     const cluster = {
       id: leaf.id,
       name: leaf.name,
       members: new Set([leaf.id]),
-      rect: {
-        x: rect.left,
-        y: rect.top,
-        w: rect.right - rect.left,
-        h: rect.bottom - rect.top,
-      },
+      rect: { x: leaf.left, y: leaf.top, w: leaf.width, h: leaf.height },
       emitted: false,
     }
     clusters.push(cluster)
     clusterOf.set(leaf.id, cluster)
-    for (const other of visibleLeaves) {
-      if (cluster.members.has(other.id)) clusterOf.set(other.id, cluster)
+  }
+
+  // Pass 1 folds near-identical stacked copies (shadow/highlight) into their
+  // slot's cluster for EVERY slot before any sibling is suppressed, so a later
+  // slot never loses its own copy to an earlier slot's overlap pass.
+  //
+  // A copy only belongs to the same group as its slot (a look-alike in another
+  // group is its own decoration), and when a copy resembles several slots at
+  // once it goes to the closest one — never simply the first one walked.
+  // Pass 1 assigns copies; the cluster rects (the fitting boxes) are only built
+  // afterwards from each slot's own members, so a lost/gained copy cannot
+  // shrink a slot the designer sized.
+  const copyOwner = new Map()
+  for (const leaf of visibleLeaves) {
+    if (doc.slots.has(leaf.id)) continue
+    const parentId = entryById.get(leaf.entryId)?.parentId ?? null
+    let best = null
+    for (const slot of slotLeaves) {
+      if ((entryById.get(slot.entryId)?.parentId ?? null) !== parentId) continue
+      const score = stackedCopyScore(slot, leaf, doc)
+      if (score == null) continue
+      // Higher overlap wins; ties keep the earlier slot (document order).
+      if (!best || score > best.score) best = { slot, score }
+    }
+    if (best) copyOwner.set(leaf.id, best.slot.id)
+  }
+
+  for (const cluster of clusters) {
+    const anchor = slotLeaves.find((leaf) => leaf.id === cluster.id)
+    let rect = leafBounds(anchor)
+    for (const leaf of visibleLeaves) {
+      if (copyOwner.get(leaf.id) !== cluster.id) continue
+      claimed.add(leaf.id)
+      cluster.members.add(leaf.id)
+      clusterOf.set(leaf.id, cluster)
+      rect = unionBounds(rect, leafBounds(leaf))
+    }
+    cluster.rect = {
+      x: rect.left,
+      y: rect.top,
+      w: rect.right - rect.left,
+      h: rect.bottom - rect.top,
     }
   }
 
   // Pass 2 hides stale product art: visible siblings inside the slot's group
-  // overlapping the slot. They join the cluster (hidden, never drawn) but the
-  // slot rect stays untouched so the fitting area keeps the designer's box.
-  // Running this after pass 1 keeps slots from claiming each other's copies.
+  // overlapping the slot's own box by at least 25%. They join the cluster
+  // (hidden, never drawn) but the slot rect stays untouched so the fitting
+  // area keeps the designer's box. Running this after pass 1 keeps slots from
+  // claiming each other's copies, and scanning every cluster in turn means an
+  // unclaimed copy is still suppressed here instead of leaking onto the canvas.
+  const docArea = doc.width * doc.height
   for (const cluster of clusters) {
-    const leaf = visibleLeaves.find((item) => item.id === cluster.id)
-    const parent = entryById.get(leaf.entryId)?.parentId
-    if (!parent) continue
+    const leaf = slotLeaves.find((item) => item.id === cluster.id)
+    const parentId = entryById.get(leaf.entryId)?.parentId ?? null
     for (const other of visibleLeaves) {
       if (claimed.has(other.id) || doc.slots.has(other.id)) continue
-      if (!other.path.includes(parent)) continue
+      // Slots at the document root treat the other root layers as their group.
+      if ((entryById.get(other.entryId)?.parentId ?? null) !== parentId) continue
+      // A full-bleed (background) layer overlaps everything by definition;
+      // hiding it would erase the artwork behind the SKU.
+      if ((other.width * other.height) / docArea > 0.5) continue
       if (boundsOverlapRatio(leafBounds(leaf), leafBounds(other)) < SLOT_SIBLING_OVERLAP) continue
       cluster.members.add(other.id)
       claimed.add(other.id)

@@ -45,7 +45,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "prepack": "npm run build",
-    "test": "node test/smoke.mjs && node test/dsh-host.mjs"
+    "test": "node test/smoke.mjs && node test/composite.mjs && node test/dsh-host.mjs"
   },
   "dsh": {
     "bundle": {

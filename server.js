@@ -16868,7 +16868,7 @@ function unionBounds(a, b) {
     bottom: Math.max(a.bottom, b.bottom)
   };
 }
-function isStackedCopy(base, other, doc) {
+function stackedCopyScore(base, other, doc) {
   const a = leafBounds(base);
   const b = leafBounds(other);
   const widthA = a.right - a.left;
@@ -16877,14 +16877,14 @@ function isStackedCopy(base, other, doc) {
   const heightB = b.bottom - b.top;
   const overlapWidth = Math.min(a.right, b.right) - Math.max(a.left, b.left);
   const overlapHeight = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-  if (overlapWidth <= 0 || overlapHeight <= 0) return false;
+  if (overlapWidth <= 0 || overlapHeight <= 0) return null;
   const ratio = overlapWidth * overlapHeight / Math.min(widthA * heightA, widthB * heightB);
-  if (ratio < 0.85) return false;
-  if (Math.abs(widthA - widthB) > Math.max(widthA, widthB) * 0.25) return false;
-  if (Math.abs(heightA - heightB) > Math.max(heightA, heightB) * 0.25) return false;
-  if (Math.abs(a.left - b.left) > doc.width * 0.03) return false;
-  if (Math.abs(a.top - b.top) > doc.height * 0.03) return false;
-  return true;
+  if (ratio < 0.85) return null;
+  if (Math.abs(widthA - widthB) > Math.max(widthA, widthB) * 0.25) return null;
+  if (Math.abs(heightA - heightB) > Math.max(heightA, heightB) * 0.25) return null;
+  if (Math.abs(a.left - b.left) > doc.width * 0.03) return null;
+  if (Math.abs(a.top - b.top) > doc.height * 0.03) return null;
+  return ratio;
 }
 var SLOT_SIBLING_OVERLAP = 0.25;
 function buildScene(doc) {
@@ -16894,41 +16894,57 @@ function buildScene(doc) {
   const clusterOf = /* @__PURE__ */ new Map();
   const claimed = /* @__PURE__ */ new Set();
   const suppressed = [];
-  for (const leaf of visibleLeaves) {
-    if (!doc.slots.has(leaf.id) || claimed.has(leaf.id)) continue;
+  const slotLeaves = visibleLeaves.filter((leaf) => doc.slots.has(leaf.id));
+  for (const leaf of slotLeaves) {
     claimed.add(leaf.id);
-    let rect = leafBounds(leaf);
-    for (const other of visibleLeaves) {
-      if (claimed.has(other.id) || doc.slots.has(other.id)) continue;
-      if (!isStackedCopy(leaf, other, doc)) continue;
-      claimed.add(other.id);
-      rect = unionBounds(rect, leafBounds(other));
-    }
     const cluster = {
       id: leaf.id,
       name: leaf.name,
       members: /* @__PURE__ */ new Set([leaf.id]),
-      rect: {
-        x: rect.left,
-        y: rect.top,
-        w: rect.right - rect.left,
-        h: rect.bottom - rect.top
-      },
+      rect: { x: leaf.left, y: leaf.top, w: leaf.width, h: leaf.height },
       emitted: false
     };
     clusters.push(cluster);
     clusterOf.set(leaf.id, cluster);
-    for (const other of visibleLeaves) {
-      if (cluster.members.has(other.id)) clusterOf.set(other.id, cluster);
+  }
+  const copyOwner = /* @__PURE__ */ new Map();
+  for (const leaf of visibleLeaves) {
+    if (doc.slots.has(leaf.id)) continue;
+    const parentId = entryById.get(leaf.entryId)?.parentId ?? null;
+    let best = null;
+    for (const slot of slotLeaves) {
+      if ((entryById.get(slot.entryId)?.parentId ?? null) !== parentId) continue;
+      const score = stackedCopyScore(slot, leaf, doc);
+      if (score == null) continue;
+      if (!best || score > best.score) best = { slot, score };
     }
+    if (best) copyOwner.set(leaf.id, best.slot.id);
   }
   for (const cluster of clusters) {
-    const leaf = visibleLeaves.find((item) => item.id === cluster.id);
-    const parent = entryById.get(leaf.entryId)?.parentId;
-    if (!parent) continue;
+    const anchor = slotLeaves.find((leaf) => leaf.id === cluster.id);
+    let rect = leafBounds(anchor);
+    for (const leaf of visibleLeaves) {
+      if (copyOwner.get(leaf.id) !== cluster.id) continue;
+      claimed.add(leaf.id);
+      cluster.members.add(leaf.id);
+      clusterOf.set(leaf.id, cluster);
+      rect = unionBounds(rect, leafBounds(leaf));
+    }
+    cluster.rect = {
+      x: rect.left,
+      y: rect.top,
+      w: rect.right - rect.left,
+      h: rect.bottom - rect.top
+    };
+  }
+  const docArea = doc.width * doc.height;
+  for (const cluster of clusters) {
+    const leaf = slotLeaves.find((item) => item.id === cluster.id);
+    const parentId = entryById.get(leaf.entryId)?.parentId ?? null;
     for (const other of visibleLeaves) {
       if (claimed.has(other.id) || doc.slots.has(other.id)) continue;
-      if (!other.path.includes(parent)) continue;
+      if ((entryById.get(other.entryId)?.parentId ?? null) !== parentId) continue;
+      if (other.width * other.height / docArea > 0.5) continue;
       if (boundsOverlapRatio(leafBounds(leaf), leafBounds(other)) < SLOT_SIBLING_OVERLAP) continue;
       cluster.members.add(other.id);
       claimed.add(other.id);
