@@ -1,0 +1,211 @@
+const DRAG_BAR_HEIGHT = 12
+const MIN_WIDTH  = 80
+const MIN_HEIGHT = DRAG_BAR_HEIGHT + 30
+
+// Shared counter: each interaction bumps the touched float to the top of the stack.
+let _topFloatZ = 10
+
+// Generic draggable, resizable floating container that wraps any Plot-like widget.
+// factory(container) must return an object with a destroy() method.
+export class Float {
+  constructor(parentPlot, factory, {
+    x = 10,
+    y = 10,
+    width = 220,
+    height = 82
+  } = {}) {
+    // Outer floating container
+    this._el = document.createElement('div')
+    Object.assign(this._el.style, {
+      position:     'absolute',
+      left:         x + 'px',
+      top:          y + 'px',
+      width:        width + 'px',
+      height:       height + 'px',
+      zIndex:       String(_topFloatZ),
+      boxSizing:    'border-box',
+      background:   'rgba(255,255,255,0.92)',
+      border:       '1px solid #aaa',
+      borderRadius: '4px',
+      boxShadow:    '0 2px 8px rgba(0,0,0,0.25)',
+      overflow:     'hidden'
+    })
+
+    // Ensure parent is positioned so our absolute child is contained within it
+    const parentEl = parentPlot.container
+    if (getComputedStyle(parentEl).position === 'static') {
+      parentEl.style.position = 'relative'
+    }
+    parentEl.appendChild(this._el)
+
+    // Drag bar — thin strip at the top; dragging here moves the float
+    this._dragBar = document.createElement('div')
+    Object.assign(this._dragBar.style, {
+      position:     'absolute',
+      top:          '0',
+      left:         '0',
+      right:        '0',
+      height:       DRAG_BAR_HEIGHT + 'px',
+      cursor:       'grab',
+      background:   'rgba(0,0,0,0.07)',
+      borderBottom: '1px solid rgba(0,0,0,0.12)',
+      zIndex:       '1'
+    })
+    this._el.appendChild(this._dragBar)
+
+    // Resize handle — bottom-right corner
+    this._resizeHandle = document.createElement('div')
+    Object.assign(this._resizeHandle.style, {
+      position:            'absolute',
+      right:               '0',
+      bottom:              '0',
+      width:               '12px',
+      height:              '12px',
+      cursor:              'se-resize',
+      background:          'rgba(0,0,0,0.18)',
+      borderTopLeftRadius: '3px',
+      zIndex:              '3'
+    })
+    this._el.appendChild(this._resizeHandle)
+
+    // Content area — sits below the drag bar, fills the rest of the float
+    this._contentEl = document.createElement('div')
+    Object.assign(this._contentEl.style, {
+      position: 'absolute',
+      top:      DRAG_BAR_HEIGHT + 'px',
+      left:     '0',
+      right:    '0',
+      bottom:   '0'
+    })
+    this._el.appendChild(this._contentEl)
+
+    this._widget = factory(this._contentEl)
+
+    this._setupInteraction()
+  }
+
+  _setupInteraction() {
+    // Bring this float to the front whenever the user touches it.
+    this._el.addEventListener('pointerdown', () => {
+      this._el.style.zIndex = String(++_topFloatZ)
+      this._widget.scheduleRender?.()
+    }, { capture: true })
+
+    let mode = null  // 'drag' | 'resize'
+    let startX, startY, startLeft, startTop, startW, startH
+
+    const onDragBarMouseDown = (e) => {
+      mode      = 'drag'
+      startX    = e.clientX
+      startY    = e.clientY
+      startLeft = parseInt(this._el.style.left, 10)
+      startTop  = parseInt(this._el.style.top,  10)
+      this._dragBar.style.cursor = 'grabbing'
+      e.preventDefault()
+    }
+
+    const onResizeMouseDown = (e) => {
+      mode   = 'resize'
+      startX = e.clientX
+      startY = e.clientY
+      startW = this._el.offsetWidth
+      startH = this._el.offsetHeight
+      e.preventDefault()
+      e.stopPropagation()
+    }
+
+    const onMouseMove = (e) => {
+      if (!mode) return
+      const dx = e.clientX - startX
+      const dy = e.clientY - startY
+      if (mode === 'drag') {
+        this._el.style.left = (startLeft + dx) + 'px'
+        this._el.style.top  = (startTop  + dy) + 'px'
+      } else {
+        this._el.style.width  = Math.max(MIN_WIDTH,  startW + dx) + 'px'
+        this._el.style.height = Math.max(MIN_HEIGHT, startH + dy) + 'px'
+      }
+      this._widget.scheduleRender?.()
+    }
+
+    const onMouseUp = () => {
+      if (mode === 'drag') this._dragBar.style.cursor = 'grab'
+      mode = null
+    }
+
+    this._dragBar.addEventListener('mousedown', onDragBarMouseDown)
+    this._resizeHandle.addEventListener('mousedown', onResizeMouseDown)
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup',   onMouseUp)
+
+    // Touch support
+    const onDragBarTouchStart = (e) => {
+      if (e.touches.length !== 1) return
+      e.preventDefault()
+      const t = e.touches[0]
+      mode      = 'drag'
+      startX    = t.clientX
+      startY    = t.clientY
+      startLeft = parseInt(this._el.style.left, 10)
+      startTop  = parseInt(this._el.style.top,  10)
+      this._dragBar.style.cursor = 'grabbing'
+    }
+
+    const onResizeTouchStart = (e) => {
+      if (e.touches.length !== 1) return
+      e.preventDefault()
+      e.stopPropagation()
+      const t = e.touches[0]
+      mode   = 'resize'
+      startX = t.clientX
+      startY = t.clientY
+      startW = this._el.offsetWidth
+      startH = this._el.offsetHeight
+    }
+
+    const onTouchMove = (e) => {
+      if (!mode || e.touches.length !== 1) return
+      e.preventDefault()
+      const t  = e.touches[0]
+      const dx = t.clientX - startX
+      const dy = t.clientY - startY
+      if (mode === 'drag') {
+        this._el.style.left = (startLeft + dx) + 'px'
+        this._el.style.top  = (startTop  + dy) + 'px'
+      } else {
+        this._el.style.width  = Math.max(MIN_WIDTH,  startW + dx) + 'px'
+        this._el.style.height = Math.max(MIN_HEIGHT, startH + dy) + 'px'
+      }
+      this._widget.scheduleRender?.()
+    }
+
+    const onTouchEnd = () => {
+      if (mode === 'drag') this._dragBar.style.cursor = 'grab'
+      mode = null
+    }
+
+    this._dragBar.addEventListener('touchstart',     onDragBarTouchStart, { passive: false })
+    this._resizeHandle.addEventListener('touchstart', onResizeTouchStart,  { passive: false })
+    document.addEventListener('touchmove',   onTouchMove, { passive: false })
+    document.addEventListener('touchend',    onTouchEnd)
+    document.addEventListener('touchcancel', onTouchEnd)
+
+    this._cleanupInteraction = () => {
+      this._dragBar.removeEventListener('mousedown', onDragBarMouseDown)
+      this._resizeHandle.removeEventListener('mousedown', onResizeMouseDown)
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup',   onMouseUp)
+      this._dragBar.removeEventListener('touchstart',     onDragBarTouchStart)
+      this._resizeHandle.removeEventListener('touchstart', onResizeTouchStart)
+      document.removeEventListener('touchmove',   onTouchMove)
+      document.removeEventListener('touchend',    onTouchEnd)
+      document.removeEventListener('touchcancel', onTouchEnd)
+    }
+  }
+
+  destroy() {
+    this._cleanupInteraction()
+    this._widget.destroy()
+    this._el.remove()
+  }
+}

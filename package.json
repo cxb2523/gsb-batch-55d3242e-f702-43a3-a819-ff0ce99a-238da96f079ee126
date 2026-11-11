@@ -1,0 +1,49 @@
+{
+  "name": "gladly-plot",
+  "version": "0.0.20",
+  "description": "GPU-powered multi-axis plotting library with regl + d3",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./layers/gltf": "./src/layers/GltfLayer.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "dev": "npx serve . -l 1234",
+    "build:example": "bash scripts/build-example.sh",
+    "build:lib": "rollup -c",
+    "pretest": "node scripts/bundle-test-vendors.mjs",
+    "test": "web-test-runner"
+  },
+  "dependencies": {
+    "d3": "^7.8.5",
+    "proj4": "^2.15.0",
+    "projnames": "^0.0.4",
+    "regl": "^2.1.0"
+  },
+  "optionalDependencies": {
+    "@loaders.gl/core": "^4.4.1",
+    "@loaders.gl/gltf": "^4.4.1",
+    "geotiff": "^3.0.5"
+  },
+  "browserslist": [
+    "last 2 Chrome versions",
+    "last 2 Edge versions",
+    "last 2 Firefox versions",
+    "last 2 Safari versions"
+  ],
+  "devDependencies": {
+    "@esm-bundle/chai": "^4.3.4-fix.0",
+    "@json-editor/json-editor": "^2.15.1",
+    "@rollup/plugin-commonjs": "^29.0.2",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.3.1",
+    "@rollup/plugin-terser": "^1.0.0",
+    "@web/dev-server-rollup": "^0.6.4",
+    "@web/test-runner": "^0.20.2",
+    "@web/test-runner-playwright": "^0.11.1",
+    "rollup": "^4.59.1"
+  }
+}

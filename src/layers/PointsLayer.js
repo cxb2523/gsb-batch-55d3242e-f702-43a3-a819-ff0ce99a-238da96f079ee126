@@ -1,0 +1,123 @@
+import { ScatterLayerTypeBase } from "./ScatterShared.js"
+import { Data } from "../data/Data.js"
+import { registerLayerType } from "../core/LayerTypeRegistry.js"
+import { resolveQuantityKind } from "../compute/ComputationRegistry.js"
+
+function makePointsVert(hasFilter, hasZ, hasColorFilter, hasColorFilter2) {
+  return `#version 300 es
+  precision mediump float;
+  in float x;
+  in float y;
+  ${hasZ ? 'in float z;' : ''}
+  in float color_data;
+  in float color_data2;
+  ${hasFilter ? 'in float filter_data;' : ''}
+  uniform vec2 xDomain;
+  uniform vec2 yDomain;
+  uniform float xScaleType;
+  uniform float yScaleType;
+  uniform float u_pointSize;
+  out float value;
+  out float value2;
+  void main() {
+    ${hasFilter ? 'if (!filter_(filter_data)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }' : ''}
+    ${hasColorFilter  ? 'if (!color_filter_(color_data))   { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }' : ''}
+    ${hasColorFilter2 ? 'if (!color_filter_2(color_data2)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }' : ''}
+    ${hasZ ? 'gl_Position = plot_pos_3d(vec3(x, y, z));' : 'gl_Position = plot_pos(vec2(x, y));'}
+    gl_PointSize = u_pointSize;
+    value = color_data;
+    value2 = color_data2;
+  }
+`
+}
+
+function makePointsFrag(hasFirst, hasSecond) {
+  return `#version 300 es
+  precision mediump float;
+  in float value;
+  in float value2;
+  void main() {
+    ${hasFirst
+       ? (hasSecond
+           ? 'fragColor = map_color_2d_(vec2(value, value2));'
+           : 'fragColor = map_color_2d_x_(value);')
+       : (hasSecond
+           ? 'fragColor = map_color_2d_y_2(value2);'
+           : 'fragColor = vec4(0.0, 0.0, 0.0, 1.0);')}
+  }
+`
+}
+
+class PointsLayerType extends ScatterLayerTypeBase {
+  constructor() {
+    super({ name: "points", vert: makePointsVert(false), frag: makePointsFrag(false) })
+  }
+
+  schema(data) {
+    const d = Data.wrap(data)
+    return {
+      type: "object",
+      properties: {
+        ...this._commonSchemaProperties(d),
+        pointSize: { type: "integer", default: 4, minimum: 1 },
+      },
+      required: ["xData", "yData", "zData", "zAxis", "pointSize"]
+    }
+  }
+
+  _createLayer(regl, parameters, data, plot) {
+    const d = Data.wrap(data)
+    const { vData: vDataRaw, vData2: vData2Raw, fData: fDataRaw, zData: zDataRaw } = parameters
+    const vDataIn  = (vDataRaw  == null || vDataRaw  === "none") ? null : vDataRaw
+    const vData2In = (vData2Raw == null || vData2Raw === "none") ? null : vData2Raw
+    const fData    = (fDataRaw  == null || fDataRaw  === "none") ? null : fDataRaw
+    const zData    = (zDataRaw  == null || zDataRaw  === "none") ? null : zDataRaw
+    const vData  = vDataIn
+    const vData2 = vData2In
+
+    const xQK  = resolveQuantityKind(parameters.xData, d) ?? undefined
+    const yQK  = resolveQuantityKind(parameters.yData, d) ?? undefined
+    const zQK  = zData  ? (resolveQuantityKind(zData,  d) ?? undefined) : undefined
+    const vQK  = vData  ? resolveQuantityKind(vData,  d) : null
+    const vQK2 = vData2 ? resolveQuantityKind(vData2, d) : null
+
+    const domains = this._buildDomains(d, parameters.xData, parameters.yData, zData, vData, vData2, xQK, yQK, zQK, vQK, vQK2)
+
+    // Vertex count: read from data when xData is a plain column name so that
+    // Plot.render() can determine how many vertices to draw even when other
+    // attributes are computed expressions resolved at draw time.
+    const vertexCount = typeof parameters.xData === 'string'
+      ? (d.getData(parameters.xData)?.length ?? null)
+      : null
+
+    return [{
+      attributes: {
+        x: parameters.xData,
+        y: parameters.yData,
+        ...(zData !== null ? { z: zData } : {}),
+        color_data:  vData  !== null ? vData  : new Float32Array(vertexCount ?? 0).fill(NaN),
+        color_data2: vData2 !== null ? vData2 : new Float32Array(vertexCount ?? 0).fill(NaN),
+        ...(fData != null ? { filter_data: fData } : {}),
+      },
+      uniforms: { u_pointSize: () => parameters.pointSize ?? 4 },
+      domains,
+      vertexCount,
+    }]
+  }
+
+  async createDrawCommand(regl, layer, plot) {
+    const hasFilter       = Object.keys(layer.filterAxes).length > 0
+    const hasFirst        = '' in layer.colorAxes
+    const hasSecond       = '2' in layer.colorAxes
+    const hasZ            = 'z' in layer.attributes
+    const hasColorFilter  = hasFirst
+    const hasColorFilter2 = hasSecond
+    this.vert = makePointsVert(hasFilter, hasZ, hasColorFilter, hasColorFilter2)
+    this.frag = makePointsFrag(hasFirst, hasSecond)
+    return await super.createDrawCommand(regl, layer, plot)
+  }
+}
+
+export const pointsLayerType = new PointsLayerType()
+registerLayerType("points", pointsLayerType)
+export { PointsLayerType }

@@ -1,0 +1,921 @@
+import proj4 from 'proj4'
+import { LayerType } from '../../core/LayerType.js'
+import { ColumnData, uploadToTexture } from '../../data/ColumnData.js'
+import { AXES } from '../../axes/AxisRegistry.js'
+import { parseCrsCode, crsToQkX, crsToQkY, ensureCrsDefined } from '../../geo/EpsgUtils.js'
+import {
+  buildXyzUrl, buildWmtsUrl, buildWmsUrl, optimalZoom,
+  mercToTileXY, tileToMercBbox, resolveSource,
+  makeSourceSchema, SAT_PRESETS, DTM_PRESETS,
+  fetchCogData, buildCogTilesUrl,
+} from './TileLayer.js'
+
+const DOMAIN_CHANGE_THRESHOLD = 0.02
+const MAX_TILE_CACHE = 50
+
+// ─── Terrain mesh builder ─────────────────────────────────────────────────────
+
+function safeProject(fn, x, y) {
+  if (!fn) return [x, y]
+  try {
+    const [rx, ry] = fn([x, y])
+    return (isFinite(rx) && isFinite(ry)) ? [rx, ry] : [NaN, NaN]
+  } catch {
+    return [NaN, NaN]
+  }
+}
+
+function buildTerrainTileMesh(tileBbox, dtmTileCrs, plotCrs, satTileCrs, N) {
+  const dtmCode  = parseCrsCode(dtmTileCrs)
+  const plotCode = parseCrsCode(plotCrs)
+  const satCode  = parseCrsCode(satTileCrs)
+
+  const dtmToPlot = dtmCode === plotCode
+    ? null : proj4(`EPSG:${dtmCode}`, `EPSG:${plotCode}`).forward
+  const dtmToSat  = dtmCode === satCode
+    ? null : proj4(`EPSG:${dtmCode}`, `EPSG:${satCode}`).forward
+
+  const numGrid = (N + 1) * (N + 1)
+  // Using regular arrays so NaN is preserved (Float32Array converts NaN to 0).
+  const gridPlot = new Array(numGrid * 2)
+  const gridSat  = new Array(numGrid * 2)
+
+  for (let j = 0; j <= N; j++) {
+    for (let i = 0; i <= N; i++) {
+      const u = i / N, v = j / N
+      const tx = tileBbox.minX + u * (tileBbox.maxX - tileBbox.minX)
+      const ty = tileBbox.minY + v * (tileBbox.maxY - tileBbox.minY)
+      const [px, py] = safeProject(dtmToPlot, tx, ty)
+      const [sx, sy] = safeProject(dtmToSat,  tx, ty)
+      const vi = j * (N + 1) + i
+      gridPlot[vi * 2] = px;  gridPlot[vi * 2 + 1] = py
+      gridSat[vi * 2]  = sx;  gridSat[vi * 2 + 1]  = sy
+    }
+  }
+
+  const vertexCount  = N * N * 6
+  const positions    = new Float32Array(vertexCount * 2)
+  const satPositions = new Float32Array(vertexCount * 2)
+  // Track which output vertices are valid for satCrsBbox (degenerate quads are excluded).
+  const validVertex  = new Uint8Array(vertexCount)
+  let out = 0
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const bl = j * (N + 1) + i
+      const br = bl + 1
+      const tl = bl + (N + 1)
+      const tr = tl + 1
+      const indices = [bl, br, tr, bl, tr, tl]
+      // If any vertex has a NaN plot or sat position, degenerate the whole quad to (0,0)
+      // so it produces no fragments — it's outside one projection's valid domain.
+      const anyNaN = indices.some(vi =>
+        !isFinite(gridPlot[vi * 2]) || !isFinite(gridPlot[vi * 2 + 1]) ||
+        !isFinite(gridSat[vi * 2])  || !isFinite(gridSat[vi * 2 + 1])
+      )
+      for (const vi of indices) {
+        if (anyNaN) {
+          positions[out * 2] = 0;  positions[out * 2 + 1] = 0
+          satPositions[out * 2] = 0;  satPositions[out * 2 + 1] = 0
+          validVertex[out] = 0
+        } else {
+          positions[out * 2]    = gridPlot[vi * 2];  positions[out * 2 + 1]    = gridPlot[vi * 2 + 1]
+          satPositions[out * 2] = gridSat[vi * 2];   satPositions[out * 2 + 1] = gridSat[vi * 2 + 1]
+          validVertex[out] = 1
+        }
+        out++
+      }
+    }
+  }
+
+  let mnSX = Infinity, mxSX = -Infinity, mnSY = Infinity, mxSY = -Infinity
+  for (let k = 0; k < vertexCount; k++) {
+    if (!validVertex[k]) continue
+    const sx = satPositions[k * 2], sy = satPositions[k * 2 + 1]
+    if (sx < mnSX) mnSX = sx;  if (sx > mxSX) mxSX = sx
+    if (sy < mnSY) mnSY = sy;  if (sy > mxSY) mxSY = sy
+  }
+
+  return {
+    positions, satPositions, vertexCount,
+    satCrsBbox: { minX: mnSX, maxX: mxSX, minY: mnSY, maxY: mxSY },
+  }
+}
+
+// ─── TerrainColumn ────────────────────────────────────────────────────────────
+// ColumnData wrapping a live fn[] of per-tile position textures.
+// refresh(plot) calls syncFn so tile coverage updates each frame.
+
+class TerrainColumn extends ColumnData {
+  constructor(vertexCount, texFns, syncFn) {
+    super()
+    this._vertexCount = vertexCount
+    this._texFns = texFns
+    this._syncFn = syncFn
+  }
+  get length() { return this._vertexCount }
+  get shape()  { return [this._vertexCount] }
+  resolve(path, _regl) {
+    return {
+      glslExpr: `sampleColumn(u_col_${path}, a_pickId)`,
+      textures: { [`u_col_${path}`]: this._texFns },
+    }
+  }
+  toTexture() { return this._texFns.map(fn => fn()) }
+  async refresh(plot) {
+    this._syncFn(plot)
+    return false
+  }
+}
+
+// ─── DtmTileManager ──────────────────────────────────────────────────────────
+
+class DtmTileManager {
+  constructor({ regl, source, dtmTileCrs, plotCrs, satTileCrs, tessellation,
+                xTexFns, zTexFns, dtmTexFns,
+                satTexFns, satUvXTexFns, satUvYTexFns, dtmUvRangeFns,
+                satCacheRef, onLoad }) {
+    this.regl = regl
+    this.source = source
+    this.dtmTileCrs   = dtmTileCrs
+    this.plotCrs      = plotCrs
+    this.satTileCrs   = satTileCrs
+    this.tessellation = tessellation
+    this._fns = { xTexFns, zTexFns, dtmTexFns,
+                  satTexFns, satUvXTexFns, satUvYTexFns, dtmUvRangeFns }
+    this._satCacheRef = satCacheRef
+    this.onLoad = onLoad
+
+    this.tiles = new Map()
+    this.accessOrder = []
+    this._neededKeys = new Set()
+    this._neededSpecs = []
+    this._lastXDomain = null
+    this._lastYDomain = null
+    this._lastViewport = null
+
+    const fromCode = parseCrsCode(plotCrs)
+    const toCode   = parseCrsCode(dtmTileCrs)
+    this._plotToTile = fromCode === toCode
+      ? (pt) => pt
+      : proj4(`EPSG:${fromCode}`, `EPSG:${toCode}`).forward
+
+    this._validBounds = this._computeValidBounds()
+  }
+
+  _domainChanged(xDomain, yDomain, viewport) {
+    if (!this._lastXDomain || !this._lastYDomain) return true
+    const viewChanged = !!(viewport && this._lastViewport && (
+      viewport.width !== this._lastViewport.width ||
+      viewport.height !== this._lastViewport.height
+    ))
+    const dx = Math.abs(xDomain[1] - xDomain[0])
+    const dy = Math.abs(yDomain[1] - yDomain[0])
+    if (dx === 0 || dy === 0) {
+      return xDomain[0] !== this._lastXDomain[0] || xDomain[1] !== this._lastXDomain[1] ||
+             yDomain[0] !== this._lastYDomain[0] || yDomain[1] !== this._lastYDomain[1] || viewChanged
+    }
+    const xChange = Math.max(
+      Math.abs(xDomain[0] - this._lastXDomain[0]) / dx,
+      Math.abs(xDomain[1] - this._lastXDomain[1]) / dx
+    )
+    const yChange = Math.max(
+      Math.abs(yDomain[0] - this._lastYDomain[0]) / dy,
+      Math.abs(yDomain[1] - this._lastYDomain[1]) / dy
+    )
+    return xChange > DOMAIN_CHANGE_THRESHOLD || yChange > DOMAIN_CHANGE_THRESHOLD || viewChanged
+  }
+
+  _plotBboxToTileBbox(xDomain, yDomain) {
+    const geoY = [yDomain[0], yDomain[1]]
+    const corners = [
+      [xDomain[0], geoY[0]], [xDomain[1], geoY[0]],
+      [xDomain[0], geoY[1]], [xDomain[1], geoY[1]],
+    ].map(pt => this._plotToTile(pt))
+    return {
+      minX: Math.min(...corners.map(c => c[0])),
+      maxX: Math.max(...corners.map(c => c[0])),
+      minY: Math.min(...corners.map(c => c[1])),
+      maxY: Math.max(...corners.map(c => c[1])),
+    }
+  }
+
+  _computeValidBounds() {
+    const code = parseCrsCode(this.dtmTileCrs)
+    const corners = [[-180, -85.051129], [180, -85.051129], [-180, 85.051129], [180, 85.051129]]
+    try {
+      const project = proj4('EPSG:4326', `EPSG:${code}`).forward
+      const xs = [], ys = []
+      for (const corner of corners) {
+        const [x, y] = project(corner)
+        if (!isFinite(x) || !isFinite(y)) return null
+        xs.push(x); ys.push(y)
+      }
+      return { minX: Math.min(...xs), maxX: Math.max(...xs),
+               minY: Math.min(...ys), maxY: Math.max(...ys) }
+    } catch {
+      return null
+    }
+  }
+
+  _clampToBounds(bbox) {
+    const bounds = this._validBounds
+    if (!bounds) {
+      const { minX, maxX, minY, maxY } = bbox
+      return (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY)) ? bbox : null
+    }
+    // Treat non-finite (NaN / ±Infinity) coordinates as "unbounded in that direction"
+    // and fall back to the CRS's full valid extent. This handles the case where the
+    // view domain extends beyond the CRS's valid domain and _plotToTile returns NaN.
+    const minX = isFinite(bbox.minX) ? Math.max(bbox.minX, bounds.minX) : bounds.minX
+    const maxX = isFinite(bbox.maxX) ? Math.min(bbox.maxX, bounds.maxX) : bounds.maxX
+    const minY = isFinite(bbox.minY) ? Math.max(bbox.minY, bounds.minY) : bounds.minY
+    const maxY = isFinite(bbox.maxY) ? Math.min(bbox.maxY, bounds.maxY) : bounds.maxY
+    if (minX >= maxX || minY >= maxY) return null
+    return { minX, maxX, minY, maxY }
+  }
+
+  _computeNeededTiles(xDomain, yDomain, viewport) {
+    const rawBbox  = this._plotBboxToTileBbox(xDomain, yDomain)
+    const tileBbox = this._clampToBounds(rawBbox)  // null if view is entirely outside valid range
+    const source = this.source
+    if (source.type === 'wms') {
+      if (!tileBbox) return []
+      const url = buildWmsUrl(source, tileBbox, this.dtmTileCrs, viewport.width, viewport.height)
+      return [{ key: url, bbox: tileBbox, url, type: 'wms' }]
+    }
+
+    if (source.type === 'cog') {
+      if (!tileBbox) return []
+      const key = `cog:${tileBbox.minX.toFixed(1)},${tileBbox.minY.toFixed(1)},${tileBbox.maxX.toFixed(1)},${tileBbox.maxY.toFixed(1)}`
+      return [{ key, bbox: tileBbox, type: 'cog', z: 0, x: 0, y: 0, width: viewport.width, height: viewport.height }]
+    }
+
+    if (source.type === 'cogTiles') {
+      const bbox = tileBbox ?? rawBbox
+      if (!bbox || !isFinite(bbox.minX) || !isFinite(bbox.maxX) ||
+                   !isFinite(bbox.minY) || !isFinite(bbox.maxY)) return []
+      const tw = source.tileWidth  ?? 1
+      const th = source.tileHeight ?? 1
+      const lonMin = Math.floor(bbox.minX / tw) * tw
+      const lonMax = Math.floor(bbox.maxX / tw) * tw
+      const latMin = Math.floor(bbox.minY / th) * th
+      const latMax = Math.floor(bbox.maxY / th) * th
+      const nX = Math.round((lonMax - lonMin) / tw) + 1
+      const nY = Math.round((latMax - latMin) / th) + 1
+      if (nX * nY > 256) {
+        console.warn(`[TerrainTileLayer] cogTiles range too large (${nX}×${nY}), skipping`)
+        return []
+      }
+      // Scale per-tile fetch resolution down as tile count grows so total pixels stay ~constant.
+      const tileRes = Math.max(32, Math.floor(256 / Math.sqrt(nX * nY)))
+      const tiles = []
+      for (let lat = latMin; lat <= latMax; lat += th) {
+        for (let lon = lonMin; lon <= lonMax; lon += tw) {
+          const url = buildCogTilesUrl(source, lat, lon)
+          tiles.push({ key: `${url}@${tileRes}`, url, bbox: { minX: lon, maxX: lon + tw, minY: lat, maxY: lat + th }, type: 'cogTiles', z: 0, x: lon, y: lat, width: tileRes, height: tileRes })
+        }
+      }
+      return tiles
+    }
+
+    // For XYZ/WMTS: tile index math handles out-of-range by clamping to [0, 2^z-1].
+    // Fall back to rawBbox when dtmTileCrs isn't EPSG:3857 and _clampToBounds returns null.
+    const xyzBbox = tileBbox ?? rawBbox
+    const minZoom = source.minZoom ?? 0
+    const maxZoom = source.maxZoom ?? 14
+    const z = optimalZoom(xyzBbox, viewport.width, viewport.height, minZoom, maxZoom)
+    const [xMin, yMax] = mercToTileXY(xyzBbox.minX, xyzBbox.minY, z)
+    const [xMax, yMin] = mercToTileXY(xyzBbox.maxX, xyzBbox.maxY, z)
+    const tc = Math.pow(2, z)
+    const txMin = Math.max(0, xMin), txMax = Math.min(tc - 1, xMax)
+    const tyMin = Math.max(0, yMin), tyMax = Math.min(tc - 1, yMax)
+    if ((txMax - txMin + 1) * (tyMax - tyMin + 1) > 64) {
+      console.warn('[TerrainTileLayer] DTM tile range too large, skipping')
+      return []
+    }
+    const tiles = []
+    for (let ty = tyMin; ty <= tyMax; ty++) {
+      for (let tx = txMin; tx <= txMax; tx++) {
+        const url = source.type === 'wmts'
+          ? buildWmtsUrl(source, z, tx, ty)
+          : buildXyzUrl(source, z, tx, ty)
+        tiles.push({ key: `${z}/${tx}/${ty}`, bbox: tileToMercBbox(tx, ty, z), url, z, x: tx, y: ty })
+      }
+    }
+    return tiles
+  }
+
+  syncTiles(xDomain, yDomain, viewport) {
+    if (!this._domainChanged(xDomain, yDomain, viewport)) return
+    this._lastXDomain = xDomain.slice()
+    this._lastYDomain = yDomain.slice()
+    this._lastViewport = viewport ? { width: viewport.width, height: viewport.height } : null
+    const needed = this._computeNeededTiles(xDomain, yDomain, viewport)
+    this._neededKeys = new Set(needed.map(t => t.key))
+    this._neededSpecs = needed
+    for (const spec of needed) {
+      if (!this.tiles.has(spec.key)) this._loadTile(spec)
+    }
+    this._rebuildArrays()
+  }
+
+  requestSatTiles(viewport) {
+    const satCache = this._satCacheRef.cache
+    if (!satCache) return
+    for (const [key, tile] of this.tiles.entries()) {
+      if (tile.status !== 'loaded') continue
+      // For WMS/COG, only request sat tiles for the current needed tile(s).
+      // Old tiles accumulate in the cache (different bbox per pan position)
+      // and would otherwise trigger sat tile requests for stale positions every frame.
+      if ((this.source.type === 'wms' || this.source.type === 'cog') && !this._neededKeys.has(key)) continue
+      satCache.requestForBbox(tile.slot.satCrsBbox, viewport)
+    }
+  }
+
+  _rebuildArrays() {
+    const { xTexFns, zTexFns, dtmTexFns,
+            satTexFns, satUvXTexFns, satUvYTexFns, dtmUvRangeFns } = this._fns
+    for (const arr of [xTexFns, zTexFns, dtmTexFns,
+                       satTexFns, satUvXTexFns, satUvYTexFns, dtmUvRangeFns]) arr.length = 0
+
+    const satCacheRef = this._satCacheRef
+    const maxFallback = 4
+
+    // Build render items using Algorithm B (ancestor sub-mesh fallback).
+    // Each needed tile slot produces exactly one render item — either the tile
+    // itself (full mesh) or a sub-region of a loaded ancestor (no overlap guaranteed).
+    const renderItems = []
+
+    if (this.source.type === 'wms' || this.source.type === 'cog' || this.source.type === 'cogTiles') {
+      // WMS/COG/cogTiles have no zoom hierarchy — only render directly loaded needed tiles.
+      for (const [key, tile] of this.tiles.entries()) {
+        if (tile.status === 'loaded' && this._neededKeys.has(key)) {
+          renderItems.push({ slot: tile.slot, range: [0, 0, 1, 1] })
+        }
+      }
+    } else {
+      // XYZ/WMTS: Algorithm B — for each target tile slot, find the best available render source.
+      for (const spec of this._neededSpecs) {
+        const tile = this.tiles.get(spec.key)
+        if (tile?.status === 'loaded') {
+          renderItems.push({ slot: tile.slot, range: [0, 0, 1, 1] })
+        } else {
+          // Walk ancestors for a fallback sub-mesh.
+          for (let k = 1; k <= maxFallback; k++) {
+            const az = spec.z - k
+            if (az < 0) break
+            const ax = spec.x >> k
+            const ay = spec.y >> k
+            const aKey = `${az}/${ax}/${ay}`
+            const ancestor = this.tiles.get(aKey)
+            if (ancestor?.status === 'loaded') {
+              const stride = 1 << k
+              const qx = spec.x - ax * stride
+              const qy = spec.y - ay * stride
+              // DTM UV range for this sub-region within the ancestor tile.
+              // v-axis: qy=0 is northernmost (low v in DTM space, high a_dtm_uv.y).
+              renderItems.push({
+                slot: ancestor.slot,
+                range: [qx / stride, qy / stride, (qx + 1) / stride, (qy + 1) / stride],
+              })
+              break
+            }
+          }
+          // If no ancestor found, this slot renders as a blank area.
+        }
+      }
+    }
+
+    // Push fn[] entries, computing sat UVs once per ancestor slot.
+    const computedSlots = new Set()
+
+    for (const item of renderItems) {
+      const s = item.slot
+      const sat = satCacheRef.cache?.getBestAvailable(s.satCrsBbox)
+
+      if (!sat) {
+        // No sat tile yet — push nulls so the tile loop skips this render item.
+        xTexFns.push(      () => null)
+        zTexFns.push(      () => null)
+        dtmTexFns.push(    () => null)
+        satTexFns.push(    () => null)
+        satUvXTexFns.push( () => null)
+        satUvYTexFns.push( () => null)
+        dtmUvRangeFns.push(() => null)
+        continue
+      }
+
+      // Compute sat UV textures once per slot (shared across multiple sub-mesh render items
+      // that reference the same ancestor tile). Recompute whenever the sat tile key changes.
+      if (!computedSlots.has(s) || s._lastSatKey !== sat.key) {
+        computedSlots.add(s)
+        s._lastSatKey = sat.key
+        const vCount = s.satXArr.length
+        const uvXArr = new Float32Array(vCount)
+        const uvYArr = new Float32Array(vCount)
+        const bW = sat.bounds.maxX - sat.bounds.minX
+        const bH = sat.bounds.maxY - sat.bounds.minY
+        for (let i = 0; i < vCount; i++) {
+          uvXArr[i] = (s.satXArr[i] - sat.bounds.minX) / bW
+          uvYArr[i] = 1.0 - (s.satYArr[i] - sat.bounds.minY) / bH
+        }
+        s.satUvXTex?.destroy()
+        s.satUvYTex?.destroy()
+        s.satUvXTex = uploadToTexture(this.regl, uvXArr)
+        s.satUvYTex = uploadToTexture(this.regl, uvYArr)
+      }
+
+      const range = item.range
+      xTexFns.push(      () => s.xTex)
+      zTexFns.push(      () => s.zTex)
+      dtmTexFns.push(    () => s.dtmTex)
+      satTexFns.push(    () => sat.texture)
+      satUvXTexFns.push( () => s.satUvXTex)
+      satUvYTexFns.push( () => s.satUvYTex)
+      dtmUvRangeFns.push(() => range)
+    }
+  }
+
+  _evictTile(key) {
+    const tile = this.tiles.get(key)
+    if (!tile) return
+    tile.slot?.xTex?.destroy()
+    tile.slot?.zTex?.destroy()
+    tile.slot?.dtmTex?.destroy()
+    tile.slot?.satUvXTex?.destroy()
+    tile.slot?.satUvYTex?.destroy()
+    this.tiles.delete(key)
+    const i = this.accessOrder.indexOf(key)
+    if (i >= 0) this.accessOrder.splice(i, 1)
+    this._rebuildArrays()
+  }
+
+  async _loadTile(spec) {
+    this.tiles.set(spec.key, { status: 'loading' })
+    this.accessOrder.push(spec.key)
+    try {
+      let dtmTex
+      if (spec.type === 'cog' || spec.type === 'cogTiles') {
+        const cogSource = spec.type === 'cogTiles' ? { ...this.source, url: spec.url } : this.source
+        const result = await fetchCogData(cogSource, spec.bbox, spec.width, spec.height, 'nearest')
+        if (!this.tiles.has(spec.key)) return
+        if (!result) throw new Error(`COG DTM fetch returned no data for ${spec.key}`)
+        if (result.isFloat) {
+          // Pad single-channel float32 into RGBA float so WebGL 2 can sample it.
+          const n = result.width * result.height
+          const rgba = new Float32Array(n * 4)
+          for (let k = 0; k < n; k++) rgba[k * 4] = result.data[k]
+          dtmTex = this.regl.texture({ data: rgba, width: result.width, height: result.height, format: 'rgba', type: 'float', flipY: false, min: 'nearest', mag: 'nearest' })
+        } else {
+          const format = result.bands >= 4 ? 'rgba' : 'rgb'
+          dtmTex = this.regl.texture({ data: result.data, width: result.width, height: result.height, format, type: 'uint8', flipY: false, min: 'nearest', mag: 'nearest' })
+        }
+      } else {
+        const img = new Image()
+        img.crossOrigin = 'anonymous'
+        await new Promise((resolve, reject) => {
+          img.onload = resolve
+          img.onerror = () => reject(new Error(`Failed to load DTM tile: ${spec.url}`))
+          img.src = spec.url
+        })
+        if (!this.tiles.has(spec.key)) return
+        dtmTex = this.regl.texture({ data: img, flipY: false, min: 'nearest', mag: 'nearest', format: 'rgba', type: 'uint8' })
+      }
+
+      const { positions, satPositions, vertexCount, satCrsBbox } =
+        buildTerrainTileMesh(spec.bbox, this.dtmTileCrs, this.plotCrs, this.satTileCrs, this.tessellation)
+      console.log('[DtmTileManager] loaded tile', spec.key,
+        '| spec.bbox', spec.bbox, '| dtmTileCrs', this.dtmTileCrs,
+        '| plotCrs', this.plotCrs, '| satTileCrs', this.satTileCrs,
+        '| satCrsBbox', satCrsBbox)
+
+      const xArr = new Float32Array(vertexCount)
+      const zArr = new Float32Array(vertexCount)
+      for (let k = 0; k < vertexCount; k++) {
+        xArr[k] = positions[k * 2]
+        zArr[k] = positions[k * 2 + 1]
+      }
+      const satXArr = new Float32Array(vertexCount)
+      const satYArr = new Float32Array(vertexCount)
+      for (let k = 0; k < vertexCount; k++) {
+        satXArr[k] = satPositions[k * 2]
+        satYArr[k] = satPositions[k * 2 + 1]
+      }
+
+      const xTex = uploadToTexture(this.regl, xArr)
+      const zTex = uploadToTexture(this.regl, zArr)
+
+      if (this.source.type === 'wms' || this.source.type === 'cog') {
+        // WMS/COG tiles are view-specific, so stale ones are useless — evict immediately.
+        for (const k of [...this.tiles.keys()]) {
+          if (k !== spec.key && !this._neededKeys.has(k)) this._evictTile(k)
+        }
+      } else if (this.tiles.size > MAX_TILE_CACHE) {
+        for (const k of this.accessOrder) {
+          if (k !== spec.key && this.tiles.has(k)) {
+            this._evictTile(k)
+            if (this.tiles.size <= MAX_TILE_CACHE) break
+          }
+        }
+      }
+
+      // satXArr/satYArr kept as CPU arrays; UV textures computed in _rebuildArrays.
+      this.tiles.set(spec.key, {
+        status: 'loaded',
+        slot: { dtmTex, xTex, zTex, satXArr, satYArr, satCrsBbox },
+      })
+      this._rebuildArrays()
+      this.onLoad()
+    } catch (err) {
+      this.tiles.delete(spec.key)
+      const i = this.accessOrder.indexOf(spec.key)
+      if (i >= 0) this.accessOrder.splice(i, 1)
+      console.warn(`[TerrainTileLayer] ${err.message}`,
+        '| spec.bbox', spec.bbox, '| dtmTileCrs', this.dtmTileCrs,
+        '| plotCrs', this.plotCrs, '| satTileCrs', this.satTileCrs)
+    }
+  }
+
+  destroy() {
+    for (const key of [...this.tiles.keys()]) this._evictTile(key)
+  }
+}
+
+// ─── SatTileCache ─────────────────────────────────────────────────────────────
+
+export class SatTileCache {
+  constructor({ regl, source, satTileCrs, onLoad }) {
+    this.regl = regl
+    this.source = source
+    this.satTileCrs = satTileCrs
+    this.onLoad = onLoad
+    this.tiles = new Map()
+    this.accessOrder = []
+  }
+
+  // Returns { texture, bounds, key } for the best available sat tile covering satCrsBbox,
+  // or null if no tile is loaded yet. The key allows callers to detect sat tile changes.
+  getBestAvailable(satCrsBbox) {
+    const source = this.source
+    if (source.type === 'wms') {
+      const key  = this._wmsKey(satCrsBbox)
+      const tile = this.tiles.get(key)
+      return tile?.status === 'loaded' ? { texture: tile.texture, bounds: satCrsBbox, key } : null
+    }
+    const cx = (satCrsBbox.minX + satCrsBbox.maxX) / 2
+    const cy = (satCrsBbox.minY + satCrsBbox.maxY) / 2
+    if (!isFinite(cx) || !isFinite(cy)) return null
+    const minZoom = source.minZoom ?? 0
+    const maxZoom = source.maxZoom ?? 19
+    // Start at the zoom level matching the DTM tile size. Starting higher risks finding
+    // a stale smaller sat tile that only covers part of the DTM tile, producing holes
+    // and wrong UV mapping.
+    const WORLD_SIZE = 2 * Math.PI * 6378137
+    const bboxExtent = Math.min(satCrsBbox.maxX - satCrsBbox.minX, satCrsBbox.maxY - satCrsBbox.minY)
+    const startZoom = Math.min(maxZoom, Math.round(Math.log2(WORLD_SIZE / bboxExtent)))
+    for (let z = startZoom; z >= minZoom; z--) {
+      const [tx, ty] = mercToTileXY(cx, cy, z)
+      const key  = `${z}/${tx}/${ty}`
+      const tile = this.tiles.get(key)
+      if (tile?.status === 'loaded') return { texture: tile.texture, bounds: tileToMercBbox(tx, ty, z), key }
+    }
+    return null
+  }
+
+  requestForBbox(satCrsBbox, viewport) {
+    const source = this.source
+    if (source.type === 'wms') {
+      const key = this._wmsKey(satCrsBbox)
+      if (!this.tiles.has(key)) {
+        const url = buildWmsUrl(source, satCrsBbox, this.satTileCrs, viewport?.width ?? 256, viewport?.height ?? 256)
+        this._loadTile({ key, url, bounds: satCrsBbox })
+      }
+      return
+    }
+    // Request only the single tile containing the center of satCrsBbox at the optimal zoom.
+    // This gives one sat tile per DTM tile (at the same zoom level, bounds match almost exactly),
+    // avoiding O(N²) tile requests that overflow the cache and cause an evict-reload loop.
+    //
+    // Cap sat zoom to the inferred DTM tile zoom level. A higher sat zoom = smaller sat tile =
+    // UV coordinates outside [0,1] = terrain fragments discarded. Since satCrsBbox IS the DTM
+    // tile footprint in sat CRS (both 3857), we infer z_dtm from the bbox extent.
+    const cx = (satCrsBbox.minX + satCrsBbox.maxX) / 2
+    const cy = (satCrsBbox.minY + satCrsBbox.maxY) / 2
+    const pixelSize = viewport ? Math.max(viewport.width, viewport.height) / 2 : 256
+    const WORLD_SIZE = 2 * Math.PI * 6378137  // full Mercator world extent in metres
+    const bboxExtent = Math.min(satCrsBbox.maxX - satCrsBbox.minX, satCrsBbox.maxY - satCrsBbox.minY)
+    const dtmZoomGuess = Math.round(Math.log2(WORLD_SIZE / bboxExtent))
+    const maxZ = Math.min(source.maxZoom ?? 19, dtmZoomGuess)
+    const z = optimalZoom(satCrsBbox, pixelSize, pixelSize, source.minZoom ?? 0, maxZ)
+    const [tx, ty] = mercToTileXY(cx, cy, z)
+
+    // Guard: if satCrsBbox is degenerate (Infinity/NaN from an empty or mis-projected mesh),
+    // the tile coords will be invalid. Log and bail rather than requesting a nonsense URL.
+    const maxTile = Math.pow(2, z) - 1
+    if (!isFinite(tx) || !isFinite(ty) || tx < 0 || ty < 0 || tx > maxTile || ty > maxTile) {
+      console.warn('[SatTileCache.requestForBbox] invalid tile coords — satCrsBbox likely degenerate',
+        { satCrsBbox, cx, cy, bboxExtent, dtmZoomGuess, maxZ, z, tx, ty })
+      return
+    }
+
+    const key = `${z}/${tx}/${ty}`
+    if (!this.tiles.has(key)) {
+      const url    = source.type === 'wmts' ? buildWmtsUrl(source, z, tx, ty) : buildXyzUrl(source, z, tx, ty)
+      const bounds = tileToMercBbox(tx, ty, z)
+      this._loadTile({ key, url, bounds })
+    }
+  }
+
+  async _loadTile({ key, url, bounds }) {
+    this.tiles.set(key, { status: 'loading' })
+    this.accessOrder.push(key)
+    try {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      await new Promise((resolve, reject) => {
+        img.onload = resolve
+        img.onerror = () => reject(new Error(`Failed to load sat tile: ${url}`))
+        img.src = url
+      })
+      if (!this.tiles.has(key)) return
+      const texture = this.regl.texture({ data: img, flipY: false, min: 'linear', mag: 'linear' })
+      this.tiles.set(key, { status: 'loaded', texture, bounds })
+      console.log('[Terrain] sat tile loaded', key, 'bounds', bounds, img.width, 'x', img.height)
+      if (this.tiles.size > MAX_TILE_CACHE) {
+        for (const k of this.accessOrder) {
+          if (k !== key && this.tiles.has(k)) {
+            this.tiles.get(k).texture?.destroy()
+            this.tiles.delete(k)
+            this.accessOrder.splice(this.accessOrder.indexOf(k), 1)
+            if (this.tiles.size <= MAX_TILE_CACHE) break
+          }
+        }
+      }
+      this.onLoad()
+    } catch (err) {
+      this.tiles.delete(key)
+      const i = this.accessOrder.indexOf(key)
+      if (i >= 0) this.accessOrder.splice(i, 1)
+      console.warn(`[TerrainTileLayer] ${err.message}`)
+    }
+  }
+
+  _wmsKey(bbox) {
+    return `wms:${bbox.minX.toFixed(2)},${bbox.minY.toFixed(2)},${bbox.maxX.toFixed(2)},${bbox.maxY.toFixed(2)}`
+  }
+
+  destroy() {
+    for (const tile of this.tiles.values()) tile.texture?.destroy()
+    this.tiles.clear()
+  }
+}
+
+// ─── GLSL shaders ─────────────────────────────────────────────────────────────
+// x_pos, z_pos, sat_x, sat_y are injected by the column system (sampleColumn).
+// Spatial helpers (plot_pos_3d, normalize_axis, spatial uniforms) are injected by LayerType.
+// a_pickId, v_pickId, v_clip_pos, u_is3D, gladly_apply_color, fragColor, clip discard
+// are also injected by LayerType.
+
+const TERRAIN_VERT = `#version 300 es
+precision highp float;
+
+in vec2 a_dtm_uv;
+
+uniform sampler2D u_dtm_tex;
+uniform float u_dtm_encoding;
+uniform vec4 u_dtm_uv_range;
+
+out vec2 v_sat_uv;
+
+float decodeElev(vec4 col) {
+  float R = col.r * 255.0;
+  float G = col.g * 255.0;
+  float B = col.b * 255.0;
+  if (u_dtm_encoding < 0.5) return col.r;
+  if (u_dtm_encoding < 1.5) return -10000.0 + (R * 65536.0 + G * 256.0 + B) * 0.1;
+  if (u_dtm_encoding < 2.5) return R * 256.0 + G + B / 256.0 - 32768.0;
+  return col.r;  // float32: raw value already in R channel
+}
+
+void main() {
+  if (a_dtm_uv.x < u_dtm_uv_range.x || a_dtm_uv.x > u_dtm_uv_range.z ||
+      a_dtm_uv.y < u_dtm_uv_range.y || a_dtm_uv.y > u_dtm_uv_range.w) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    v_sat_uv = vec2(-1.0);
+    return;
+  }
+  float elevation = decodeElev(texture(u_dtm_tex, a_dtm_uv));
+  gl_Position = plot_pos_3d(vec3(x_pos, elevation, z_pos));
+  v_sat_uv = vec2(sat_uv_x, sat_uv_y);
+}
+`
+
+export const TERRAIN_FRAG = `#version 300 es
+precision highp float;
+
+in vec2 v_sat_uv;
+
+uniform sampler2D u_sat_tex;
+uniform float     u_opacity;
+
+void main() {
+  if (v_sat_uv.x < 0.0 || v_sat_uv.x > 1.0 ||
+      v_sat_uv.y < 0.0 || v_sat_uv.y > 1.0) discard;
+  vec4 color = texture(u_sat_tex, v_sat_uv);
+  fragColor = gladly_apply_color(vec4(color.rgb, color.a * u_opacity));
+}
+`
+
+// ─── ImageTerrainImpl ─────────────────────────────────────────────────────────
+// Image-based terrain implementation: decodes elevation from RGB-encoded DTM tiles.
+// Not registered directly; used by the outer TerrainTileLayerType shell.
+
+const DTM_SOURCE_SCHEMA = makeSourceSchema(DTM_PRESETS, { includeEncoding: true })
+const SAT_SOURCE_SCHEMA = makeSourceSchema(SAT_PRESETS)
+
+export class ImageTerrainImpl extends LayerType {
+  constructor() {
+    super({ name: 'terrain-image', vert: TERRAIN_VERT, frag: TERRAIN_FRAG, suppressWarnings: true })
+  }
+
+  schema(_data) {
+    return {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      properties: {
+        dtmSource:    { ...DTM_SOURCE_SCHEMA, description: 'Elevation (DTM) tile source. encoding and crs are set per source.' },
+        satSource:    { ...SAT_SOURCE_SCHEMA, description: 'Satellite/imagery tile source draped over terrain. crs is set per source.' },
+        plotCrs:      { type: 'string', description: 'CRS of the x/z plot axes. Defaults to the dtmSource crs.' },
+        tessellation: { type: 'integer', default: 16, minimum: 1, description: 'Grid resolution N×N quads per DTM tile' },
+        opacity:      { type: 'number', default: 1.0, minimum: 0, maximum: 1 },
+        xAxis: { type: 'string', enum: AXES.filter(a => a.includes('x')), default: 'xaxis_bottom' },
+        yAxis: { type: 'string', enum: AXES.filter(a => a.includes('y')), default: 'yaxis_left', description: 'Elevation axis' },
+        zAxis: { type: 'string', enum: AXES.filter(a => a.includes('z')), default: 'zaxis_bottom_left' },
+      },
+      required: ['dtmSource', 'satSource'],
+    }
+  }
+
+  resolveAxisConfig(parameters, _data) {
+    const {
+      xAxis = 'xaxis_bottom',
+      yAxis = 'yaxis_left',
+      zAxis = 'zaxis_bottom_left',
+      plotCrs,
+      dtmSource: dtmSourceSpec,
+    } = parameters
+    let dtmCrs = 'EPSG:3857'
+    try { dtmCrs = resolveSource(dtmSourceSpec).crs ?? 'EPSG:3857' } catch (_) {}
+    const effectivePlotCrs = plotCrs ?? dtmCrs
+    return {
+      xAxis,
+      xAxisQuantityKind: crsToQkX(effectivePlotCrs),
+      yAxis,
+      yAxisQuantityKind: 'distance_meters_y',
+      zAxis,
+      zAxisQuantityKind: crsToQkY(effectivePlotCrs),
+      colorAxisQuantityKinds:   {},
+      colorAxis2dQuantityKinds: {},
+      filterAxisQuantityKinds:  {},
+    }
+  }
+
+  createLayer(regl, parameters, _data, plot) {
+    const {
+      xAxis = 'xaxis_bottom',
+      yAxis = 'yaxis_left',
+      zAxis = 'zaxis_bottom_left',
+      plotCrs,
+      dtmSource: dtmSourceSpec,
+      satSource: satSourceSpec,
+      tessellation = 16,
+      opacity      = 1.0,
+    } = parameters
+
+    const axisConfig = this.resolveAxisConfig(parameters, _data)
+    const dtmSource  = resolveSource(dtmSourceSpec)
+    const satSource  = resolveSource(satSourceSpec)
+
+    const effectiveDtmTileCrs = dtmSource.crs ?? 'EPSG:3857'
+    const effectiveSatTileCrs = satSource.crs ?? 'EPSG:3857'
+    const effectivePlotCrs    = plotCrs ?? effectiveDtmTileCrs
+    const dtmEncoding         = dtmSource.encoding ?? 'terrarium'
+
+    const N = tessellation
+    const vertexCount = N * N * 6
+
+    // Shared DTM UV buffer — same for all tiles with the same N.
+    const dtmUvs = new Float32Array(vertexCount * 2)
+    let out = 0
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        for (const [gu, gv] of [[i,j],[i+1,j],[i+1,j+1],[i,j],[i+1,j+1],[i,j+1]]) {
+          dtmUvs[out * 2]     = gu / N
+          dtmUvs[out * 2 + 1] = 1.0 - gv / N
+          out++
+        }
+      }
+    }
+
+    // Live fn[] arrays — one entry per render item (loaded tile or ancestor sub-mesh).
+    // Start with () => null so isTiledTexClosure detects them at compile time;
+    // null return skips that render item until tiles are available.
+    const xTexFns        = [() => null]
+    const zTexFns        = [() => null]
+    const dtmTexFns      = [() => null]
+    const satTexFns      = [() => null]
+    const satUvXTexFns   = [() => null]
+    const satUvYTexFns   = [() => null]
+    const dtmUvRangeFns  = [() => null]
+
+    const dtmManagerRef = { manager: null }
+    const satCacheRef   = { cache: null }
+
+    const encodingMap  = { grayscale: 0, mapbox: 1, terrarium: 2, float32: 3 }
+    const dtmEncodingF = encodingMap[dtmEncoding] ?? 0
+
+    const syncFn = (renderPlot) => {
+      if (!dtmManagerRef.manager) return
+      const xScale = renderPlot.axisRegistry.getScale(xAxis)
+      const zScale = renderPlot.axisRegistry.getScale(zAxis)
+      if (!xScale || !zScale) return
+      const viewport = { width: renderPlot.width, height: renderPlot.height }
+      dtmManagerRef.manager.syncTiles(xScale.domain(), zScale.domain(), viewport)
+      dtmManagerRef.manager.requestSatTiles(viewport)
+    }
+
+    const xCol      = new TerrainColumn(vertexCount, xTexFns,      syncFn)
+    const zCol      = new TerrainColumn(vertexCount, zTexFns,      syncFn)
+    const satUvXCol = new TerrainColumn(vertexCount, satUvXTexFns, syncFn)
+    const satUvYCol = new TerrainColumn(vertexCount, satUvYTexFns, syncFn)
+
+    Promise.all([
+      ensureCrsDefined(effectiveDtmTileCrs),
+      ensureCrsDefined(effectiveSatTileCrs),
+      ensureCrsDefined(effectivePlotCrs),
+    ]).then(() => {
+      try {
+        dtmManagerRef.manager = new DtmTileManager({
+          regl, source: dtmSource,
+          dtmTileCrs: effectiveDtmTileCrs,
+          plotCrs:    effectivePlotCrs,
+          satTileCrs: effectiveSatTileCrs,
+          tessellation: N,
+          xTexFns, zTexFns, dtmTexFns,
+          satTexFns, satUvXTexFns, satUvYTexFns, dtmUvRangeFns,
+          satCacheRef,
+          onLoad: () => plot.scheduleRender(),
+        })
+        satCacheRef.cache = new SatTileCache({
+          regl, source: satSource,
+          satTileCrs: effectiveSatTileCrs,
+          onLoad: () => {
+            dtmManagerRef.manager?._rebuildArrays()
+            plot.scheduleRender()
+          },
+        })
+        plot.scheduleRender()
+      } catch (_) {}
+    }).catch(err => {
+      console.error('[TerrainTileLayer] CRS initialization failed:', err)
+    })
+
+    return [{
+      type: this,
+      xAxis,
+      yAxis,
+      zAxis: axisConfig.zAxis,
+      xAxisQuantityKind: axisConfig.xAxisQuantityKind,
+      yAxisQuantityKind: axisConfig.yAxisQuantityKind,
+      zAxisQuantityKind: axisConfig.zAxisQuantityKind,
+      colorAxes:    {},
+      colorAxes2d:  {},
+      filterAxes:   {},
+      vertexCount,
+      primitive: 'triangles',
+      lineWidth: 1,
+      instanceCount: null,
+      attributeDivisors: {},
+      attributes: {
+        a_dtm_uv:  dtmUvs,
+        x_pos:     xCol,
+        z_pos:     zCol,
+        sat_uv_x:  satUvXCol,
+        sat_uv_y:  satUvYCol,
+      },
+      uniforms: {
+        u_dtm_tex:       dtmTexFns,
+        u_sat_tex:       satTexFns,
+        u_dtm_uv_range:  dtmUvRangeFns,
+        u_dtm_encoding:  dtmEncodingF,
+        u_opacity:       opacity,
+      },
+      domains: {},
+    }]
+  }
+
+  async createDrawCommand(regl, layer, plot) {
+    const drawConfig = await LayerType.prototype.createDrawCommand.call(this, regl, layer, plot)
+    return { ...drawConfig, depth: { enable: true }, blend: { enable: false } }
+  }
+}

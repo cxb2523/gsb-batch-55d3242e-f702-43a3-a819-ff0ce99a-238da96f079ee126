@@ -1,0 +1,560 @@
+# Module Responsibilities
+
+Detailed breakdown of each source module, organised by subdirectory. For the high-level picture see [Architecture Overview](index.md). For data flow between modules see [DataFlow.md](DataFlow.md).
+
+---
+
+## `index.js`
+
+**Purpose:** Single public API entry point.
+
+**Public exports:**
+- `Plot` — main plotting class
+- `LayerType` — class for defining custom layer types
+- `Layer` — data container DTO
+- `Data`, `DataGroup` — data normalisation wrapper
+- `Axis` — first-class axis object (obtained via `plot.axes[name]`)
+- `linkAxes` — cross-plot axis linking
+- `AXES` — all 12 spatial axis names (including 3D); `AXES_2D` — the 4 standard 2D axes
+- `AXIS_GEOMETRY`, `axisEndpoints`, `axisPosAtN` — spatial axis geometry helpers
+- `AxisRegistry` — unified axis registry (spatial, color, and filter axes)
+- `Camera`, `TickLabelAtlas` — 3D/label helpers
+- `pointsLayerType`, `linesLayerType`, `barsLayerType` — built-in data layer types
+- `colorbarLayerType`, `colorbar2dLayerType` — built-in colorbar layer types
+- `filterbarLayerType` — built-in filterbar axis layer type
+- `tileLayerType`, `TileLayerType` — built-in map tile layer type
+- `Colorbar`, `Colorbar2d` — colorbar plot widgets (extend `Plot`)
+- `Float` — draggable, resizable floating widget container
+- `Filterbar` — filterbar plot widget (extends `Plot`)
+- `PlotGroup`, `ComputePipeline`, `ComputeOutput`
+- `registerLayerType`, `getLayerType`, `getRegisteredLayerTypes`
+- `registerAxisQuantityKind`, `getAxisQuantityKind`, `getRegisteredAxisQuantityKinds`
+- `registerColorscale`, `register2DColorscale` — register 1D (stop-based) and 2D (GLSL) colorscales
+- `getRegisteredColorscales`, `getRegistered2DColorscales`, `getColorscaleIndex`, `get2DColorscaleIndex`
+- `buildColorGlsl`, `buildColorscaleTexture`, `getColorscalesVersion`, `buildFilterGlsl`
+- `registerEpsgDef`, `parseCrsCode`, `crsToQkX`, `crsToQkY`, `qkToEpsgCode`, `reproject`
+- `ArrayColumn` — concrete column data class (wraps `Float32Array`)
+- `Computation`, `TextureComputation`, `GlslComputation`, `ComputedData` — base classes for custom computations
+- `registerTextureComputation`, `registerGlslComputation`, `registerComputedData`, `getComputedData`
+- `EXPRESSION_REF`, `EXPRESSION_REF_OPT`, `computationSchema`, `buildTransformSchema`, `resolveQuantityKind`
+- `ComputedDataNode`
+
+---
+
+## `core/` — Rendering Pipeline
+
+### `core/initRegl.js`
+
+**Purpose:** WebGL 2.0 context creation with regl compatibility shims.
+
+**`initRegl(canvas)`** — Obtains a `WebGL2RenderingContext`, applies three shims to bridge the WebGL 1.0 assumptions in regl v2.x, and returns the initialised regl instance. Called by `GlBase._initRegl()` and by `MasterCanvas` for the shared canvas. See architectural decision #7 in [Architecture Overview](overview.md) for the shim details.
+
+---
+
+### `core/MasterCanvas.js`
+
+**Purpose:** Global singleton that owns the single shared WebGL context and drives the render loop for all `Plot` instances.
+
+**Singleton access:** `getMasterCanvas()` returns the singleton, creating it on first call.
+
+**Key instance properties:**
+```javascript
+this.regl             // The single regl instance shared by all plots
+this.axisLineCmd      // Compiled regl command for axis lines/ticks (shared)
+this.axisBillboardCmd // Compiled regl command for tick-label billboards (shared)
+this.fboRegistry      // FramebufferRegistry — named cross-plot FBOs
+this._plots           // Set<Plot> — all registered plots
+this._dirtyPlots      // Set<Plot> — plots scheduled for the next frame
+```
+
+**`register(plot)` / `unregister(plot)`** — Called by `Plot` constructor / `destroy()`.
+
+**`schedulePlotRender(plot)`** — Adds `plot` to `_dirtyPlots` and schedules a RAF if not already pending.
+
+**RAF loop (`_tick(rafTime)`):**
+1. **Phase 1 — async**: calls `plot._prepareRender()` on all dirty plots in parallel via `Promise.all`.  `tdrYield()` calls inside `_prepareRender()` interleave across plots but never interfere with the draw phase.
+2. **Phase 2 — sync**: for each visible plot, sets `scissor+viewport` to the plot's on-screen rect (measured via `getBoundingClientRect`), clears, then calls `plot._drawSync(scissorBox)`.
+3. **Second RAF**: gates new dirty marks until the compositor has processed the current frame's GPU commands.
+
+**Resize handling**: listens for `window.resize`; updates `canvas.width/height` and calls `regl.poll()`, then reschedules all plots.
+
+---
+
+### `core/ResourceRegistry.js`
+
+**Purpose:** Ref-counted registry for shared GPU resources (e.g. colorscale textures).
+
+**`globalResourceRegistry`** — module-level singleton used by `Plot`.
+
+**`acquire(key, createFn, owner)`** — Returns the resource for `key`, creating it via `createFn()` if it does not yet exist and incrementing its reference count. Associates the resource with `owner` (a `Plot`) for automatic release. A `FinalizationRegistry` safety net releases the resource if the owner is GC'd without calling `releaseOwner`.
+
+**`releaseOwner(owner)`** — Explicitly releases all resources associated with `owner`. Called by `Plot._rebuildColorscaleTexture()` when the colorscale version changes, and by `Plot.destroy()`.
+
+---
+
+### `core/FramebufferRegistry.js`
+
+**Purpose:** Named framebuffer registry for cross-plot texture sharing.
+
+Hosted on `MasterCanvas` as `this.fboRegistry`. Maps string names to `FboEntry` objects, each holding a `texture`, `fbo`, `writeVersion`, `producer` (Plot that renders into it), and `consumers` (Set of Plots that sample it).
+
+---
+
+### `core/Plot.js`
+
+**Purpose:** Main rendering orchestrator. One instance per container element.
+
+**Key instance properties:**
+```javascript
+this.regl                // WebGL context (alias → MasterCanvas.regl)
+this._placeholder        // <div> inside container — position measured each frame
+this.layers              // Layer[]
+this.axisRegistry        // AxisRegistry (handles spatial, color, and filter axes)
+this._renderCallbacks    // Set<function> — called after each _drawSync()
+```
+
+**`update({ config, data })`** — Stores config/data, then calls `_initialize()` if both are present.
+
+**`_initialize()`** — Processes layers, sets domains, initialises zoom, schedules render. Does **not** touch the WebGL context (owned by `MasterCanvas`).
+
+**`_updateDimensions(rect)`** — Called by `MasterCanvas` just before `_drawSync()`. Updates `this.width/height/plotWidth/plotHeight` from the live bounding rect. No-op if dimensions are unchanged.
+
+**`_prepareRender()` (async)** — Phase 1 of the render cycle. Refreshes all `_dataTransformNodes` and `layer._dataColumns`. Stores failed layers in `this._failedLayers`. Called by `MasterCanvas` in parallel with other plots before any draw commands are issued.
+
+**`_drawSync(scissorBox)` (sync)** — Phase 2 of the render cycle. Draws all layers and axes using viewports offset by `scissorBox.{x,y}`. Uses `getMasterCanvas().axisLineCmd` and `.axisBillboardCmd`. Fires `_renderCallbacks` and the no-error event. Does **not** call `regl.clear()` (done by `MasterCanvas`).
+
+**`_processLayers(layersConfig, data)`**
+1. For each `{ typeName: parameters }`, looks up the `LayerType`
+2. Calls `layerType.createLayer(parameters, data)` — resolves all axis quantities
+3. Registers spatial, color, and filter axes via `axisRegistry.ensureAxis`, `ensureColorAxis`, `ensureFilterAxis`
+4. Calls `layerType.createDrawCommand(regl, layer)` and stores the result
+
+**`_setDomains(axesOverrides)`** — Computes auto-domains from layer data for spatial, color, and filter axes; applies any config overrides.
+
+**`scheduleRender()`** — Throttle-checks then calls `getMasterCanvas().schedulePlotRender(this)`.
+
+**`static schema(data)`** — Aggregates JSON Schemas from all registered layer types.
+
+**`static registerFloatFactory(type, { factory, defaultSize })`** — Registers a factory used by `_syncFloats()` to auto-create floating widgets. Called at module-load time by `Colorbar.js`, `Colorbar2d.js`, and `Filterbar.js`.
+
+---
+
+### `core/LayerType.js`
+
+**Purpose:** Encapsulate a rendering strategy with schema and factory.
+
+**Pattern:** Strategy + Factory
+
+**Key properties:**
+```javascript
+{
+  name: string,
+  // Optional static axis declarations (readable without parameters/data — for introspection)
+  xAxis: string|undefined,               // default x-axis position
+  xAxisQuantityKind: string|undefined,
+  yAxis: string|undefined,               // default y-axis position
+  yAxisQuantityKind: string|undefined,
+  colorAxisQuantityKinds: Record<string,string>,  // static dict: GLSL suffix → quantity kind for color axes
+  filterAxisQuantityKinds: Record<string,string>, // static dict: GLSL suffix → quantity kind for filter axes
+  vert: string,        // GLSL vertex shader
+  frag: string,        // GLSL fragment shader
+  schema: (data) => JSONSchema,
+  createLayer: (parameters, data) => Array<{ attributes, uniforms, primitive?, vertexCount? }>,
+  getAxisConfig: (parameters, data) => axisConfig,  // optional dynamic resolver
+}
+```
+
+**`createDrawCommand(regl, layer)`**
+- Compiles shaders into a regl draw command
+- Adds standard uniforms: `xDomain`, `yDomain`, `count`
+- For each attribute value: resolves via `resolveAttributeExpr`
+  - `Float32Array` → single-tile vertex buffer (`kind: 'buffer'`)
+  - `Float32Array[]` → per-tile vertex buffers (`kind: 'buffer-tiled'`); drives tiled rendering
+  - String / computation expression / `ColumnData` → `ColumnData`; stored in `layer._dataColumns`; produces a `sampleColumn(tex, a_pickId)` GLSL expression; `textures` values are `fn[]` (one per tile)
+- Determines tile count N by collecting all `fn[].length` values and `Float32Array[].length` values; throws on mismatch; stores `drawConfig._tileData` when N > 1
+- Injects `precision highp sampler2D; ${samplerDecls}; ${SAMPLE_COLUMN_GLSL}` when any column data is present
+- For each `[suffix, qk]` in `layer.colorAxes`: adds GLSL uniforms `colorscale${suffix}`, `color_range${suffix}`, `color_scale_type${suffix}` (reading from internal props keyed by quantity kind)
+- For each `[suffix, qk]` in `layer.filterAxes`: adds GLSL uniforms `filter_range${suffix}`, `filter_scale_type${suffix}`
+- Injects `normalize_axis()`, `map_color()`, and `filter_in_range()` GLSL helpers as needed
+- Returns a tile-looping draw function; N=1 produces exactly one draw call (identical to pre-tiling behaviour)
+
+**`createLayer(parameters, data)`**
+- Calls the user-supplied factory to get GPU config objects
+- Calls `resolveAxisConfig()` to merge static declarations with `getAxisConfig()` output
+- Constructs and returns ready-to-render `Layer` instances
+
+**`resolveAxisConfig(parameters, data)`**
+- Starts with static declarations as defaults
+- Calls `getAxisConfig(parameters, data)` if present; dynamic non-`undefined` values override statics
+- Returns fully resolved `{ xAxis, xAxisQuantityKind, yAxis, yAxisQuantityKind, colorAxisQuantityKinds, filterAxisQuantityKinds }`
+
+**`schema(data)`** — Returns JSON Schema (Draft 2020-12) for layer parameters.
+
+---
+
+### `core/Layer.js`
+
+**Purpose:** Lightweight data container (DTO).
+
+**Pattern:** Data Transfer Object
+
+**Key properties:**
+- `attributes` — values are `Float32Array` (vertex buffers), `ColumnData` instances, or column name strings; resolved to GPU form in `createDrawCommand`
+- `_dataColumns` — `ColumnData[]` populated by `createDrawCommand`; used by `Plot.render()` to call `col.refresh(plot)` each frame
+- `colorAxes` — `Record<string,string>`: GLSL name suffix → quantity kind
+- `filterAxes` — `Record<string,string>`: GLSL name suffix → quantity kind
+
+---
+
+### `data/Data.js`
+
+**Purpose:** Normalise plain data objects of several formats into a consistent columnar interface.
+
+**`Data.wrap(data)`** — Returns `data` unchanged if it already has `columns` and `getData` methods; otherwise wraps the plain object, auto-detecting the format.
+
+**Supported formats:** simple flat `Float32Array` map; per-column rich objects with `{ data, quantity_kind, domain }`; columnar format with parallel `data`, `quantity_kinds`, `domains` sub-objects.
+
+**Key methods:** `columns()`, `getData(col)`, `getQuantityKind(col)`, `getDomain(col)`.
+
+`getData(col)` returns a `ColumnData` instance (`ArrayColumn` for plain data, `TextureColumn` for computed/transformed data), or `null` if the column does not exist. Use `col.array` (on `ArrayColumn`) for CPU access, or `col.toTexture(regl)` for GPU access.
+
+---
+
+### `core/LayerTypeRegistry.js`
+
+**Purpose:** Global registry for `LayerType` instances.
+
+**Pattern:** Registry
+
+**Responsibilities:**
+- Store `LayerType` instances by name in a `Map`
+- Prevent duplicate registrations (throws on collision)
+- Throw with a helpful listing if an unregistered name is requested
+
+**API:** `registerLayerType(name, layerType)`, `getLayerType(name)`, `getRegisteredLayerTypes()`
+
+---
+
+## `axes/` — Axis System
+
+### `axes/Axis.js`
+
+**Purpose:** First-class axis object. Stable across `update()` calls; safe to hold references to.
+
+**Pattern:** Observer (subscribe/notify)
+
+**Key behaviour:**
+- `getDomain()` / `setDomain(domain)` — read and write the axis range on the owning plot
+- `subscribe(callback)` / `unsubscribe(callback)` — register for domain-change notifications
+- Re-entrancy guard prevents infinite loops when axes are linked bidirectionally
+- Works for spatial axes (e.g. `"xaxis_bottom"`), color axes, and filter axes via a unified `Plot.getAxisDomain` / `Plot.setAxisDomain` interface
+- `render()` — renders the D3 axis ticks and label into the SVG (no-op for non-spatial axes)
+
+Obtained via `plot.axes[axisName]`.
+
+---
+
+### `axes/AxisRegistry.js`
+
+**Purpose:** Centralised D3 scale management with quantity kind validation.
+
+**Pattern:** Registry with lazy initialisation
+
+**Key data structures:**
+```javascript
+this.scales = {}            // { axisName: D3Scale }
+this.axisQuantityKinds = {} // { axisName: quantityKind }
+```
+
+**`ensureAxis(name, quantityKind, scaleOverride)`**
+- Creates a D3 scale (linear or log) if the axis doesn't exist yet
+- Throws if the axis already exists with a different quantity kind
+
+**`applyAutoDomainsFromLayers(layers, axesOverrides)`** — Scans all layers to compute per-axis min/max; applies config overrides; validates log-scale domains.
+
+**Exports `AXES`** — all 12 spatial axis names (including 3D and back-face axes). **`AXES_2D`** — the four standard 2D axes: `["xaxis_bottom", "xaxis_top", "yaxis_left", "yaxis_right"]`. Also exports `AXIS_GEOMETRY`, `axisEndpoints`, `axisPosAtN`, `buildFilterGlsl`.
+
+---
+
+### `axes/AxisLink.js`
+
+**Purpose:** Cross-plot axis linking.
+
+**`linkAxes(axis1, axis2)`** — Subscribes each axis to the other. When either calls `setDomain`, the other is updated. Returns `{ unlink() }` to remove the bidirectional link.
+
+Accepts any object implementing the `Axis` interface (duck typing), not just `Axis` instances.
+
+---
+
+### `axes/AxisQuantityKindRegistry.js`
+
+**Purpose:** Global registry of quantity kind definitions.
+
+**`registerAxisQuantityKind(name, definition)`** — Registers or merges a definition `{ label, scale, colorscale }` for a quantity kind string.
+
+**`getAxisQuantityKind(name)`** — Returns the definition, falling back to `{ label: name, scale: "linear" }` for unknown names.
+
+**`getRegisteredAxisQuantityKinds()`** — Returns an array of all registered names.
+
+**`getScaleTypeFloat(quantityKind, axesConfig)`** — Returns `1.0` for log scale, `0.0` for linear; reads from `axesConfig` with fallback to the registered definition.
+
+---
+
+### `axes/ColorAxisRegistry.js` / `axes/FilterAxisRegistry.js`
+
+These files are stubs (`// Merged into AxisRegistry.js`). All color and filter axis functionality is implemented directly in `AxisRegistry.js`:
+
+- **`ensureColorAxis(qk, colorscaleOverride?)`** — registers a color axis quantity kind
+- **`ensureFilterAxis(qk)`** — registers a filter axis quantity kind with open bounds
+- **`getColorscaleIndex(qk)`** — returns the integer colorscale index used as a GLSL uniform
+
+---
+
+### `axes/ZoomController.js`
+
+**Purpose:** Handles zoom and pan interactions.
+
+Attached to the plot SVG during `_initialize()`. Detects which region the gesture starts in (plot area, or an individual axis margin) and updates only the relevant D3 scales. Uses cursor-anchored zoom: the data value under the cursor stays fixed as the scale is expanded/contracted. Works in log space for log-scale axes.
+
+---
+
+### `axes/AxisLimitEditor.js`
+
+**Purpose:** Lets the user type the end values of each spatial axis, in 2D and 3D.
+
+Created once per plot in `_initialize()`, beside the `ZoomController`, and removed in `destroy()`. It listens for `dblclick` on the plot canvas and asks `ZoomController._getRegion()` (2D and 3D alike) whether the click is on an axis band; if so it picks the end nearest the click from the sign of the click's `_unproject`ed position along the axis direction, and opens one absolutely positioned DOM box with a text field there, placed by `ZoomController.axisEndScreenPos()` (which uses `TICK_LABEL_FRAC` from `Axis.js` in 2D and the projected endpoint in 3D), pre-filled with that end's value formatted via `formatTick`. A valid value is set with `plot._getAxis(id).setDomain()`, the zoom path, so links and floats follow, and the plot then fires `"axislimit"` through `plot._emitAxisLimit()`. The box carries `data-gladly-control`, which `Plot.on()` uses to leave its DOM events out of plot events.
+
+**`parseAxisLimit(text, other, isLog)`** — the validation rule, exported for tests: returns `{ value }` or `{ error }`. A value must be a finite number, differ from the other end (an equal value would collapse the axis to zero width), and be above zero on a log axis. Crossing the other end is allowed — it reverses the axis, a state gladly supports.
+
+Colorbar, 2D colorbar and filterbar floats get the editor as plots of their own; each relays its `"axislimit"` events to the target plot with `axis` set to the target's color or filter quantity kind.
+
+---
+
+## `colorscales/` — Color Management
+
+### `colorscales/ColorscaleRegistry.js`
+
+**Purpose:** Store GLSL colorscale functions and build the dispatch code.
+
+**`registerColorscale(name, stops, nanColor)`** — Registers a 1D colorscale from color stops `[[t, r, g, b], ...]`. The stops are uploaded to a GPU texture; GLSL lookup is handled automatically. `nanColor` defaults to `[0.5, 0.5, 0.5]`.
+
+**`register2DColorscale(name, glslFn)`** — Adds a named 2D GLSL function (`vec4 colorscale_2d_NAME(vec2 t)`).
+
+**`buildColorGlsl()`** — Returns all colorscale functions concatenated with dispatch helpers:
+- `map_color(int cs, vec2 range, float value)` — 1D dispatch
+- `map_color_s(int cs, vec2 range, float v, float scaleType, float useAlpha)` — with log scale and alpha
+- `map_color_s_2d(int cs_a, ..., int cs_b, ...)` — blends two 1D colorscales, or dispatches to a true 2D colorscale when both sides share the same negative index
+
+**`getColorscaleIndex(name)`** — 1D colorscales return non-negative indices; 2D colorscales return negative indices (`-(idx+1)`), which is the signal for `map_color_s_2d` to use the true 2D path.
+
+---
+
+### `colorscales/MatplotlibColorscales.js`
+
+**Purpose:** Pre-register all standard matplotlib 1D colorscales (viridis, plasma, inferno, magma, Spectral, coolwarm, Blues, and many more).
+
+Imported by `index.js` as a side-effect so all colorscales are available immediately on library import, without any explicit registration call from user code.
+
+---
+
+### `colorscales/BivariateColorscales.js`
+
+**Purpose:** Pre-register 2D colorscales (bilinear 4-corner, HSV phase-magnitude, diverging×diverging, etc.).
+
+Imported by `index.js` as a side-effect alongside `MatplotlibColorscales.js`.
+
+---
+
+## `layers/` — Layer Type Implementations
+
+### `layers/ScatterShared.js`
+
+**Purpose:** Base class `ScatterLayerTypeBase` with shared logic for `PointsLayer` and `LinesLayer`.
+
+**Shared methods:**
+- `_getAxisConfig(parameters, data)` — resolves spatial and color axis quantity kinds from column metadata
+- `_commonSchemaProperties(dataProperties)` — returns JSON Schema properties common to both layer types (`xData`, `yData`, `vData`, `vData2`, `fData`, `xAxis`, `yAxis`)
+- `_resolveColorData(parameters, d)` — strips `"none"` sentinels, validates columns exist, returns resolved data arrays and quantity kinds
+- `_buildDomains(...)` — constructs the `domains` object from data metadata
+
+---
+
+### `layers/PointsLayer.js`
+
+**Purpose:** Built-in `points` `LayerType` — renders data as individual GL points.
+
+- Registered as `"points"`
+- Point size: 4.0 px
+- Supports optional second color data (`vData2`) for 2D colorscale mapping
+- **Schema parameters:** `xData`, `yData` (required); `vData`, `vData2`, `fData`, `xAxis`, `yAxis` (optional)
+
+---
+
+### `layers/LinesLayer.js`
+
+**Purpose:** Built-in `lines` `LayerType` — renders data as connected line segments using instanced rendering.
+
+- Registered as `"lines"`
+- One instance per segment (N−1 instances for N points); two-vertex template
+- Segment boundary collapses: when `a_seg0 ≠ a_seg1`, produces a zero-length degenerate line
+- **Schema parameters:** `xData`, `yData` (required); `vData`, `vData2`, `fData`, `xAxis`, `yAxis`, `lineSegmentIdData`, `lineColorMode`, `lineWidth` (optional)
+
+---
+
+### `layers/ColorbarLayer.js`
+
+**Purpose:** `LayerType` that renders a 1D gradient quad for a colorbar.
+
+Uses a triangle-strip primitive to fill the entire canvas with a color gradient. Supports `orientation` (`"horizontal"` or `"vertical"`). Auto-registered as `"colorbar"` on import. Typically used internally by `Colorbar.js`.
+
+---
+
+### `layers/ColorbarLayer2d.js`
+
+**Purpose:** `LayerType` that renders a 2D colorbar quad, mapping both x and y position to separate color axes.
+
+Uses the same triangle-strip quad as `ColorbarLayer`. Each fragment's `(tval_x, tval_y)` position is converted to data values in each color axis's range and passed to `map_color_s_2d`. Auto-registered as `"colorbar2d"` on import. Typically used internally by `Colorbar2d.js`.
+
+---
+
+### `layers/FilterbarLayer.js`
+
+**Purpose:** `LayerType` that registers a filter axis without rendering any geometry.
+
+Binds the filter axis quantity kind to a spatial axis so tick labels show the filter range. Always returns `vertexCount: 0` — the draw call is a no-op. Auto-registered as `"filterbar"` on import.
+
+---
+
+### `layers/TileLayer.js`
+
+**Purpose:** Built-in `tile` `LayerType` — renders map tiles from XYZ, WMS, or WMTS sources with optional reprojection.
+
+**Key internals:**
+- `TileManager` — computes needed tiles for the current viewport, fetches images, maintains an LRU cache, triggers re-renders on load
+- `buildTileMesh` — tessellates each tile into an N×N quad grid with proj4 reprojection applied per vertex
+- Zoom level is chosen automatically to match pixel resolution
+- CRS definitions are fetched from `epsg.io` on demand via `EpsgUtils.ensureCrsDefined`
+
+Auto-registered as `"tile"` on import. Also exports the `TileLayerType` class for subclassing.
+
+---
+
+## `floats/` — Floating Widgets
+
+### `floats/Float.js`
+
+**Purpose:** Draggable, resizable floating container that wraps any plot-like widget.
+
+Creates an absolutely-positioned `<div>` inside the parent plot's container with a thin drag bar at the top and a resize handle at the bottom-right. The content area below the drag bar is filled by calling the user-supplied `factory(contentElement)`, which must return an object with a `destroy()` method. Used by `Plot._syncFloats()` to host `Colorbar`, `Colorbar2d`, and `Filterbar` instances.
+
+---
+
+### `floats/Colorbar.js`
+
+**Purpose:** 1D colorbar plot (extends `Plot`).
+
+Overrides `render()` to read the current range, colorscale, and scale type from the target plot's `ColorAxisRegistry`, then delegates to `super.render()`. Links its spatial axis bidirectionally to the target's color axis so zoom/pan propagates. Registers itself in the target's `_renderCallbacks` so it redraws automatically on every main-plot render.
+
+At module load, registers a `'colorbar'` float factory with `Plot.registerFloatFactory` so `_syncFloats()` can auto-create instances from `config.axes[qk].colorbar` declarations.
+
+---
+
+### `floats/Colorbar2d.js`
+
+**Purpose:** 2D colorbar plot (extends `Plot`).
+
+Like `Colorbar`, but syncs two color axes (`xAxis` and `yAxis`) to the target's `ColorAxisRegistry` and links both spatial axes bidirectionally. Uses `colorbar2d` as its layer type.
+
+At module load, registers a `'colorbar2d'` float factory with `Plot.registerFloatFactory` so `_syncFloats()` can auto-create instances from `config.colorbars` entries that specify both `xAxis` and `yAxis`.
+
+---
+
+### `floats/Filterbar.js`
+
+**Purpose:** Filterbar plot (extends `Plot`) for interactively controlling a filter axis range.
+
+Overrides `render()` to read the current filter range from the target's `FilterAxisRegistry`, update the spatial axis domain, and sync ∞ checkbox states. Links its spatial axis bidirectionally to the target's filter axis. Adds two checkbox overlays at the edges that toggle open bounds (null min / null max) on the target filter axis.
+
+At module load, registers a `'filterbar'` float factory with `Plot.registerFloatFactory` so `_syncFloats()` can auto-create instances from `config.axes[qk].filterbar` declarations.
+
+---
+
+## `geo/` — Geographic Utilities
+
+### `geo/EpsgUtils.js`
+
+**Purpose:** EPSG/CRS handling for the map tile layer.
+
+**`parseCrsCode(crs)`** — Parses `"EPSG:26911"`, `"26911"`, or `26911` to an integer code.
+
+**`crsToQkX(crs)` / `crsToQkY(crs)`** — Convert a CRS string to the corresponding quantity kind strings (`"epsg_26911_x"` / `"epsg_26911_y"`). Used by `TileLayer` to auto-register axis quantity kinds.
+
+**`qkToEpsgCode(qk)`** — Reverse: parses `"epsg_26911_x"` back to `26911`.
+
+**`registerEpsgDef(epsgCode, proj4string)`** — Pre-registers a proj4 definition for offline use, and registers the matching quantity kinds.
+
+**`ensureCrsDefined(crs)`** — Ensures a CRS is defined in proj4 and has quantity kinds registered. If not already known, fetches the proj4 string from `epsg.io` (async). Concurrent calls for the same code share one in-flight request.
+
+**`reproject(fromCrs, toCrs, point)`** — Reprojects a `[x, y]` point between two CRS codes using proj4.
+
+---
+
+## `compute/` — Computed Attributes
+
+The `compute/` directory implements the **computed attribute system**: a class-based registry of named computations that can produce GPU textures or GLSL expressions for use as layer attributes.
+
+---
+
+### `compute/ComputationRegistry.js`
+
+**Purpose:** Central hub for the computed attribute system.
+
+**Pattern:** Registry + Strategy
+
+**`ColumnData` class hierarchy** — the unified type for all columnar data:
+- `ColumnData` — abstract base with `resolve(path, regl)`, `toTexture(regl)` (returns `texture[]`), `refresh(plot)`, `length`, `domain`, `quantityKind`
+- `ArrayColumn extends ColumnData` — wraps `Float32Array`; lazily uploads to GPU texture; exposes `.array` for CPU access; `toTexture()` returns `[texture]`
+- `TextureColumn extends ColumnData` — wraps a mutable `{ texture }` ref; supports axis-reactive refresh via `refreshFn`; `toTexture()` returns `[texture]`
+- `GlslColumn extends ColumnData` — wraps `{ name: ColumnData }` inputs and a GLSL template function; composes expressions without a GPU pass; `toTexture()` loops over N input tiles and returns `texture[]` (N = max tile count across all inputs)
+
+**Base computation classes:**
+- `Computation` — abstract base; subclasses must implement `schema(data) => JSONSchema`
+- `TextureComputation extends Computation` — subclasses must implement `compute(regl, inputs, getAxisDomain) => texture` (a single regl texture — the framework wraps it in a single-tile `TextureColumn`) where `inputs` values that were column refs are `ColumnData` instances
+- `GlslComputation extends Computation` — subclasses must implement `glsl(resolvedGlslParams) => string`
+
+**Utility functions:**
+- `uploadToTexture(regl, array)` — uploads `Float32Array` to an RGBA float texture packing 4 values per texel; sets `tex._dataLength`. Sampled via the injected `sampleColumn(sampler2D, float i)` GLSL helper.
+- `resolveExprToColumn(expr, data, regl, plot)` — resolves string/expression/ColumnData to a `ColumnData` instance
+- `SAMPLE_COLUMN_GLSL` — GLSL `sampleColumn(sampler2D, float)` helper string; injected automatically into shaders using column data
+
+**Registry functions:**
+- `registerTextureComputation(name, computation)` — stores a `TextureComputation` instance under `name`
+- `registerGlslComputation(name, computation)` — stores a `GlslComputation` instance under `name`
+
+**Schema support:**
+- `EXPRESSION_REF` — `{ '$ref': '#/$defs/expression' }` constant; use in `schema()` for params that accept a column name, `Float32Array`, or nested computation expression
+- `computationSchema(data)` — builds a JSON Schema Draft 2020-12 document with `$defs` for every registered computation's params plus a recursive `expression` entry (`anyOf` of column names and all computation forms)
+
+**Attribute resolution:**
+- `resolveAttributeExpr(regl, expr, attrShaderName, plot)` — entry point called by `LayerType.createDrawCommand`; returns:
+  - `{ kind: 'buffer-tiled', values }` for a `Float32Array` (wrapped as `[expr]`) or `Float32Array[]` (one typed array per tile)
+  - `{ kind: 'computed', glslExpr, textures, col }` for column expressions. `textures` values are `fn[]` arrays (one per tile). `col` is a `ColumnData` instance stored in `layer._dataColumns` for per-frame refresh.
+
+**Axis-reactive recomputation:** when a `TextureComputation.compute()` calls `getAxisDomain(axisId)`, the registry registers that axis as a dependency. A `refreshFn` closure is attached to the resulting `TextureColumn`. On each render, `Plot` calls `col.refresh(plot)` on all `ColumnData` in `layer._dataColumns`; the texture is recomputed in-place if any tracked axis domain has changed.
+
+---
+
+### Built-in Computation Files
+
+Each file defines one or more `TextureComputation` subclasses and registers them as side-effects. All are imported by `index.js`.
+
+| File | Registered name(s) | Description |
+|------|--------------------|-------------|
+| `compute/hist.js` | `histogram` | Bins normalised values into a histogram texture (CPU or GPU path; auto-selects bin count via Scott's rule) |
+| `compute/axisFilter.js` | `filteredHistogram` | Like `histogram` but filters input by a filter axis range before counting; axis-reactive |
+| `compute/kde.js` | `kde` | Gaussian-smoothed kernel density estimate over a histogram or raw array |
+| `compute/filter.js` | `filter1D`, `lowPass`, `highPass`, `bandPass` | 1-D GPU convolution; Gaussian low/high/band-pass variants built on top |
+| `compute/fft.js` | `fftConvolution` (TextureComputation); `FftData` (ComputedData — produces `real` + `imag` columns) | GPU Cooley–Tukey FFT; FFT-based convolution |
+| `compute/conv.js` | `convolution` | Adaptive convolution: single-pass GPU (kernel ≤ 1024), chunked GPU (≤ 8192), or FFT fallback |
+
+See [Computations](../extension-api/Computations.md) for usage, parameter schemas, and extension examples.

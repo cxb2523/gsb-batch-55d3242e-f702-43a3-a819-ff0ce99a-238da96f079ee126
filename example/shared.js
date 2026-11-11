@@ -1,0 +1,32 @@
+import { registerAxisQuantityKind } from "../src/index.js"
+import { } from "../src/layers/PointsLayer.js"
+import { } from "../src/layers/LinesLayer.js"
+import { } from "../src/floats/Filterbar.js"
+import { } from "./layer-types/MultiLineLayer.js"
+
+export { data } from "./data/sampleData.js"
+
+export function showStatus(statusEl, text, { error = false } = {}) {
+  if (!text) {
+    statusEl.innerHTML = ''
+    return
+  }
+  const inner = document.createElement('div')
+  if (error) {
+    inner.style.background = '#c00'
+    inner.style.color = '#fff'
+    inner.style.padding = '2px 6px'
+  }
+  inner.textContent = text
+  statusEl.innerHTML = ''
+  statusEl.appendChild(inner)
+}
+
+registerAxisQuantityKind("voltage_V",            { label: "Voltage (V)",           scale: "linear", colorscale: "viridis"   })
+registerAxisQuantityKind("distance_m",           { label: "Distance (m)",          scale: "linear", colorscale: "plasma"    })
+registerAxisQuantityKind("current_A",            { label: "Current (A)",           scale: "linear", colorscale: "inferno"   })
+registerAxisQuantityKind("reflectance_au",       { label: "Reflectance (a.u.)",    scale: "linear", colorscale: "magma"     })
+registerAxisQuantityKind("incidence_angle_rad",  { label: "Incidence angle (rad)", scale: "linear", colorscale: "Spectral"  })
+registerAxisQuantityKind("temperature_K",        { label: "Temperature (K)",       scale: "linear", colorscale: "coolwarm"  })
+registerAxisQuantityKind("velocity_ms",          { label: "Velocity (m/s)",        scale: "linear", colorscale: "Blues"     })
+registerAxisQuantityKind("line_index",           { label: "Channel",               scale: "linear", colorscale: "Spectral"  })

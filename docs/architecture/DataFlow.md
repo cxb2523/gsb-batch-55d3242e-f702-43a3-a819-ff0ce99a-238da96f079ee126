@@ -1,0 +1,254 @@
+# Data Flow & Rendering
+
+This page describes how data moves through Gladly at runtime: the declarative setup phase, the per-frame render cycle, and the zoom/pan interaction cycle. For module internals see [Modules.md](Modules.md). For the high-level picture see [Architecture Overview](index.md).
+
+---
+
+## Declarative Setup Phase
+
+```
+1. Register layer types (once at startup)
+   └─> registerLayerType("points", pointsLayerType)  // side-effect import of PointsLayer.js
+       └─> registerLayerType("lines", linesLayerType)   // side-effect import of LinesLayer.js
+           └─> LayerTypeRegistry.set(...)
+
+2. Prepare data
+   └─> const data = { x: Float32Array, y: Float32Array, v: Float32Array }
+
+3. Create Plot
+   new Plot(container)
+   ├─> Creates placeholder <div> (position:absolute; 100%×100%) and appends to container
+   ├─> Obtains this.regl from getMasterCanvas().regl  (shared context)
+   ├─> getMasterCanvas().register(this)
+   ├─> Attaches ResizeObserver on <div> (calls update({}) on resize)
+   └─> No rendering yet — waits for update()
+
+4. plot.update({ config, data })
+   ├─> Stores config and data
+   ├─> Reads width/height from placeholder.clientWidth / clientHeight
+   └─> Calls Plot._initialize()
+```
+
+### `Plot._initialize()`
+
+```
+Plot._initialize()
+  │
+  ├─> Create AxisRegistry(width, height)
+  │   (handles spatial, color, and filter axes)
+  │
+  ├─> Plot._processLayers(config.layers, data)
+  │   │
+  │   └─> For each { typeName: parameters } in layers:
+  │       │
+  │       ├─> LayerTypeRegistry.get(typeName)
+  │       │
+  │       ├─> layerType.createLayer(parameters, data)
+  │       │   ├─> User createLayer: extract Float32Arrays, return config object
+  │       │   ├─> resolveAxisConfig()  — merge static declarations + getAxisConfig()
+  │       │   └─> Construct Layer instance
+  │       │
+  │       ├─> axisRegistry.ensureAxis(layer.xAxis, layer.xAxisQuantityKind)
+  │       │   └─> Create D3 scale if new; throw if quantity kind conflicts
+  │       ├─> axisRegistry.ensureAxis(layer.yAxis, layer.yAxisQuantityKind)
+  │       │
+  │       ├─> axisRegistry.ensureColorAxis(quantityKind) — per color slot
+  │       ├─> axisRegistry.ensureFilterAxis(quantityKind) — per filter slot
+  │       │
+  │       └─> layerType.createDrawCommand(regl, layer)
+  │           ├─> Inject map_color() GLSL if color axes present
+  │           ├─> Inject filter_in_range() GLSL if filter axes present
+  │           ├─> For each attribute value:
+  │           │   └─> resolveAttributeExpr(regl, expr, name, plot)
+  │           │       ├─> Float32Array   → { kind: 'buffer-tiled', values: [expr] } (wrapped as single-tile list)
+  │           │       ├─> Float32Array[] → { kind: 'buffer-tiled', values }          (N per-tile vertex buffers)
+  │           │       └─> string / ColumnData / expression → { kind: 'computed', glslExpr, textures, col }
+  │           │           ├─> string → resolveExprToColumn → ColumnData (ArrayColumn or TextureColumn)
+  │           │           ├─> { computationName: params } → TextureComputation.createColumn()
+  │           │           │     → TextureColumn with optional refreshFn for axis-reactive recompute
+  │           │           │   or GlslComputation.createColumn() → GlslColumn (pure GLSL expression)
+  │           │           ├─> col.resolve(path, regl) → { glslExpr, textures: { name: [fn, ...] } }
+  │           │           │   textures values are always fn[] — one zero-arg texture fn per tile
+  │           │           └─> col stored in layer._dataColumns for per-frame col.refresh(plot)
+  │           ├─> Determine tile count N: max of all fn[].length values and Float32Array[].length values
+  │           │   All must agree (throw if mismatch). N = 1 for fully non-tiled layers.
+  │           ├─> Inject SAMPLE_COLUMN_GLSL + sampler declarations into vertex shader
+  │           │   when any column data attributes are present
+  │           ├─> Inject column expressions into vertex shader main() body
+  │           │   as: float attrName = sampleColumn(u_col_attrName, a_pickId);
+  │           ├─> Compile vertex + fragment shaders (one compiled command, shared across all tiles)
+  │           ├─> Build base attributes map { name: Float32Array buffer } (tile 0)
+  │           ├─> Build uniforms map  { xDomain, yDomain, count,
+  │           │                         colorscale_<slot>, color_range_<slot>,
+  │           │                         filter_range_<slot>,
+  │           │                         u_col_<name>: fn[] for column data }
+  │           ├─> Store _tileData = { nTiles, tileCounts, tileBufferOverrides } when N > 1
+  │           └─> Return tile-looping draw function (N=1 → one call, N>1 → N calls per render)
+  │
+  ├─> Plot._setDomains(config.axes)
+  │   ├─> Spatial axes:
+  │   │   └─> For each registered axis, collect attribute arrays from all layers;
+  │   │       compute [min, max]; apply config override if present
+  │   ├─> Filter axes:
+  │   │   └─> For each registered filter axis, apply config min/max if present;
+  │   │       default = open bounds (no discard)
+  │   └─> Color axes:
+  │       └─> For each registered quantity kind, scan all layer colorAxes values;
+  │           compute [min, max]; apply config override; apply colorscale preference
+  │
+  ├─> Plot.initZoom()   — see Interaction Cycle below
+  │
+  └─> Plot.scheduleRender()
+      └─> getMasterCanvas().schedulePlotRender(this)
+          └─> schedules RAF if not already ticking — see Render Cycle below
+```
+
+---
+
+## Render Cycle (per frame)
+
+The render cycle is driven by `MasterCanvas` and split into two phases so that async data refreshes from multiple plots can run in parallel before any GPU commands are issued.
+
+```
+MasterCanvas._tick(rafTime)   [called by requestAnimationFrame]
+  │
+  ├─> PHASE 1 — async (all dirty plots in parallel)
+  │   └─> await Promise.all(dirtyPlots.map(p => p._prepareRender()))
+  │       │
+  │       └─> plot._prepareRender()
+  │           ├─> Refresh data transforms (_dataTransformNodes)
+  │           ├─> Refresh axis-reactive column data:
+  │           │   └─> For each ColumnData in layer._dataColumns:
+  │           │       └─> col.refresh(plot)
+  │           │           └─> If any tracked axis domain changed: recompute texture in-place
+  │           └─> Populate this._failedLayers
+  │
+  ├─> PHASE 2 — sync (one plot at a time)
+  │   └─> regl.poll()  — sync regl state after async phase
+  │   │
+  │   └─> For each plot in dirtyPlots (visible only):
+  │       ├─> Measure rect = plot._placeholder.getBoundingClientRect()
+  │       ├─> Convert to WebGL scissorBox (bottom-left origin)
+  │       ├─> plot._updateDimensions(rect)
+  │       ├─> regl({scissor: scissorBox, viewport: scissorBox})(() => {
+  │       │     regl.clear({ color: [1, 1, 1, 1] })
+  │       │   })
+  │       └─> plot._drawSync(scissorBox)
+  │           │
+  │           ├─> For each (layer, drawCommand):
+  │           │   │
+  │           │   ├─> Collect runtimeProps:
+  │           │   │   ├─> xDomain  ← axisRegistry.scales[layer.xAxis].domain()
+  │           │   │   ├─> yDomain  ← axisRegistry.scales[layer.yAxis].domain()
+  │           │   │   ├─> viewport ← { x: scissorBox.x + margin.left,
+  │           │   │   │               y: scissorBox.y + margin.bottom,
+  │           │   │   │               width: plotWidth, height: plotHeight }
+  │           │   │   ├─> count    ← layer.vertexCount ?? layer.attributes.x.length
+  │           │   │   ├─> Per color slot:
+  │           │   │   │     colorscale_<slot>  ← axisRegistry.getColorscaleIndex(quantityKind)
+  │           │   │   │     color_range_<slot> ← axisRegistry color range for quantityKind
+  │           │   │   └─> Per filter slot:
+  │           │   │         filter_range_<slot> ← axisRegistry.getRangeUniform(quantityKind)
+  │           │   │           → vec4 [min, max, hasMin, hasMax]
+  │           │   │
+  │           │   └─> drawCommand(runtimeProps)
+  │           │       │
+  │           │       ├─> For t in 0 .. N-1 (N = tile count; N=1 for non-tiled layers):
+  │           │       │   ├─> Resolve per-tile texture uniforms: u_col_<name> ← fn[t]()
+  │           │       │   ├─> Override per-tile buffer attrs (tileBufferOverrides[t]) + a_pickId
+  │           │       │   ├─> Set count = tileCounts[t] (if buffer-tiled) or runtimeProps.count
+  │           │       │   └─> Compiled regl command(tileProps) — one GPU draw call
+  │           │       │       │
+  │           │       │       └─> GPU execution (geometry accumulates across tiles):
+  │           │       │           ├─> Vertex shader (once per data point in this tile):
+  │           │       │           │   ├─> Read attribute values (x, y, v, z, …)
+  │           │       │           │   ├─> Optionally: filter_in_range() → discard
+  │           │       │           │   ├─> Normalise to clip space using xDomain / yDomain
+  │           │       │           │   └─> Write gl_Position, gl_PointSize, varyings
+  │           │       │           └─> Fragment shader (once per rasterised pixel):
+  │           │       │               ├─> Optionally: discard via filter_in_range()
+  │           │       │               ├─> map_color() → colorscale lookup → RGBA
+  │           │       │               └─> Write fragColor (out vec4)
+  │           │       └─> (end tile loop)
+  │           │
+  │           ├─> Render axes:
+  │           │   └─> For each axis in AxisRegistry:
+  │           │       └─> axis.render(regl, axisLineCmd, axisBillboardCmd,
+  │           │                       viewport, fullViewport,
+  │           │                       viewportOrigin: { x: scissorBox.x, y: scissorBox.y })
+  │           │           (axes are drawn on the shared canvas at the scissor-offset position)
+  │           │
+  │           └─> Fire all callbacks in Plot._renderCallbacks
+  │               └─> e.g. Colorbar._drawSync() re-syncs from target plot and re-renders
+  │
+  └─> Schedule next RAF only if new dirty marks arrived during the tick
+```
+
+---
+
+## Interaction Cycle (Zoom / Pan)
+
+### Setup
+
+```
+plot.initZoom()
+  ├─> Append full-coverage SVG <rect> (the zoom capture surface)
+  ├─> Create D3 zoom behaviour:
+  │   ├─> scaleExtent [0.5, 50]
+  │   ├─> On wheel: zoom only (no translate)
+  │   └─> On drag: pan (translate)
+  └─> Attach zoom to SVG element
+      └─> On each zoom event → _handleZoom(event)
+```
+
+### Plot-area zoom (all axes)
+
+```
+User scrolls / drags in the plot area
+  │
+  ├─> D3 zoom event fires
+  ├─> Region detected: "plot_area"
+  │
+  ├─> For each of the four possible axes:
+  │   ├─> Get current D3 scale
+  │   ├─> Determine anchor: data value at mouse position (stays fixed under cursor)
+  │   ├─> Apply scale factor / translate
+  │   └─> Update scale domain
+  │
+  └─> plot.scheduleRender()
+```
+
+### Axis-specific zoom
+
+```
+User scrolls / drags over an individual axis label area
+  │
+  ├─> D3 zoom event fires
+  ├─> Region detected: e.g. "xaxis_bottom"
+  │
+  ├─> Get that axis's D3 scale
+  ├─> Determine anchor at mouse position
+  ├─> Apply transform to that scale only
+  │
+  └─> plot.scheduleRender()
+```
+
+**Cursor-anchored zoom detail:**
+The interaction tracks the mouse position at gesture start, computes the data value at that pixel, applies the zoom/scale transform, then shifts the domain so that data value maps back to the same pixel. This gives the intuitive "zoom around the cursor" effect independently on each axis.
+
+---
+
+## ResizeObserver Flow
+
+```
+Placeholder <div> resized
+  │
+  └─> ResizeObserver callback fires
+      └─> plot.update({})   (no new config or data)
+          └─> Reads new clientWidth / clientHeight from placeholder
+              └─> _initialize() → full re-render at new size
+```
+
+The ResizeObserver is attached to `plot._placeholder` (the `<div>`), not the container, so it fires only when the plot area changes and not when unrelated siblings resize.
+
+No manual resize handling is needed.

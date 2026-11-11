@@ -1,0 +1,275 @@
+# Gladly Architecture Documentation
+
+## Overview
+
+Gladly is a GPU-accelerated multi-axis plotting library built on WebGL (via regl) and D3.js. The architecture is designed around a **declarative API** with clean separation between GPU-based data rendering and DOM-based axis/interaction management.
+
+**Key Architectural Principles:**
+- Declarative plot configuration — specify what to render, not how
+- GPU rendering for data points, axes, ticks, and lasso outlines — entirely on the WebGL canvas
+- Layer type registry for extensibility without modifying core code
+- Auto range calculation from data, with opt-in overrides
+- Multi-axis system with quantity kind enforcement to prevent incompatible layer combinations
+- Strategy pattern: each layer type encapsulates its own shaders and schema
+
+---
+
+## Sub-topics
+
+- **[Modules](Modules.md)** — per-module purpose, patterns, key properties and methods
+- **[Data Flow & Rendering](DataFlow.md)** — declarative setup, render cycle, zoom/pan interaction
+- **[Selection](Selection.md)** — two-pass GPU selection pipeline, SelectionRegistry, cross-plot sync
+
+---
+
+## Project Structure
+
+```
+gladly/
+├── src/
+│   ├── index.js                               # Public API exports
+│   ├── core/
+│   │   ├── MasterCanvas.js                    # Singleton shared WebGL context + RAF loop
+│   │   ├── initRegl.js                        # WebGL 2.0 shims + regl initialisation utility
+│   │   ├── ResourceRegistry.js                # Ref-counted GPU resource registry
+│   │   ├── FramebufferRegistry.js             # Named framebuffer registry for cross-plot sharing
+│   │   ├── Plot.js                            # Main rendering orchestrator
+│   │   ├── Layer.js                           # Data container (DTO)
+│   │   ├── LayerType.js                       # Shader + metadata + schema + factory
+│   │   └── LayerTypeRegistry.js               # Global layer type registration
+│   ├── data/
+│   │   └── Data.js                            # Data normalisation wrapper
+│   ├── axes/
+│   │   ├── Axis.js                            # First-class axis object (stable across update())
+│   │   ├── AxisRegistry.js                    # Spatial, color, and filter axis management
+│   │   ├── AxisLimitEditor.js                 # Double-click an axis end to type its value; 2D and 3D
+│   │   ├── AxisLink.js                        # Cross-plot axis linking
+│   │   ├── AxisQuantityKindRegistry.js        # Global quantity kind definitions
+│   │   ├── ColorAxisRegistry.js               # Stub — merged into AxisRegistry.js
+│   │   ├── FilterAxisRegistry.js              # Stub — merged into AxisRegistry.js
+│   │   └── ZoomController.js                  # Zoom and pan interaction
+│   ├── colorscales/
+│   │   ├── ColorscaleRegistry.js              # GLSL colorscale registration + dispatch builder
+│   │   ├── MatplotlibColorscales.js           # All matplotlib 1D colorscales pre-registered
+│   │   └── BivariateColorscales.js            # 2D colorscales pre-registered
+│   ├── layers/
+│   │   ├── ScatterShared.js                   # Shared base class for points/lines layer types
+│   │   ├── PointsLayer.js                     # Built-in points LayerType
+│   │   ├── LinesLayer.js                      # Built-in lines LayerType
+│   │   ├── ColorbarLayer.js                   # Built-in 1D colorbar gradient LayerType
+│   │   ├── ColorbarLayer2d.js                 # Built-in 2D colorbar LayerType
+│   │   ├── FilterbarLayer.js                  # Built-in filterbar axis LayerType
+│   │   └── TileLayer.js                       # Built-in map tile LayerType (XYZ/WMS/WMTS)
+│   ├── floats/
+│   │   ├── Float.js                           # Draggable, resizable floating widget container
+│   │   ├── Colorbar.js                        # 1D colorbar plot (extends Plot)
+│   │   ├── Colorbar2d.js                      # 2D colorbar plot (extends Plot)
+│   │   └── Filterbar.js                       # Filterbar plot (extends Plot)
+│   ├── geo/
+│   │   └── EpsgUtils.js                       # EPSG/CRS projection utilities
+│   └── compute/
+│       ├── ComputationRegistry.js             # Base classes, registry, schema, attribute resolver
+│       ├── hist.js                            # 'histogram' TextureComputation
+│       ├── axisFilter.js                      # 'filteredHistogram' TextureComputation
+│       ├── kde.js                             # 'kde' TextureComputation
+│       ├── filter.js                          # 'filter1D', 'lowPass', 'highPass', 'bandPass' TextureComputations
+│       ├── fft.js                             # 'fft1d', 'fftConvolution' TextureComputations
+│       └── conv.js                            # 'convolution' TextureComputation
+├── example/
+│   ├── main.js                                # Example usage
+│   └── index.html                             # Demo page
+├── package.json
+└── docs/
+    ├── Quickstart.md                          # Installation and minimal example
+    ├── README.md                             # Documentation index
+    ├── configuration/                         # Plot configuration docs
+    ├── user-api/                              # Programmatic API docs
+    ├── extension-api/                         # Extension API docs
+    └── architecture/                          # Architecture docs
+```
+
+---
+
+## Component Dependency Graph
+
+```
+MasterCanvas (global singleton)
+  ├── regl (single shared WebGL context for all plots)
+  ├── axisLineCmd / axisBillboardCmd (shared axis draw commands)
+  ├── FramebufferRegistry (named cross-plot FBOs)
+  └── Plot[] (registered plots)
+
+Plot (main rendering orchestrator — one per container)
+  ├── regl (alias → MasterCanvas.regl)
+  ├── _placeholder <div> (position/size measured via getBoundingClientRect each frame)
+  ├── D3 (d3-scale only — no SVG/DOM rendering)
+  ├── AxisRegistry (spatial, color, and filter axes)
+  │   └── D3 scales (linear / log)
+  ├── LayerTypeRegistry (global singleton)
+  │   └── LayerType instances (by name)
+  └── Layer[] (created automatically from config)
+      └── LayerType (rendering strategy)
+
+ResourceRegistry (global singleton)
+  └── Shared GPU resources keyed by version string (e.g. colorscale textures)
+```
+
+---
+
+## Design Patterns
+
+### 1. Declarative Configuration
+
+**Intent:** Specify what to render, not how.
+
+Users pass a `config` object with layer specifications and optional range overrides. The Plot interprets this to build and render layers automatically. The configuration is serialisable JSON (data arrays aside).
+
+**Benefits:** Concise plot creation; easy serialisation; self-documenting via JSON Schema.
+
+---
+
+### 2. Registry Pattern — Layer Types
+
+**Intent:** Maintain a global registry so layers can be referenced by name in config.
+
+`LayerTypeRegistry` stores `LayerType` instances by name. Users register once at startup; the Plot looks up types by name during `update()`. `Plot.schema()` aggregates schemas from all registered types.
+
+**Benefits:** Decouples type definition from plot creation; enables schema generation and tooling.
+
+---
+
+### 3. Strategy Pattern — LayerType
+
+**Intent:** Define a family of rendering algorithms and make them interchangeable.
+
+Each `LayerType` encapsulates shaders, axis quantity kinds, schema, and a factory. The Plot calls a uniform interface regardless of layer type. New types can be added without modifying `Plot`.
+
+**Benefits:** Easy extensibility; type-specific shader code isolated; type-specific validation.
+
+---
+
+### 4. Registry Pattern — Computation Types
+
+**Intent:** Make named computations discoverable for both execution and schema introspection.
+
+`ComputationRegistry` stores `TextureComputation` and `GlslComputation` instances by name. Any computation expression `{ name: params }` in an `attributes` map is resolved through this registry at draw-command build time. `computationSchema(data)` aggregates `schema(data)` from all registered computations into a single JSON Schema document with `$defs`-based recursion.
+
+**Benefits:** Custom computations plug in without modifying core code; schema generation for all computations is automatic; expressions can nest arbitrarily via `EXPRESSION_REF`.
+
+---
+
+### 5. Factory Pattern — Layer Creation
+
+**Intent:** Encapsulate layer instantiation in the LayerType.
+
+`LayerType.createLayer(parameters, data)` extracts data arrays, resolves all axis quantity kinds, and returns a ready-to-render layer. `Plot` calls this without knowing type-specific details.
+
+**Benefits:** Data extraction co-located with layer type; validation at the type level.
+
+---
+
+### 6. Registry Pattern — AxisRegistry
+
+**Intent:** Central scale registry with lazy initialisation and quantity kind validation.
+
+`AxisRegistry.ensureAxis(name, quantityKind)` creates a D3 scale on first use. Subsequent calls with a different quantity kind throw, preventing incompatible data from sharing an axis.
+
+**Benefits:** Single source of truth for scales; prevents quantity kind mismatch bugs at runtime.
+
+---
+
+### 7. WebGL 2.0 Context with Regl Compatibility Shims
+
+**Intent:** Use a WebGL 2.0 context for the full GLSL ES 3.00 feature set (integer bit-ops, sized internal formats, core instancing) while keeping regl v2.x as the draw-call API.
+
+**Why WebGL 2.0 is required:** The GPU compute shaders (`compute/fft.js`, etc.) use integer bitwise operations (`<<`, `>>`, `|`, `&`) that are only available in GLSL ES 3.00 (`#version 300 es`), which requires a WebGL 2.0 context. All layer and compute shaders therefore use GLSL ES 3.00 syntax (`in`/`out` instead of `attribute`/`varying`, `texture()` instead of `texture2D()`, declared `out vec4 fragColor` instead of `gl_FragColor`).
+
+**Why shims are needed:** Regl v2.1.0 was designed for WebGL 1.0. It treats several capabilities that became core in WebGL 2.0 as if they were still optional extensions, and fails when `getExtension()` returns `null` for them. Three shims are applied to the `WebGL2RenderingContext` before passing it to regl:
+
+| Shim | Root cause | Fix |
+|------|-----------|-----|
+| `gl.getExtension('OES_texture_float')` | Float textures are core in WebGL 2.0; `getExtension` returns `null`. Regl aborts if it doesn't see the extension. | Return `{}` — the extension has no methods, so an empty object satisfies regl's presence check. |
+| `gl.getExtension('OES_texture_float_linear')` | Same as above for linear filtering of float textures. | Return `{}`. |
+| `gl.getExtension('ANGLE_instanced_arrays')` | Instancing is core in WebGL 2.0; the extension is not queryable. Regl disables instancing if it can't find the extension. Regl only calls `getExtension` for this if it is explicitly listed in the `extensions` array passed to `reglInit`. | Return a proxy object that maps each `*ANGLE` method (`vertexAttribDivisorANGLE`, `drawArraysInstancedANGLE`, `drawElementsInstancedANGLE`) to the corresponding WebGL 2.0 core method (`gl.vertexAttribDivisor`, etc.), plus the `VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE` (0x88FE) constant. `'ANGLE_instanced_arrays'` is also listed in the `extensions` array passed to `reglInit` to force the lookup. |
+| `gl.texImage2D(target, level, GL_RGBA, w, h, 0, GL_RGBA, GL_FLOAT, data)` | In WebGL 2.0, the unsized `GL_RGBA` (0x1908) internal format is invalid with `GL_FLOAT` type — the call requires the sized `GL_RGBA32F` (0x8814). Regl passes the unsized format. | Intercept `gl.texImage2D`; when `internalformat === GL_RGBA` and `type === GL_FLOAT`, upgrade `internalformat` to `GL_RGBA32F`. |
+
+**Note on extension name casing:** Regl normalises all extension names to lowercase before calling `getExtension` (e.g. `'oes_texture_float'`). The shims therefore compare via `name.toLowerCase()`.
+
+**Future:** If regl is updated to natively handle WebGL 2.0 contexts (detecting core capabilities without falling back to extension queries), all four shims can be removed with no other changes required.
+
+All shims live in `src/core/initRegl.js`. `GlBase._initRegl(canvas)` is a one-liner that calls `initRegl(canvas)`. `MasterCanvas` also calls `initRegl` directly for the shared canvas, without inheriting `GlBase`.
+
+---
+
+### 8. Single Shared WebGL Context (`MasterCanvas`)
+
+A fixed-position, full-viewport `<canvas>` owned by `MasterCanvas` holds the single regl context for the entire page. Individual `Plot` instances are lightweight placeholder `<div>` elements. Each RAF frame, `MasterCanvas` measures each plot's on-screen rectangle via `getBoundingClientRect()`, sets a WebGL scissor+viewport for that region, clears it, and calls `plot._drawSync(scissorBox)`.
+
+Benefits:
+- **Zero-copy selection sharing**: `SelectionColumn` GPU textures are created once and bound in any plot's draw call without copying.
+- **Correct hidden-tab behaviour**: off-screen or `display:none` plots return a zero-size rect and are skipped at zero GPU cost.
+- **Centralised resource lifecycle**: `ResourceRegistry` ref-counts shared GPU objects (e.g. colorscale textures) so they are destroyed only when all consumers are gone.
+
+### 9. WebGL-Only Rendering
+
+Everything visible — data points, axes, tick labels, and lasso outlines — is drawn on the single shared WebGL canvas. D3 is used only for scale math (`d3-scale`), not for DOM or SVG rendering. Tick labels are rendered via `TickLabelAtlas` (a WebGL texture atlas). The lasso outline is drawn as a `line loop` regl command registered in `plot._renderCallbacks`.
+
+---
+
+## Key Architectural Decisions
+
+### Declarative API with Registry
+
+A layer type registry and declarative config are more concise than an imperative builder API, easier to serialise, and enable schema introspection. Trade-off: one registration step per type, but that happens once at startup.
+
+### Auto Range Calculation
+
+Ranges are computed from data by default, eliminating boilerplate. Explicit overrides via `config.axes` remain available. Trade-off: negligible O(n) scan on each `update()`.
+
+### Typed Arrays for GPU Efficiency
+
+`Float32Array` maps directly to GPU memory with no conversion, matches GLSL `float` precision, and uses 4 bytes per value. Trade-off: slightly less convenient than regular arrays.
+
+### Embedded Shaders
+
+GLSL shaders are stored as strings inside `LayerType` instances, keeping all layer logic in one place and simplifying distribution. Trade-off: no editor syntax highlighting for the shader strings.
+
+### Domain-Based Normalisation in the GPU
+
+Coordinate normalisation happens in the vertex shader using `xDomain`/`yDomain` uniforms rather than on the CPU. The same data buffers are valid at any zoom level — zoom just changes the uniforms and triggers a re-render. Trade-off: slightly more complex shaders; benefit is smooth 60 fps zoom with no data copying.
+
+### Multi-Axis Support
+
+Four independent axes (top/bottom × left/right) with independent D3 scales support dual-y-axis plots and complex scientific visualisations. Each layer picks which axes to use.
+
+### JSON Schema Support
+
+Each `LayerType` provides a JSON Schema for its parameters. `Plot.schema()` aggregates all registered types. Enables validation, documentation generation, and IDE autocomplete without extra tooling.
+
+---
+
+## Performance Considerations
+
+| Area | Complexity | Notes |
+|------|-----------|-------|
+| GPU rendering | O(n) GPU-parallel | Fragment fill rate is the typical bottleneck |
+| Range calculation  | O(n) CPU, one pass per axis | Negligible for < 1 M points |
+| Zoom handling | O(4) scale updates | One `render()` call per event |
+| Memory | 4 bytes/value (Float32Array) | No data duplication; regl manages GPU buffers |
+
+Datasets larger than GPU memory (~1 M+ points) may need chunking. No virtual scrolling is implemented.
+
+---
+
+## Future Considerations
+
+Potential enhancements that maintain the current architecture:
+
+1. ~~**WebGL2** — upgrade regl context for instancing and compute~~ ✓ Done (WebGL 2.0 context + GLSL ES 3.00 shaders; see architectural decision #7)
+2. **Layer Groups** — batch show/hide
+3. **Animation** — time-based attribute updates
+4. ~~**Point Picking** — GPU-based selection~~ ✓ Done (`plot.pick(x, y)` method)
+5. **Runtime Validation** — enforce JSON Schema at `update()` time
+6. **Serialisation** — save/restore plot configurations as JSON
+
+All can be added without breaking the current API or architecture.
