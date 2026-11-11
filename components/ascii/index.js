@@ -6,6 +6,11 @@ import { ASCIIEffect } from 'components/ascii-effect/index'
 import { FontEditor } from 'components/font-editor'
 import { GUI } from 'components/gui'
 import { button, useControls } from 'leva'
+import {
+  CUSTOM_FONT_FAMILY,
+  FONT_LOAD_ERROR_MESSAGE,
+  injectCustomFont,
+} from 'lib/custom-font'
 import { text } from 'lib/leva/text'
 import { useStore } from 'lib/store'
 import { useContext, useEffect, useRef, useState } from 'react'
@@ -157,10 +162,25 @@ const Scene = () => {
     1 // Optional scaling factor
   )
 
-  const { fit } = useContext(AsciiContext)
+  const { fit, set, fontFamily } = useContext(AsciiContext)
 
   const [drag, setDrag] = useState(false)
   const dropzone = useRef()
+
+  // Inject the dropped font and wait until it is actually usable before
+  // swapping the family used to build the characters texture. The previous
+  // texture keeps rendering while the new font loads, so the canvas never
+  // flashes black. On failure the previous font state is restored and an
+  // error is surfaced to the user.
+  async function applyCustomFont(fontData) {
+    try {
+      await injectCustomFont(fontData)
+      set({ fontFamily: CUSTOM_FONT_FAMILY, fontError: null })
+    } catch (error) {
+      console.error('Failed to load custom font:', error)
+      set({ fontFamily, fontError: FONT_LOAD_ERROR_MESSAGE })
+    }
+  }
 
   useEffect(() => {
     function onDragEnter(e) {
@@ -216,20 +236,7 @@ const Scene = () => {
                 'load',
                 (event) => {
                   if (isFont) {
-                    const fontData = event.target.result
-                    const fontName = 'CustomFont'
-
-                    const fontFace = `
-                    @font-face {
-                      font-family: '${fontName}';
-                      src: url(${fontData});
-                    }
-                  `
-
-                    const styleElement = document.createElement('style')
-                    styleElement.innerHTML = fontFace
-
-                    document.head.appendChild(styleElement)
+                    applyCustomFont(event.target.result)
                   } else {
                     setAsset(reader.result)
                   }
@@ -312,6 +319,14 @@ function Postprocessing() {
 
 function Inner() {
   const gui = useStore((state) => state.gui)
+  const { fontError, set } = useContext(AsciiContext)
+
+  // Auto-dismiss the font error after a few seconds.
+  useEffect(() => {
+    if (!fontError) return
+    const timeout = setTimeout(() => set({ fontError: null }), 6000)
+    return () => clearTimeout(timeout)
+  }, [fontError, set])
 
   return (
     <>
@@ -337,6 +352,11 @@ function Inner() {
           </Canvas>
         </div>
       </div>
+      {fontError && (
+        <output className={s.fontError} aria-live="assertive">
+          {fontError}
+        </output>
+      )}
       <FontEditor />
       <ui.Out />
     </>
@@ -365,6 +385,12 @@ export function ASCII({ children }) {
 
   const [charactersTexture, setCharactersTexture] = useState(null)
   const [canvas, setCanvas] = useState()
+  const [fontFamily, setFontFamily] = useState(CUSTOM_FONT_FAMILY)
+  // Bumped on every font swap so the characters texture is rebuilt even
+  // when the family name stays the same (e.g. dropping a different font
+  // file twice in a row).
+  const [fontVersion, setFontVersion] = useState(0)
+  const [fontError, setFontError] = useState(null)
 
   const [
     {
@@ -511,9 +537,14 @@ export function ASCII({ children }) {
     window.history.replaceState({}, null, url)
   }, [UrlParams])
 
-  function set({ charactersTexture, canvas, ...props }) {
+  function set({ charactersTexture, canvas, fontFamily, fontError, ...props }) {
     if (charactersTexture) setCharactersTexture(charactersTexture)
     if (canvas) setCanvas(canvas)
+    if (fontFamily !== undefined) {
+      setFontFamily(fontFamily)
+      setFontVersion((version) => version + 1)
+    }
+    if (fontError !== undefined) setFontError(fontError)
     _set(props)
   }
 
@@ -530,6 +561,9 @@ export function ASCII({ children }) {
           charactersTexture,
           charactersLimit,
           fontSize,
+          fontFamily,
+          fontVersion,
+          fontError,
           fillPixels,
           color: setColor ? color : undefined,
           fit,

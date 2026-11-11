@@ -7,8 +7,14 @@ export function FontEditor() {
   const el = useRef()
 
   const invert = false
-  const { characters, fontSize, charactersLimit, set } =
-    useContext(AsciiContext)
+  const {
+    characters,
+    fontSize,
+    charactersLimit,
+    fontFamily,
+    fontVersion,
+    set,
+  } = useContext(AsciiContext)
 
   const canvasDebug = useMemo(() => document.createElement('canvas'), [])
   const contextDebug = useMemo(
@@ -52,7 +58,7 @@ export function FontEditor() {
     if (!context) return
     context.clearRect(0, 0, 1024, 1024)
     contextDebug.clearRect(0, 0, 1024, 1024)
-    context.font = `${fontSize}px CustomFont, monospace`
+    context.font = `${fontSize}px ${fontFamily}, monospace`
     context.textAlign = 'center'
     context.textBaseline = 'middle'
 
@@ -85,7 +91,15 @@ export function FontEditor() {
 
   useEffect(() => {
     render()
-  }, [characters, context, charactersLimit, invert, fontSize])
+  }, [
+    characters,
+    context,
+    charactersLimit,
+    invert,
+    fontSize,
+    fontFamily,
+    fontVersion,
+  ])
 
   return (
     <div ref={el} className={s.font}>

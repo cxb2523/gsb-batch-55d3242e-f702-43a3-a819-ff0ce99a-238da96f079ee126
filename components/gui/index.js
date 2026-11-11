@@ -48,6 +48,7 @@ export function GUI() {
           <p>
             DRAG AND DROP ANY FILE
             <br /> .glb, .mp4, .mov, .webm, .png, .webp, .avif
+            <br /> .ttf, .otf, .woff, .woff2 (custom font)
           </p>
         </div>
         <div className={s.links}>
