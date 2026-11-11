@@ -19,6 +19,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 import model_catalog
+import run_outcome
 from quality_settings import QualityControls
 
 import tkinter as tk
@@ -58,13 +59,9 @@ DEMUCS_MLX_CACHE = Path.home() / ".cache" / "demucs-mlx"
 FORMATS = ["FLAC", "WAV", "MP3"]
 MAX_LOG_LINES = 5000  # cap the log widget so long/batch runs don't grow memory without bound
 PERCENT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
-# Scraped from the engine's stdout. The CLI logs per-file errors but still
-# exits 0 with an empty output list, so exit code alone can't be trusted.
-MEM_ERROR_MARKERS = ("[metal::malloc]", "maximum allowed buffer size")
-PROCESS_FAIL_MARKER = "Failed to process file"
-# On a GPU-memory blow-up, retry once splitting the audio into chunks this many
-# seconds long — the Metal buffer size scales with chunk length.
-RETRY_CHUNK_SECONDS = 30
+# Run-outcome markers and the retry policy live in run_outcome (headless,
+# unit-tested); the GUI only applies its decisions to widgets.
+RETRY_CHUNK_SECONDS = run_outcome.RETRY_CHUNK_SECONDS
 
 # --- Palette ported from the landing page (docs/tokens.css) ---
 # Dark violet canvas + violet→magenta accent; the OKLCH tokens converted to hex
@@ -259,12 +256,10 @@ class SeparatorApp:
         self.stem_map = {"All stems": None}
         # Full paths; the listbox shows friendly names. Seed from argv (Open With…).
         self.input_paths = [p for p in sys.argv[1:] if os.path.exists(p)]
-        self._cancelled = False
         self._determinate = False  # progress bar switched to determinate mode
-        self._saw_memory_error = False
-        self._saw_process_failure = False
-        self._chunked_retry = False    # current run is an auto-retry with chunking
-        self._base_cmd = None          # command of the in-flight run, for retrying
+        # Per-run outcome state (markers seen, retry used, cancelled) lives in
+        # a headless tracker so the decision logic is testable without Tk.
+        self.run_state = run_outcome.RunTracker()
         self._update_checking = False
         self._update_cancel = False
         self._update_downloading = False
@@ -1292,14 +1287,10 @@ class SeparatorApp:
         if stem:
             cmd += ["--single_stem", stem]
 
-        self._base_cmd = list(cmd)
-        self._chunked_retry = False
+        self.run_state.begin(cmd)
         self._clear_log()
         self._log("$ " + " ".join(self._quote(c) for c in cmd) + "\n\n")
-        self._cancelled = False
         self._determinate = False
-        self._saw_memory_error = False
-        self._saw_process_failure = False
         self.run_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.open_btn.configure(state="disabled")
@@ -1317,7 +1308,7 @@ class SeparatorApp:
         p = self.proc
         if p is None:
             return
-        self._cancelled = True
+        self.run_state.cancelled = True
         self.cancel_btn.configure(state="disabled")
         self.status_var.set("Cancelling…")
         try:
@@ -1439,8 +1430,7 @@ class SeparatorApp:
                     self._update_downloading = False
                     self._render_update_available()
                 elif kind == "done":
-                    if (self._saw_memory_error and not self._chunked_retry
-                            and not self._cancelled):
+                    if self.run_state.should_retry():
                         self._retry_with_chunking()
                     else:
                         self._finish(payload)
@@ -1451,19 +1441,11 @@ class SeparatorApp:
 
     def _scan_health(self, text):
         """Watch engine output for signals the exit code won't tell us about."""
-        if any(marker in text for marker in MEM_ERROR_MARKERS):
-            self._saw_memory_error = True
-        if PROCESS_FAIL_MARKER in text:
-            self._saw_process_failure = True
+        self.run_state.scan(text)
 
     def _retry_with_chunking(self):
         """A run ran out of GPU memory — re-run it once, splitting into chunks."""
-        cmd = list(self._base_cmd)
-        if "--chunk_duration" not in cmd:
-            cmd += ["--chunk_duration", str(RETRY_CHUNK_SECONDS)]
-        self._chunked_retry = True
-        self._saw_memory_error = False
-        self._saw_process_failure = False
+        cmd = self.run_state.retry_command()
         self._determinate = False
         self._log(
             f"\n⚠ Ran out of GPU memory processing the whole file at once. "
@@ -1494,28 +1476,19 @@ class SeparatorApp:
         self.proc = None
         self.cancel_btn.configure(state="disabled")
         self.refresh_btn.configure(state="normal")
-        cancelled = self._cancelled
-        self._cancelled = False
-        if cancelled:
-            self.status_var.set("Cancelled.")
-            self._log("\n■ Cancelled.\n")
-        elif rc == 0 and not self._saw_process_failure:
-            self.status_var.set("Done ✓  Your stems are ready.")
+        outcome = self.run_state.finish(rc)
+        if outcome.kind == run_outcome.CANCELLED:
+            self.status_var.set(outcome.status_text)
+            self._log(outcome.log_text)
+        elif outcome.kind == run_outcome.SUCCESS:
+            self.status_var.set(outcome.status_text)
             self.open_btn.configure(state="normal")
-            self._log("\n✓ Separation complete.\n")
+            self._log(outcome.log_text)
             self._notify("Separation complete", "Your stems are ready.")
         else:
-            if self._saw_memory_error:
-                reason = ("Ran out of GPU memory even with chunking — try a shorter "
-                          "file or a Mac with more memory.")
-            elif self._saw_process_failure:
-                reason = ("The engine reported an error and produced no output — "
-                          "see the details below.")
-            else:
-                reason = f"Something went wrong (exit {rc}) — see the details below."
-            self.status_var.set(reason)
-            self._log(f"\n✗ Separation failed — {reason}\n")
-            if not self.details_visible:
+            self.status_var.set(outcome.status_text)
+            self._log(outcome.log_text)
+            if outcome.expand_details and not self.details_visible:
                 self._toggle_details()
         self._scan_downloaded()
         self._apply_filter()
