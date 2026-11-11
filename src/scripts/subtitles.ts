@@ -1,4 +1,4 @@
-import { LANGS } from "@/scripts/languages.ts"
+import { LANGS } from "./languages.ts"
 
 export type SubtitleSegment = {
   start: number
@@ -29,6 +29,10 @@ type SpeechRun = {
 
 const DEFAULT_SAMPLE_RATE = 16_000
 const SILENCE_BREAK_SECONDS = 0.55
+/** Shortest on-screen time a calibrated segment may keep. */
+export const MIN_SEGMENT_DURATION = 0.35
+/** Clear gap inserted between adjacent calibrated segments. */
+export const MIN_SEGMENT_GAP = 0.02
 
 export function formatSrtTime(seconds: number): string {
   const c = Math.max(0, Number.isFinite(seconds) ? seconds : 0)
@@ -138,7 +142,7 @@ function nearestRunEdge(
   return best?.value
 }
 
-function refineSegmentsWithSpeechRuns(
+export function refineSegmentsWithSpeechRuns(
   segments: SubtitleSegment[],
   audio?: Float32Array,
   sampleRate = DEFAULT_SAMPLE_RATE,
@@ -150,30 +154,50 @@ function refineSegmentsWithSpeechRuns(
   const refined = segments.map((segment) => {
     const startEdge = nearestRunEdge(runs, segment.start, "start", 0.35, 0.65)
     const endEdge = nearestRunEdge(runs, segment.end, "end", 0.65, 0.35)
-    const start =
-      startEdge == null ? segment.start : Math.max(0, startEdge - 0.04)
-    const end =
-      endEdge == null ? segment.end : Math.min(audioEnd, endEdge + 0.08)
-    const next = {
-      ...segment,
-      start,
-      end: Math.max(start + 0.35, end),
-    }
-    if (next.words?.length) {
-      next.words = next.words.map((word) => ({ ...word }))
-      next.words[0].start = next.start
-      next.words[next.words.length - 1].end = next.end
-    }
-    return next
+    let start = startEdge == null ? segment.start : startEdge - 0.04
+    start = Math.max(0, start)
+    // Never push a start at/past the audio end: leave room for the minimum
+    // readable duration inside the known audio duration.
+    if (Number.isFinite(audioEnd))
+      start = Math.min(start, Math.max(0, audioEnd - MIN_SEGMENT_DURATION))
+    let end = endEdge == null ? segment.end : endEdge + 0.08
+    end = Math.max(start + MIN_SEGMENT_DURATION, end)
+    if (Number.isFinite(audioEnd)) end = Math.min(end, audioEnd)
+    return { ...segment, start, end }
   })
 
+  // Resolve overlaps left to right. Each conflicting pair is split at the
+  // midpoint of the overlap with a clear gap; clamping never pushes a start
+  // past its own end nor a previous end past the next start.
   for (let i = 1; i < refined.length; i += 1) {
     const previous = refined[i - 1]
     const current = refined[i]
-    if (current.start > previous.end) continue
+    if (current.start >= previous.end + MIN_SEGMENT_GAP) continue
     const boundary = (previous.end + current.start) / 2
-    previous.end = Math.max(previous.start + 0.25, boundary - 0.01)
-    current.start = Math.min(current.end - 0.25, previous.end + 0.02)
+    current.start = Math.max(
+      0,
+      Math.min(
+        boundary + MIN_SEGMENT_GAP / 2,
+        current.end - MIN_SEGMENT_DURATION,
+      ),
+    )
+    const maxPreviousEnd = current.start - MIN_SEGMENT_GAP
+    const minPreviousEnd = Math.min(
+      previous.start + MIN_SEGMENT_DURATION,
+      maxPreviousEnd,
+    )
+    previous.end = Math.min(
+      Math.max(boundary - MIN_SEGMENT_GAP / 2, minPreviousEnd),
+      maxPreviousEnd,
+    )
+  }
+
+  // Keep word-level timestamps in sync with the final segment bounds.
+  for (const segment of refined) {
+    if (!segment.words?.length) continue
+    segment.words = segment.words.map((word) => ({ ...word }))
+    segment.words[0].start = segment.start
+    segment.words[segment.words.length - 1].end = segment.end
   }
 
   return refined
@@ -243,7 +267,7 @@ function buildWordSegment(words: SubtitleWord[]): SubtitleSegment {
   const end = words[words.length - 1]?.end || start + 2
   return {
     start,
-    end: Math.max(start + 0.35, end),
+    end: Math.max(start + MIN_SEGMENT_DURATION, end),
     text: wordsText(words),
     words,
   }
@@ -322,7 +346,7 @@ export function estimatedWordsForSegment(segment: SubtitleSegment): SubtitleWord
 
   const start = Number.isFinite(segment.start) ? segment.start : 0
   const end = Math.max(
-    start + 0.35,
+    start + MIN_SEGMENT_DURATION,
     Number.isFinite(segment.end) ? segment.end : start + 2,
   )
   const duration = end - start
@@ -367,7 +391,7 @@ export function normalizeSegments(
       const { start, end } = normalizedRange(chunk, index)
       return {
         start,
-        end: Math.max(start + 0.35, end),
+        end: Math.max(start + MIN_SEGMENT_DURATION, end),
         text: (chunk.text || "").trim(),
       }
     })
