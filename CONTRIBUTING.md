@@ -1,0 +1,167 @@
+# Contributing to LibreLudo
+
+Thanks for taking the time to contribute to **LibreLudo**. Contributions of all kinds are welcome, whether that's fixing bugs, improving the UI, adding features, writing tests, or even improving documentation.
+
+---
+
+## Core Development Principles
+
+LibreLudo is designed to be a fast, lightweight PWA. To keep the codebase clean and performant, please keep the following boundaries in mind before starting work:
+
+- Architecture: We use React, TypeScript, React Router (in framework mode), and Redux Toolkit. Ensure changes align with existing reducer patterns (avoid scattering global state locally), keep route files consistent with the existing structure under `src/pages`, and maintain strict type safety.
+- Dependencies: We actively minimize external dependencies to keep the app lightweight. If your feature requires a new npm package, please open an issue to discuss it first.
+
+---
+
+## Before opening an issue or PR
+
+A quick check before starting helps keep things organized.
+
+- Look through the existing issues to see if someone has already reported the problem or suggested the idea.
+- If you're planning a **larger change or new feature**, it's usually better to open an issue first so the approach can be discussed before work begins.
+  This helps avoid duplicated effort.
+
+---
+
+## Reporting a bug
+
+If you've found a bug, please open an issue and include:
+
+- A short description of what went wrong
+- Steps to reproduce it
+- What you expected to happen vs. what actually happened
+- Browser and OS (including versions)
+  The more detail you include, the faster it can be understood and resolved.
+
+---
+
+## Prerequisites
+
+This project strictly uses **[pnpm](https://pnpm.io/)** as its package manager.
+
+---
+
+## Local setup
+
+LibreLudo requires <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">Node.js 22.22+</a>.
+
+```bash
+# Fork the repository on GitHub, then clone your fork
+# Replace YOUR_USERNAME with your GitHub username
+git clone https://github.com/YOUR_USERNAME/libreludo.git
+cd libreludo
+
+# Install dependencies
+pnpm install
+
+# Start the development server
+pnpm run dev
+
+# Optionally, compile and preview the production build
+pnpm run build && pnpm run preview
+```
+
+After running the dev server, the project should be available locally in your browser.
+
+---
+
+## Branch naming
+
+Please create branches using the following naming pattern. It helps keep the commit history easier to read.
+
+| Type     | Pattern        | Example                    |
+| -------- | -------------- | -------------------------- |
+| Feature  | `feat/...`     | `feat/animated-dice`       |
+| Bug fix  | `fix/...`      | `fix/token-overlap`        |
+| Refactor | `refactor/...` | `refactor/turn-reducer`    |
+| Build    | `build/...`    | `build/upgrade-vite`       |
+| Docs     | `docs/...`     | `docs/update-contributing` |
+| Chore    | `chore/...`    | `chore/update-gitignore`   |
+
+Keep branch names short but descriptive.
+
+---
+
+## Code quality checks
+
+This repository uses **ESLint**, **Prettier**, and **EditorConfig** to keep the codebase consistent.
+
+Before opening a pull request, please make sure everything passes locally.
+
+```bash
+# Linting
+pnpm run lint
+
+# Type checking
+pnpm run type-check
+
+# Run tests
+pnpm test
+```
+
+Formatting is handled automatically by **Prettier** if your editor supports it. Installing the Prettier extension for your editor is recommended.
+
+EditorConfig settings are also included in the repo. Many editors support it automatically.
+
+---
+
+## Commit messages
+
+Commits must follow the **Conventional Commits** format.
+
+Providing a scope is encouraged, but not mandatory.
+
+```text
+<type>([scope]): <short description>
+
+[body]
+```
+
+The body is optional but helpful when the reason behind the change isn't obvious.
+
+### Commit types
+
+| Type     | Description                                                   |
+| -------- | ------------------------------------------------------------- |
+| feat     | New feature                                                   |
+| fix      | Bug fix                                                       |
+| docs     | Documentation only                                            |
+| style    | Formatting or style changes                                   |
+| refactor | Code restructuring without changing behavior                  |
+| build    | Changes that affect the build system or external dependencies |
+| test     | Adding or updating tests                                      |
+| chore    | Routine repository maintenance tasks                          |
+| perf     | Performance improvements                                      |
+| ci       | CI/CD related changes                                         |
+
+### Example commits
+
+```text
+feat(board): animate token movement
+fix(dice): correct roll distribution
+refactor(game-state): simplify turn reducer
+build(deps): update workbox-window to v7
+docs(contributing): clarify commit guidelines
+test(bot): add move scoring tests
+chore: run prettier across codebase
+```
+
+---
+
+## Submitting a pull request
+
+When you're ready to submit your work:
+
+1. Create a branch from `main`
+2. Commit your changes using the format above
+3. Write or update tests if your change affects game logic or existing behavior
+4. Push the branch to your fork
+5. Open a Pull Request against `main`
+6. Add a short explanation of what the change does and why it was needed
+   A review may request changes before the PR is merged.
+
+---
+
+## License
+
+By contributing to this project, you agree that your contributions will be licensed under the **GNU Affero General Public License, version 3**.

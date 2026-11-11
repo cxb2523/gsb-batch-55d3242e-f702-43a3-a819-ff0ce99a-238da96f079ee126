@@ -1,0 +1,224 @@
+.page-container {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+
+  @media only screen and (max-width: 770px) {
+    font-size: 0.9rem;
+  }
+
+  @media only screen and (max-width: 650px) {
+    font-size: 0.8rem;
+  }
+
+  @media only screen and (max-width: 550px) {
+    font-size: 0.65rem;
+  }
+
+  @media only screen and (max-width: 470px) {
+    font-size: 0.55rem;
+  }
+
+  @media only screen and (max-width: 390px) {
+    font-size: 0.5rem;
+  }
+
+  @media only screen and (min-width: 1920px) {
+    font-size: 1.4rem;
+  }
+
+  @media only screen and (min-width: 2560px) {
+    font-size: 1.6rem;
+  }
+}
+
+.home-page {
+  display: flex;
+  justify-content: space-evenly;
+  align-items: center;
+  flex-direction: column;
+  padding-inline: 1em;
+  min-height: 100vh;
+}
+
+.welcome {
+  text-align: center;
+
+  & h1 {
+    font-size: 4em;
+    margin-top: 1.5em;
+    margin-bottom: 0.3em;
+
+    & span {
+      color: var(--color-primary);
+    }
+  }
+
+  & p {
+    color: #535353;
+  }
+}
+
+.cta-buttons {
+  margin-top: 4em;
+  margin-bottom: 1em;
+}
+
+.cta-button {
+  display: inline-block;
+  bottom: 0;
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  font-size: 1.5em;
+  padding: 0.9em 0.8em;
+  box-shadow: 0 8px 32px rgba(68, 55, 255, 0.11);
+  border-radius: 0.7em;
+  text-decoration: none;
+  transition:
+    background-color 0.2s ease,
+    transform 0.2s ease;
+  cursor: pointer;
+  margin-inline: 0.7em;
+}
+
+.play-now-btn {
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4);
+
+  &:hover,
+  &:active,
+  &:focus-visible {
+    background-color: var(--color-primary-hover);
+    transform: translateY(-3px);
+  }
+}
+
+.how-to-play-btn {
+  background-color: transparent;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+
+  &:hover,
+  &:active,
+  &:focus-visible {
+    background-color: #e0e7ff;
+  }
+}
+
+.features {
+  max-width: 900px;
+  margin-top: 3em;
+  margin-bottom: 7em;
+  padding: 0 1.5em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2em;
+  justify-content: center;
+}
+
+.block {
+  flex: 1 1 350px;
+  text-align: left;
+  padding: 0.5em;
+
+  & h2 {
+    color: #5b5fc7;
+    margin-top: 0;
+    margin-bottom: 0.75em;
+    font-size: 1.25em;
+    font-weight: 600;
+  }
+
+  & p {
+    color: #535353;
+    line-height: 1.6;
+    margin: 0;
+    font-size: 1.05em;
+  }
+}
+
+footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  flex-shrink: 0;
+  height: 4em;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-inline: 1.5em;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 100%;
+}
+
+.credits,
+.credits a {
+  text-decoration: none;
+  color: white;
+  font-size: 0.9em;
+}
+
+.credits a:hover {
+  text-decoration: underline;
+}
+
+.copyright,
+.copyright a {
+  font-size: 0.75em;
+  color: rgb(255, 255, 255, 0.8);
+  margin-top: 0.5em;
+  text-decoration: none;
+}
+
+.copyright a {
+  font-size: inherit;
+}
+
+.copyright a:hover {
+  text-decoration: underline;
+}
+
+.footer-actions {
+  display: flex;
+  gap: 1em;
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: inherit;
+  width: 2.5em;
+  height: 2.5em;
+  border-radius: 0.65em;
+  background: rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+
+  & > svg {
+    height: 1.35em;
+  }
+
+  &:hover,
+  &:active,
+  &:focus-visible {
+    background: rgba(255, 255, 255, 0.2);
+    outline: 0.125em solid white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+  }
+}

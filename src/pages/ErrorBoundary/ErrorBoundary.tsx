@@ -1,0 +1,63 @@
+import { isRouteErrorResponse, useRouteError, type MetaFunction } from 'react-router';
+import styles from './ErrorBoundary.module.css';
+import { useEffect } from 'react';
+import { useCleanup } from '../../hooks/useCleanup';
+
+export default function ErrorBoundary() {
+  const error = useRouteError();
+  const cleanup = useCleanup();
+
+  const getError = (error: unknown) => {
+    if (isRouteErrorResponse(error)) {
+      return (
+        <>
+          <p>
+            {error.status} {error.statusText}
+          </p>
+          <p>{error.data}</p>
+        </>
+      );
+    } else if (error instanceof Error) {
+      return (
+        <div>
+          <p>{error.message}</p>
+          <pre>{error.stack}</pre>
+        </div>
+      );
+    } else {
+      return <p>Unknown Error</p>;
+    }
+  };
+
+  useEffect(() => {
+    cleanup();
+  }, [cleanup]);
+
+  return (
+    <div className={styles.errorContainer}>
+      <main className={styles.errorDialog}>
+        <div>
+          <h1 className={styles.oops}>
+            <span>Oops!</span> Something went wrong
+          </h1>
+          <p className={styles.message}>
+            An unexpected error interrupted the game. Tap below to restart
+          </p>
+        </div>
+        <button
+          type="button"
+          className={styles.startNewGameBtn}
+          onClick={() => (window.location.href = '/setup')}
+        >
+          Start New Game
+        </button>
+        <details className={styles.errorDetails}>
+          <summary>Show details</summary>
+          <div className={styles.errorContent}>{getError(error)}</div>
+        </details>
+      </main>
+    </div>
+  );
+}
+
+export const meta: MetaFunction = () => [{ title: 'Oops! Something went wrong' }];

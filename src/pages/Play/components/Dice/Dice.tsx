@@ -1,0 +1,120 @@
+import dice1 from '../../../../assets/dice/1.svg';
+import dice2 from '../../../../assets/dice/2.svg';
+import dice3 from '../../../../assets/dice/3.svg';
+import dice4 from '../../../../assets/dice/4.svg';
+import dice5 from '../../../../assets/dice/5.svg';
+import dice6 from '../../../../assets/dice/6.svg';
+import dicePlaceholder from '../../../../assets/dice/dice_placeholder.gif';
+import { useCallback, useEffect, useMemo } from 'react';
+import { type TPlayerColour } from '../../../../types';
+import { useSelector, useStore } from 'react-redux';
+import type { RootState } from '../../../../state/store';
+import { ERRORS } from '../../../../utils/errors';
+import { playerColours } from '../../../../game/players/constants';
+import { isAnyTokenActiveOfColour } from '../../../../game/tokens/logic';
+import styles from './Dice.module.css';
+import clsx from 'clsx';
+import { useRollDice } from '../../../../hooks/useRollDice';
+import { useHandlePostDiceRoll } from '../../../../hooks/useHandlePostDiceRoll';
+import { useChangeTurn } from '../../../../hooks/useChangeTurn';
+import { logError } from '../../../../utils/logError';
+import { saveState } from '../../../../game/storage/saveState';
+
+type Props = {
+  colour: TPlayerColour;
+  playerName: string;
+};
+
+function getDiceImage(diceNumber: number | undefined): string {
+  switch (diceNumber) {
+    case 1:
+      return dice1;
+    case 2:
+      return dice2;
+    case 3:
+      return dice3;
+    case 4:
+      return dice4;
+    case 5:
+      return dice5;
+    case 6:
+      return dice6;
+    default:
+      throw new Error(ERRORS.invalidDiceNumber(diceNumber as never));
+  }
+}
+
+export default function Dice({ colour, playerName }: Props) {
+  const {
+    isAnyTokenMoving,
+    isGameEnded,
+    currentPlayerColour: currentPlayer,
+    players,
+  } = useSelector((state: RootState) => state.players);
+  const { diceNumber, isPlaceholderShowing } =
+    useSelector((state: RootState) => state.dice.dice.find((d) => d.colour === colour)) ?? {};
+
+  const anyTokenActive = useMemo(
+    () => isAnyTokenActiveOfColour(colour, players),
+    [colour, players]
+  );
+  const handlePostDiceRoll = useHandlePostDiceRoll();
+  const changeTurnFn = useChangeTurn();
+  const rollDice = useRollDice();
+  const store = useStore<RootState>();
+  const isBot = players.find((p) => p.colour === colour)?.isBot;
+  const isCurrentPlayer = currentPlayer === colour;
+  const isDiceDisabled =
+    !isCurrentPlayer ||
+    anyTokenActive ||
+    isAnyTokenMoving ||
+    isGameEnded ||
+    isPlaceholderShowing ||
+    isBot;
+
+  const handleDiceClick = useCallback(async () => {
+    if (isDiceDisabled) return;
+    const diceNumber = await rollDice(colour);
+    const res = await handlePostDiceRoll(colour, diceNumber);
+    if (store.getState().players.isGameEnded) return;
+    saveState(store.getState());
+    if (res?.shouldChangeTurn) changeTurnFn();
+  }, [isDiceDisabled, rollDice, colour, handlePostDiceRoll, store, changeTurnFn]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || e.key.toLowerCase() !== 'd' || isDiceDisabled) return;
+      handleDiceClick().catch(logError('Dice.handleKeyDown'));
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleDiceClick, isDiceDisabled]);
+  return (
+    <div className={clsx(styles.diceContainer, styles[colour])}>
+      <button
+        className={clsx(styles.dice, {
+          [styles.active]: !isDiceDisabled,
+        })}
+        title={!isDiceDisabled ? 'Roll Dice (Press D)' : undefined}
+        disabled={isDiceDisabled}
+        style={{ '--player-colour': playerColours[colour] } as React.CSSProperties}
+        type="button"
+        aria-label={
+          isPlaceholderShowing
+            ? `${playerName} is rolling`
+            : `${playerName}'s dice, showing ${diceNumber}${
+                !isDiceDisabled ? '. Press to roll' : ''
+              }`
+        }
+        onClick={handleDiceClick}
+      >
+        <img
+          src={isPlaceholderShowing ? dicePlaceholder : getDiceImage(diceNumber)}
+          alt="Dice image"
+          aria-hidden="true"
+        />
+      </button>
+      <span className={styles.playerName}>{playerName}</span>
+    </div>
+  );
+}

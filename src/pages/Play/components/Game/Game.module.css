@@ -1,0 +1,31 @@
+.game {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100vw;
+  height: 100vh;
+}
+
+.exit-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background-color: red;
+  color: white;
+  border: none;
+  aspect-ratio: 1 / 1;
+  height: calc(var(--board-tile-size) * 0.6);
+  width: auto;
+  font-size: calc(var(--board-tile-size) * 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: background-color 200ms ease;
+
+  &:hover,
+  &:focus-visible {
+    background-color: #dc0000;
+  }
+}

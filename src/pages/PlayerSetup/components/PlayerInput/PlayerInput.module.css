@@ -1,0 +1,52 @@
+.player-input {
+  display: grid;
+  grid-template-columns: 0.5fr 2fr 0.5fr;
+  justify-content: space-evenly;
+  align-items: center;
+  width: 100%;
+  padding-inline: 0;
+}
+.player-input > * {
+  justify-self: center;
+  align-self: center;
+}
+.player-input-colour-dot {
+  width: 6.5cqw;
+  border-radius: 1000px;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  border: 1px solid black;
+}
+.bot-status-btn {
+  background-color: var(--color-primary);
+  width: 8.7cqw;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border: none;
+  border-radius: 1.45cqw;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  cursor: pointer;
+  transition: background-color 200ms;
+}
+.bot-status-btn:hover,
+.bot-status-btn:active,
+.bot-status-btn:focus-visible {
+  background-color: var(--color-primary-hover);
+}
+.player-name-input {
+  padding: 2cqw 2.85cqw;
+  font-size: 3.6cqw;
+  border: 1px solid #ccc;
+  border-radius: 1.61cqw;
+  outline: none;
+  transition: border-color 200ms ease-in-out;
+  width: 100%;
+}
+
+.player-name-input:hover,
+.player-name-input:focus-visible {
+  border-color: #5b6ef5;
+  box-shadow: 0 0 0 2px rgba(91, 110, 245, 0.2);
+}
