@@ -1,0 +1,691 @@
+<!-- src/components/Player.svelte -->
+<script>
+  import { onMount } from "svelte";
+  import { formatTimeDisplay, settings } from "../utils/index.js";
+
+  /**
+   * @typedef {Object} AudioFile
+   * @property {string} url
+   * @property {string} [name]
+   * @property {string} [originalName]
+   * @property {string} [type]
+   */
+
+  /**
+   * @typedef {Object} Props
+   * @property {AudioFile | null} [audioFile]
+   * @property {(time: number) => void} [ontimeupdate]
+   */
+
+  /** @type {Props} */
+  let { audioFile, ontimeupdate } = $props();
+
+  /** @type {HTMLAudioElement | null} */
+  let audio = null;
+  let playing = $state(false);
+  let currentTime = $state(0);
+  let duration = $state(0);
+  let volume = $state(0.05);
+  /** @type {number | null} */
+  let pendingSeekTime = null;
+  let shouldAutoPlay = $state(false);
+
+  const VOLUME_STORAGE_KEY = "player-volume";
+
+  // Helper function to load saved volume
+  function loadSavedVolume() {
+    try {
+      const saved = localStorage.getItem(VOLUME_STORAGE_KEY);
+      if (saved !== null) {
+        const parsed = parseFloat(saved);
+        // Validate the value is between 0 and 1
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) {
+          return parsed;
+        }
+      }
+    } catch (err) {
+      console.error("[Player] Failed to load volume from localStorage:", err);
+    }
+    return 0.05; // Default value
+  }
+
+  // Helper function to save volume
+  /**
+   * @param {number} vol
+   */
+  function saveVolume(vol) {
+    try {
+      localStorage.setItem(VOLUME_STORAGE_KEY, vol.toString());
+    } catch (err) {
+      console.error("[Player] Failed to save volume to localStorage:", err);
+    }
+  }
+
+  // Helper to resolve a URL to an absolute string
+  /**
+   * @param {string} url
+   * @returns {string}
+   */
+  function resolveUrl(url) {
+    try {
+      return new URL(url, window.location.href).href;
+    } catch {
+      return url; // fallback
+    }
+  }
+
+  onMount(() => {
+    volume = loadSavedVolume();
+    const player = new Audio();
+    audio = player;
+    player.volume = volume;
+
+    player.addEventListener("timeupdate", () => {
+      currentTime = player.currentTime;
+      if (ontimeupdate) ontimeupdate(currentTime);
+
+      // Dispatch event for lyrics editor
+      const event = new CustomEvent("player-time-update", {
+        detail: { time: currentTime },
+      });
+      window.dispatchEvent(event);
+    });
+
+    player.addEventListener("loadedmetadata", () => {
+      duration = player.duration;
+      const pendingSeek = pendingSeekTime;
+      pendingSeekTime = null;
+
+      if (pendingSeek !== null) {
+        // A seek requested before the duration was known (for example a lyric
+        // timestamp click on a freshly selected track) runs now.
+        shouldAutoPlay = false;
+        doSeekAndPlay(pendingSeek);
+      } else if (shouldAutoPlay) {
+        shouldAutoPlay = false;
+        player
+          .play()
+          .then(() => {
+            playing = true;
+          })
+          .catch((/** @type {unknown} */ err) => {
+            console.error("[Player] Auto-play failed:", err);
+            playing = false;
+          });
+      }
+    });
+
+    player.addEventListener("ended", () => {
+      playing = false;
+    });
+
+    player.addEventListener("error", () => {
+      console.error("[Player] Audio error:", player.error);
+    });
+
+    player.addEventListener("seeked", () => {});
+
+    player.addEventListener("canplay", () => {});
+
+    player.addEventListener("waiting", () => {});
+
+    // Listen for lyrics-seek events (when user clicks on a timestamp/lyric line)
+    /**
+     * @param {Event} e
+     */
+    const handleLyricsSeek = (e) => {
+      const { time } = /** @type {CustomEvent<{ time: number }>} */ (e).detail;
+      seekToTime(time);
+    };
+
+    // Listen for get-current-time events (when sync button is pressed)
+    /**
+     * @param {Event} e
+     */
+    const handleGetCurrentTime = (e) => {
+      const { callback } =
+        /** @type {CustomEvent<{ callback?: (time: number) => void }>} */ (e)
+          .detail;
+      if (callback && typeof callback === "function") {
+        // Live read: the stored currentTime is only updated on timeupdate
+        // events, so it can be up to one event interval stale here.
+        callback(player ? player.currentTime : currentTime);
+      }
+    };
+
+    window.addEventListener("lyrics-seek", handleLyricsSeek);
+    window.addEventListener("get-current-time", handleGetCurrentTime);
+
+    return () => {
+      player.pause();
+      player.src = "";
+      window.removeEventListener("lyrics-seek", handleLyricsSeek);
+      window.removeEventListener("get-current-time", handleGetCurrentTime);
+    };
+  });
+
+  async function togglePlay() {
+    if (!audio || !audioFile) {
+      return;
+    }
+
+    const player = audio;
+    if (!player.src) {
+      player.src = audioFile.url;
+    }
+
+    if (playing) {
+      player.pause();
+      playing = false;
+    } else {
+      try {
+        await player.play();
+        playing = true;
+      } catch (err) {
+        console.error("[Player] Playback failed:", err);
+        playing = false;
+      }
+    }
+  }
+
+  /**
+   * @param {MouseEvent} e
+   */
+  function seek(e) {
+    if (!audio || !duration) {
+      return;
+    }
+    const player = audio;
+    const target = /** @type {HTMLElement} */ (e.currentTarget);
+    const rect = target.getBoundingClientRect();
+    const percent = (e.clientX - rect.left) / rect.width;
+    const time = percent * duration;
+    player.currentTime = time;
+    if (ontimeupdate) ontimeupdate(time);
+  }
+
+  /**
+   * @param {Event} e
+   */
+  function setVolume(e) {
+    const input = /** @type {HTMLInputElement} */ (e.target);
+    volume = parseFloat(input.value);
+    if (audio) audio.volume = volume;
+    input.style.setProperty("--fill-percent", `${volume * 100}%`);
+
+    // Save to localStorage
+    saveVolume(volume);
+  }
+
+  /**
+   * Seek to a position and start playback if it is paused.
+   * @param {number} timeInSeconds
+   */
+  function doSeekAndPlay(timeInSeconds) {
+    if (!audio) return;
+    const player = audio;
+    const targetTime = Math.max(
+      0,
+      Math.min(timeInSeconds, player.duration || 0),
+    );
+    player.currentTime = targetTime;
+    if (ontimeupdate) ontimeupdate(player.currentTime);
+
+    if (!playing) {
+      playing = true; // <-- optimistic update
+      player.play().catch((/** @type {unknown} */ err) => {
+        console.error("[Player] Playback failed in seekToTime:", err);
+        playing = false; // revert on failure
+      });
+    }
+  }
+
+  /**
+   * @param {number} timeInSeconds
+   * @returns {boolean}
+   */
+  function seekToTime(timeInSeconds) {
+    if (!audio || !audioFile) {
+      return false;
+    }
+    const player = audio;
+    if (!player.src) {
+      player.src = audioFile.url;
+    }
+
+    // If the duration isn't known yet, remember the target; the single
+    // loadedmetadata handler resolves it once the metadata arrives.
+    if (!duration && player.readyState < 1) {
+      pendingSeekTime = timeInSeconds;
+    } else {
+      doSeekAndPlay(timeInSeconds);
+    }
+    return true;
+  }
+
+  function stop() {
+    if (audio) {
+      const player = audio;
+      player.pause();
+      player.src = "";
+      player.load();
+      playing = false;
+      currentTime = 0;
+      duration = 0;
+      pendingSeekTime = null;
+    }
+  }
+
+  // Handle audio file changes – compare absolute URLs
+  $effect(() => {
+    if (!audioFile?.url || !audio) return;
+
+    const player = audio;
+    const newUrl = resolveUrl(audioFile.url);
+    const currentUrl = resolveUrl(player.src || "");
+    if (currentUrl === newUrl) return;
+
+    const wasPlaying = playing;
+    player.src = audioFile.url; // set with original string (browser will resolve)
+    playing = false;
+    currentTime = 0;
+    duration = 0;
+    pendingSeekTime = null;
+    shouldAutoPlay = false;
+
+    if (wasPlaying) {
+      shouldAutoPlay = true;
+    }
+  });
+
+  function getCurrentTime() {
+    return currentTime;
+  }
+
+  /**
+   * @param {WheelEvent} e
+   */
+  function handleVolumeScroll(e) {
+    if (!$settings.enablePlayer) return;
+
+    e.preventDefault(); // Prevent page scrolling
+
+    // Adjust volume by 0.05 per scroll tick
+    const delta = e.deltaY > 0 ? -0.05 : 0.05;
+    let newVolume = volume + delta;
+
+    // Clamp between 0 and 1
+    newVolume = Math.max(0, Math.min(1, newVolume));
+
+    if (newVolume !== volume) {
+      volume = newVolume;
+      if (audio) audio.volume = volume;
+
+      // Update the input element's value and style
+      const volumeInput = /** @type {HTMLInputElement} */ (e.currentTarget);
+      volumeInput.value = String(volume);
+      volumeInput.style.setProperty("--volume-percent", `${volume * 100}`);
+
+      // Save to localStorage
+      saveVolume(volume);
+    }
+  }
+
+  // Expose functions to parent
+  export { seekToTime, stop, getCurrentTime };
+</script>
+
+<!-- Template – unchanged -->
+<div class="player" class:player-disabled={!$settings.enablePlayer}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    role="progressbar"
+    class="progress-bar"
+    onclick={$settings.enablePlayer ? seek : undefined}
+  >
+    <div
+      class="progress"
+      style={`width: ${duration ? (currentTime / duration) * 100 : 0}%`}
+    ></div>
+  </div>
+
+  <div class="controls">
+    <div class="filename" title={audioFile?.name || "No file loaded"}>
+      {#if !$settings.enablePlayer}
+        <span class="player-disabled-badge">Player Disabled</span>
+      {/if}
+      {audioFile ? audioFile.name : "No file loaded"}
+    </div>
+
+    <button
+      class="play-btn"
+      class:disabled={!$settings.enablePlayer || !audioFile}
+      onclick={$settings.enablePlayer ? togglePlay : undefined}
+      disabled={!$settings.enablePlayer || !audioFile}
+      title={!$settings.enablePlayer
+        ? "Player is disabled in settings"
+        : playing
+          ? "Pause"
+          : "Play"}
+    >
+      {#if playing}
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <rect x="6" y="4" width="4" height="16" />
+          <rect x="14" y="4" width="4" height="16" />
+        </svg>
+      {:else}
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <polygon points="5 3 19 12 5 21 5 3" />
+        </svg>
+      {/if}
+    </button>
+
+    <div class="time-volume">
+      <div class="time">
+        {formatTimeDisplay(currentTime)} / {formatTimeDisplay(duration)}
+      </div>
+      <div class="volume">
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+        </svg>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={volume}
+          oninput={$settings.enablePlayer ? setVolume : undefined}
+          onwheel={$settings.enablePlayer ? handleVolumeScroll : undefined}
+          disabled={!$settings.enablePlayer}
+          class="volume-slider"
+          class:disabled={!$settings.enablePlayer}
+          style={`--volume-percent: ${volume * 100}`}
+        />
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Player Styles */
+  .player {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: white;
+    border-top: 1px solid #ddd;
+    padding: 0 20px;
+    z-index: 1000;
+  }
+
+  .progress-bar {
+    height: 3px;
+    background: #e0e0e0;
+    cursor: pointer;
+  }
+
+  .progress {
+    height: 100%;
+    background: var(--color-primary);
+    width: 0%;
+    transition: width 0.1s;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+  }
+
+  .filename {
+    flex: 1;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 10px;
+  }
+
+  .play-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    border: none;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+  }
+
+  .play-btn:hover {
+    background: var(--color-primary-focus);
+  }
+
+  .play-btn:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+
+  .time-volume {
+    flex: 1;
+    text-align: right;
+    font-size: 13px;
+    color: #666;
+    padding-left: 10px;
+  }
+
+  .time {
+    margin-bottom: 4px;
+  }
+
+  .volume {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .volume-slider {
+    width: 80px;
+    height: 4px;
+    background: #e0e0e0;
+    border-radius: 2px;
+    outline: none;
+    appearance: none;
+    position: relative;
+  }
+
+  /* Webkit browsers (Chrome, Safari, Edge) */
+  .volume-slider::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    background: linear-gradient(
+      to right,
+      var(--color-primary) calc(1% * var(--volume-percent, 30)),
+      #e0e0e8 0
+    );
+    border-radius: 2px;
+  }
+
+  .volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--color-primary);
+    cursor: pointer;
+    margin-top: -4px;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Firefox */
+  .volume-slider::-moz-range-track {
+    width: 100%;
+    height: 4px;
+    background: #e0e0e0;
+    border-radius: 2px;
+  }
+
+  .volume-slider::-moz-range-progress {
+    background: var(--color-primary);
+    height: 4px;
+    border-radius: 2px;
+  }
+
+  .volume-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--color-primary);
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  /* For Webkit browsers, set the CSS variable on the input element */
+  input[type="range"].volume-slider {
+    --volume-percent: 30;
+    /* Default - will be overridden by inline style */
+  }
+
+  .player-disabled-badge {
+    background: #888;
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 8px;
+    text-transform: uppercase;
+  }
+
+  .player-disabled .progress-bar {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .player-disabled .progress {
+    background: #888;
+  }
+
+  .play-btn.disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+
+  .volume-slider.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Dark mode player styles */
+  :global(body.dark) .player {
+    background: #2d2d2d;
+    border-top-color: #444;
+  }
+
+  :global(body.dark) .progress-bar {
+    background: #444;
+  }
+
+  :global(body.dark) .progress {
+    background: var(
+      --color-primary-dark
+    ); /* Slightly lighter orange for dark mode */
+  }
+
+  :global(body.dark) .filename {
+    color: #e0e0e0;
+  }
+
+  :global(body.dark) .play-btn {
+    background: var(--color-primary-dark);
+    color: #1e1e1e; /* Dark text on orange button for contrast */
+  }
+
+  :global(body.dark) .play-btn:hover:not(:disabled) {
+    background: var(--color-primary-dark-focus);
+  }
+
+  :global(body.dark) .play-btn:disabled {
+    background: #444;
+    color: #666;
+    opacity: 0.5;
+  }
+
+  :global(body.dark) .time-volume {
+    color: #b0b0b0;
+  }
+
+  :global(body.dark) .time {
+    color: #b0b0b0;
+  }
+
+  :global(body.dark) .volume-slider {
+    background: #444;
+  }
+
+  /* Webkit browsers (Chrome, Safari, Edge) dark mode */
+  :global(body.dark) .volume-slider::-webkit-slider-runnable-track {
+    background: linear-gradient(
+      to right,
+      var(--color-primary-dark) calc(1% * var(--volume-percent, 30)),
+      #444 0
+    );
+  }
+
+  :global(body.dark) .volume-slider::-webkit-slider-thumb {
+    background: var(--color-primary-dark);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Firefox dark mode */
+  :global(body.dark) .volume-slider::-moz-range-track {
+    background: #444;
+  }
+
+  :global(body.dark) .volume-slider::-moz-range-progress {
+    background: var(--color-primary-dark);
+  }
+
+  :global(body.dark) .volume-slider::-moz-range-thumb {
+    background: var(--color-primary-dark);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+
+  :global(body.dark) .player-disabled-badge {
+    background: #666;
+    color: #ccc;
+  }
+
+  :global(body.dark) .player-disabled .progress {
+    background: #666;
+  }
+</style>

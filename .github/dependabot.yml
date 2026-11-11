@@ -1,0 +1,38 @@
+version: 2
+
+# Keep the pinned base-image digests, Action commit SHAs and direct Python
+# requirements current. Without these updates the pins would silently miss
+# upstream security fixes.
+updates:
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # Node 23 is EOL/non-LTS, and Node 24+ has no linux/arm/v7 image. Stay
+      # on the Node 22 LTS builder while the final stage targets armv7.
+      - dependency-name: "node"
+        versions:
+          - ">= 23"
+    groups:
+      base-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    groups:
+      python:
+        patterns:
+          - "*"

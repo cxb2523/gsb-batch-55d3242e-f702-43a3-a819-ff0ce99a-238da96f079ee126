@@ -1,0 +1,107 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'fix/**'
+      - 'test/**'
+      - 'refactor/**'
+      - 'ci/**'
+  pull_request:
+  workflow_call:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # Keep this in sync with the Python base image in the Dockerfile so
+          # the suite exercises the runtime that ships in the image.
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Check Python syntax
+        run: python -m py_compile backend/*.py backend/routes/*.py
+
+      - name: Run backend tests
+        run: python -m pytest -q
+
+      # Coverage is informational: a failure here does not block the job, and
+      # no threshold is enforced. The suite runs again so a coverage problem
+      # can never turn a passing test run into a failing required check.
+      - name: Coverage report (non-blocking)
+        continue-on-error: true
+        run: python -m pytest -q --cov=backend --cov-report=term-missing
+
+  # Branch protection must require this job in addition to `pytest`; otherwise a
+  # failing frontend test still allows a merge.
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Check Svelte templates
+        run: npm run check
+
+      - name: Run frontend tests
+        run: npm test
+
+      # Coverage is informational: a failure here does not block the job and no
+      # threshold is enforced. The suite runs again so a coverage problem can
+      # never turn a passing test run into a failing required check.
+      - name: Coverage report (non-blocking)
+        continue-on-error: true
+        run: npm run test:coverage
+
+      - name: Upload frontend coverage (non-blocking)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Build frontend
+        run: npm run build

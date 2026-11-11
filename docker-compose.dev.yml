@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    ports:
+      # Localhost only by default. See docs/DEPLOYMENT.md for exposing it via a proxy.
+      - "127.0.0.1:${HOST_PORT:-5000}:5000"            # Host port from env var, default 5000
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEBUG=${DEBUG}
+      - AUTH_USERNAME=${AUTH_USERNAME:-}               # Login; random if empty
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}               # Password; random if empty
+      - AUTH_PASSWORD_HASH=${AUTH_PASSWORD_HASH:-}     # Optional hash instead of password
+      - JWT_SECRET=${JWT_SECRET:-}                     # Optional; random per restart if empty
+      - TOKEN_EXPIRE_HOURS=${TOKEN_EXPIRE_HOURS:-12}   # Optional
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-4096}           # Per-file request limit
+      - PUID=1000
+      - PGID=1000
+      - CHOWN_MUSIC=${CHOWN_MUSIC:-false}              # Recursive /music chown at startup
+      - TZ=UTC
+    volumes:
+      - ~/Media/music:/music                           # Library
+      - ./logs:/logs                                   # Logs
+      - ./addons:/app/addons:ro                        # Addons (read-only; arbitrary Python)

@@ -1,0 +1,1138 @@
+<!-- src/components/TreeNode.svelte -->
+<script>
+  // VS Code doesnt like this
+  // @ts-ignore
+  import Self from "./TreeNode.svelte";
+  import HoldButton from "./HoldButton.svelte";
+  import MetadataFetcher from "./MetadataFetcher.svelte";
+
+  import {
+    contextMenu,
+    renamingPath,
+    sortItems,
+    sortConfig,
+    settings,
+    sanitizeHoldDuration,
+    DEFAULT_HOLD_DURATIONS,
+    applyRenamingScheme,
+    toast,
+    childrenByPath,
+    folderSummaries,
+    loadFolderSummary,
+    formatFolderSummary,
+    isAudioFile,
+    getAudioFormatLabel,
+    readApiError,
+  } from "../utils/index.js";
+
+  // How long the pointer must rest on a folder before its deep totals are
+  // requested. Crossing several rows must not start several subtree walks.
+  const HOVER_SUMMARY_DELAY_MS = 150;
+
+  /**
+   * One node of the library tree, as returned by /api/files.
+   * @typedef {Object} TreeItem
+   * @property {string} name
+   * @property {string} path
+   * @property {string} type
+   * @property {string} [file_type]
+   * @property {number} [size]
+   * @property {TreeItem[] | null} [children]
+   * @property {boolean} [has_children]
+   * @property {number} [folder_count] direct-child count from /api/files/dir
+   * @property {number} [file_count] direct-child count from /api/files/dir
+   * @property {number} [file_size] direct files only, not recursive
+   */
+
+  /**
+   * @typedef {Object} Props
+   * @property {TreeItem} item
+   * @property {{ has(path: string): boolean }} expanded
+   * @property {(path: string) => void} toggleDir
+   * @property {(path: string) => void} selectFile
+   * @property {(path: string) => void} selectFolder
+   * @property {string | null} [selectedFolder]
+   * @property {string | null} [selectedFile]
+   * @property {number} [level]
+   * @property {(path: string, newName: string) => Promise<void>} onRename
+   * @property {(path: string) => Promise<void>} onDelete
+   * @property {(path: string) => void} onCreateFolder
+   * @property {(path: string) => void} onCopy
+   * @property {(path: string) => Promise<void> | void} [onLoad] fetch a folder
+   */
+
+  /** @type {Props} */
+  let {
+    item,
+    expanded,
+    toggleDir,
+    selectFile,
+    selectFolder,
+    selectedFolder,
+    selectedFile,
+    level = 0,
+    onRename,
+    onDelete,
+    onCreateFolder,
+    onCopy,
+    onLoad,
+  } = $props();
+
+  // Input state
+  let inputRef = $state(/** @type {HTMLInputElement | null} */ (null));
+  let newName = $derived(item.name);
+
+  // Children come from the path-keyed cache when it has the folder, so an
+  // expanded folder renders its entries without a nested copy. The node's own
+  // `children` stay supported for a fully loaded tree (/api/files).
+  let children = $derived(
+    item.type === "directory"
+      ? ($childrenByPath.get(item.path) ?? item.children ?? [])
+      : [],
+  );
+
+  // A folder with `has_children: false` is known to be empty, so expanding it
+  // needs no request. Anything else may still be unloaded.
+  let needsLoad = $derived(
+    item.type === "directory" &&
+      item.children == null &&
+      !$childrenByPath.has(item.path) &&
+      item.has_children !== false,
+  );
+
+  $effect(() => {
+    if (expanded.has(item.path) && needsLoad && onLoad) {
+      onLoad(item.path);
+    }
+  });
+
+  // Derived sorted children
+  let sortedChildren = $derived(
+    children.length
+      ? sortItems(children, $sortConfig.by, $sortConfig.direction)
+      : [],
+  );
+
+  // File and folder deletes share one setting so a single preference covers
+  // every destructive hold action in the tree.
+  const holdDeleteDuration = $derived(
+    sanitizeHoldDuration(
+      $settings.holdDeleteDuration,
+      DEFAULT_HOLD_DURATIONS.delete,
+    ),
+  );
+
+  // Deep totals for the tooltip. The listing only knows direct children, so
+  // the real recursive size is fetched on hover and cached for the session.
+  // `summaryRequested` debounces the sweep of mouseenter events when the
+  // pointer crosses several rows.
+  let summaryRequested = $state(false);
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let summaryTimer = null;
+
+  let deepSummary = $derived(
+    item.type === "directory" ? $folderSummaries.get(item.path) : undefined,
+  );
+
+  let summaryLoading = $derived(
+    item.type === "directory" && summaryRequested && deepSummary === undefined,
+  );
+
+  function handleDirectoryEnter() {
+    if (item.type !== "directory" || deepSummary) return;
+    if (summaryTimer) return;
+    summaryTimer = setTimeout(() => {
+      summaryTimer = null;
+      summaryRequested = true;
+      loadFolderSummary(item.path).finally(() => {
+        summaryRequested = !!$folderSummaries.get(item.path);
+      });
+    }, HOVER_SUMMARY_DELAY_MS);
+  }
+
+  function handleDirectoryLeave() {
+    if (!summaryTimer) return;
+    clearTimeout(summaryTimer);
+    summaryTimer = null;
+  }
+
+  $effect(() => () => {
+    if (summaryTimer) clearTimeout(summaryTimer);
+  });
+
+  // Tooltip for folders. Deep totals replace the direct-child counts as soon as
+  // they arrive; "Calculating…" covers the walk in between.
+  let folderSummaryText = $derived(
+    item.type === "directory"
+      ? formatFolderSummary(
+          deepSummary
+            ? {
+                folder_count: deepSummary.folder_count,
+                file_count: deepSummary.file_count,
+                file_size: deepSummary.file_size,
+                format_counts: deepSummary.format_counts,
+              }
+            : {
+                children,
+                folder_count: item.folder_count,
+                file_count: item.file_count,
+                file_size: item.file_size,
+              },
+          { loading: summaryLoading },
+        )
+      : "", // Return empty string for files (non-folders)
+  );
+
+  let menuRef = $state(/** @type {HTMLDivElement | null} */ (null));
+  let menuStyle = $state({ left: "0px", top: "0px" });
+
+  function handleDirectoryClick() {
+    selectFolder(item.path); // Select the folder
+    toggleDir(item.path);
+  }
+
+  function handleFileClick() {
+    selectFile(item.path);
+  }
+
+  // Context menu handlers
+  /**
+   * @param {MouseEvent} e
+   */
+  function handleContextMenu(e) {
+    e.preventDefault();
+    renamingPath.set(null); // close any ongoing rename
+    contextMenu.set({
+      // open this item's menu
+      isOpen: true,
+      path: item.path,
+      x: e.clientX,
+      y: e.clientY,
+      type: item.type,
+    });
+  }
+
+  // Close menu when clicking outside or pressing Escape
+  /**
+   * @param {MouseEvent} e
+   */
+  function handleClickOutside(e) {
+    const menuId = `context-menu-${item.path.replace(/[^a-zA-Z0-9]/g, "-")}`;
+    const menuEl = document.getElementById(menuId);
+    if (menuEl && e.target instanceof Node && !menuEl.contains(e.target)) {
+      contextMenu.update((c) => ({ ...c, isOpen: false }));
+    }
+  }
+
+  /**
+   * @param {KeyboardEvent} e
+   */
+  function handleKeyDown(e) {
+    if (e.key === "Escape") {
+      contextMenu.update((c) => ({ ...c, isOpen: false }));
+    }
+  }
+
+  $effect(() => {
+    if ($contextMenu.isOpen && $contextMenu.path === item.path) {
+      // Small delay to ensure menu is rendered
+      setTimeout(() => {
+        positionMenu($contextMenu.x, $contextMenu.y);
+      }, 0);
+
+      window.addEventListener("click", handleClickOutside);
+      window.addEventListener("keydown", handleKeyDown);
+
+      return () => {
+        window.removeEventListener("click", handleClickOutside);
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+    }
+  });
+
+  // Rename actions
+  function startRename() {
+    renamingPath.set(item.path);
+    contextMenu.update((curr) => ({ ...curr, isOpen: false }));
+  }
+
+  async function submitRename() {
+    if (!newName || newName.trim() === "") return;
+    try {
+      await onRename(item.path, newName.trim());
+    } finally {
+      renamingPath.set(null);
+    }
+  }
+
+  function cancelRename() {
+    renamingPath.set(null);
+  }
+
+  $effect(() => {
+    if ($renamingPath === item.path) {
+      newName = item.name;
+      if (inputRef) {
+        const input = inputRef;
+        // Small delay to ensure the input is ready in Firefox
+        setTimeout(() => {
+          input.focus();
+
+          // For files, select name without extension
+          if (item.type === "file") {
+            const lastDotIndex = item.name.lastIndexOf(".");
+            if (lastDotIndex > 0) {
+              input.setSelectionRange(0, lastDotIndex);
+            } else {
+              input.select();
+            }
+          } else {
+            input.select();
+          }
+        }, 10); // Small delay for Firefox
+      }
+    }
+  });
+
+  function handleCreateFolder() {
+    let parentPath;
+    if (item.type === "directory") {
+      parentPath = item.path; // create inside this folder
+    } else {
+      // file – use its parent directory
+      parentPath = item.path.substring(0, item.path.lastIndexOf("/"));
+      // if no slash, parentPath becomes '' (root)
+    }
+    onCreateFolder(parentPath);
+    // close the context menu
+    contextMenu.update((curr) => ({ ...curr, isOpen: false }));
+  }
+
+  async function handleDeleteWithHold() {
+    await onDelete(item.path);
+    contextMenu.update((curr) => ({ ...curr, isOpen: false }));
+  }
+
+  // Function to position menu
+  /**
+   * @param {number} clickX
+   * @param {number} clickY
+   */
+  function positionMenu(clickX, clickY) {
+    if (!menuRef) return;
+
+    // Get viewport dimensions
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Get menu dimensions
+    const menuWidth = menuRef.offsetWidth;
+    const menuHeight = menuRef.offsetHeight;
+
+    // Calculate horizontal position (prevent going off right edge)
+    let left = clickX;
+    if (left + menuWidth > viewportWidth - 10) {
+      left = viewportWidth - menuWidth - 10;
+    }
+
+    // Calculate vertical position
+    let top = clickY;
+
+    // Check if menu would go below viewport
+    if (top + menuHeight > viewportHeight - 10) {
+      // Position above the click point
+      top = clickY - menuHeight;
+
+      // If that would go above viewport, position at top with small margin
+      if (top < 10) {
+        top = 10;
+      }
+    }
+
+    // Ensure menu doesn't go above viewport
+    if (top < 10) {
+      top = 10;
+    }
+
+    menuStyle = {
+      left: left + "px",
+      top: top + "px",
+    };
+  }
+
+  async function handleSmartRename() {
+    try {
+      const isFolder = item.type === "directory";
+      const scheme = isFolder ? $settings.folderScheme : $settings.fileScheme;
+
+      if (!scheme || scheme.trim() === "") {
+        toast.warning(
+          `No ${isFolder ? "folder" : "file"} renaming scheme configured in settings`,
+        );
+        return;
+      }
+
+      const result = await applyRenamingScheme(scheme, item.path, isFolder, {
+        replaceSpaces: isFolder
+          ? $settings.replaceSpacesInFolders
+          : $settings.replaceSpacesInFiles,
+      });
+
+      if (result.success) {
+        toast.success(`Successfully renamed to: ${result.newName}`);
+
+        // Update selection to the new path
+        if (item.type === "directory") {
+          selectFolder(result.newPath);
+        } else {
+          selectFile(result.newPath);
+        }
+
+        // Refresh the file tree
+        const event = new CustomEvent("refreshFileTree");
+        window.dispatchEvent(event);
+      }
+    } catch (error) {
+      toast.error(
+        `Smart rename failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      // Close context menu
+      contextMenu.update((curr) => ({ ...curr, isOpen: false }));
+    }
+  }
+
+  async function handleSmartRenameAllFiles() {
+    try {
+      const scheme = $settings.fileScheme;
+
+      if (!scheme || scheme.trim() === "") {
+        toast.warning("No file renaming scheme configured in settings");
+        return;
+      }
+
+      // Folders from /api/files/dir arrive without children. Load the folder
+      // on demand so this action also works on one that was never expanded.
+      if (
+        item.children == null &&
+        !$childrenByPath.has(item.path) &&
+        item.has_children !== false &&
+        onLoad
+      ) {
+        await onLoad(item.path);
+      }
+
+      // Filter for supported audio files only.
+      const folderChildren =
+        $childrenByPath.get(item.path) ?? item.children ?? [];
+      const audioFiles = folderChildren.filter(
+        (child) =>
+          child.type === "file" && isAudioFile(child.name, child.file_type),
+      );
+
+      if (audioFiles.length === 0) {
+        toast.info("No supported audio files found in this folder");
+        return;
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+      const errors = [];
+
+      // Process each audio file sequentially
+      for (const file of audioFiles) {
+        try {
+          const result = await applyRenamingScheme(
+            scheme,
+            file.path,
+            false, // isFolder = false (it's a file)
+            {
+              replaceSpaces: $settings.replaceSpacesInFiles,
+            },
+          );
+
+          if (result.success) {
+            successCount++;
+          } else {
+            failCount++;
+            errors.push(`${file.name}: ${result.error || "Unknown error"}`);
+          }
+        } catch (error) {
+          failCount++;
+          errors.push(
+            `${file.name}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+
+      // Show final result
+      if (failCount === 0) {
+        toast.success(`Successfully renamed all ${successCount} audio file(s)`);
+      } else {
+        toast.warning(
+          `Renamed ${successCount} of ${audioFiles.length} audio file(s), ${failCount} failed`,
+        );
+        // Log errors to console for debugging
+        console.error("Failed renames:", errors);
+      }
+
+      // Refresh the file tree
+      const event = new CustomEvent("refreshFileTree");
+      window.dispatchEvent(event);
+    } catch (error) {
+      toast.error(
+        `Smart rename failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      // Close context menu
+      contextMenu.update((curr) => ({ ...curr, isOpen: false }));
+    }
+  }
+
+  async function handleDownload() {
+    // Close the context menu immediately so the click has visible feedback.
+    contextMenu.update((curr) => ({ ...curr, isOpen: false }));
+
+    const isFolder = item.type === "directory";
+    const fallbackName = isFolder ? `${item.name}.zip` : item.name;
+    const preparingToast = toast.info(
+      `Preparing download: ${fallbackName}`,
+      15000,
+    );
+
+    try {
+      // Get a short-lived token so the browser can handle the download
+      // natively.
+      const response = await fetch("/api/download-token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          path: item.path,
+          isFolder,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await readApiError(response, "Download failed");
+        throw new Error(error);
+      }
+
+      const data = await response.json();
+      const filename = data.filename || fallbackName;
+      const url = `/api/download?token=${encodeURIComponent(data.token)}`;
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      toast.remove(preparingToast);
+      toast.success(
+        isFolder
+          ? `Download requested: ${filename} (preparing archive)`
+          : `Download started: ${filename}`,
+      );
+    } catch (error) {
+      toast.remove(preparingToast);
+      toast.error(
+        `Download failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      console.error("Download error:", error);
+    }
+  }
+
+  let showFetcher = $state(false);
+  let fetcherMode = $state("song");
+  let fetcherPath = $state("");
+  let fetcherIsFolder = $state(false);
+
+  /**
+   * @param {string} mode
+   * @param {string} path
+   * @param {boolean} isFolder
+   */
+  function openFetcher(mode, path, isFolder) {
+    fetcherMode = mode;
+    fetcherPath = path;
+    fetcherIsFolder = isFolder;
+    showFetcher = true;
+    // close context menu
+    contextMenu.update((c) => ({ ...c, isOpen: false }));
+  }
+</script>
+
+{#if item.type === "directory"}
+  <li>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      role="listitem"
+      class="directory"
+      class:indented={level > 0}
+      class:selected={item.path === selectedFolder}
+      style="--level: {level}"
+      title={folderSummaryText}
+      onmouseenter={handleDirectoryEnter}
+      onmouseleave={handleDirectoryLeave}
+      onclick={handleDirectoryClick}
+      oncontextmenu={(e) => {
+        e.preventDefault();
+        handleContextMenu(e);
+      }}
+      data-folder-path={item.path}
+    >
+      <span class="toggle">
+        {#if expanded.has(item.path)}
+          <!-- Folder open icon -->
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M2 4.5C2 3.94772 2.44772 3.5 3 3.5H6.5L8 5.5H13C13.5523 5.5 14 5.94772 14 6.5V11.5C14 12.0523 13.5523 12.5 13 12.5H3C2.44772 12.5 2 12.0523 2 11.5V4.5Z"
+              fill="currentColor"
+              fill-opacity="0.9"
+            />
+            <path
+              d="M3 3C2.44772 3 2 3.44772 2 4V11C2 11.5523 2.44772 12 3 12H13C13.5523 12 14 11.5523 14 11V6C14 5.44772 13.5523 5 13 5H8L6.5 3H3Z"
+              stroke="currentColor"
+              stroke-width="0.8"
+            />
+          </svg>
+        {:else}
+          <!-- Folder closed icon -->
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M2 4.5C2 3.94772 2.44772 3.5 3 3.5H6.5L8 5.5H13C13.5523 5.5 14 5.94772 14 6.5V11.5C14 12.0523 13.5523 12.5 13 12.5H3C2.44772 12.5 2 12.0523 2 11.5V4.5Z"
+              fill="currentColor"
+              fill-opacity="0.9"
+            />
+          </svg>
+        {/if}
+      </span>
+      {#if $renamingPath === item.path}
+        <input
+          bind:this={inputRef}
+          bind:value={newName}
+          onkeydown={(e) => {
+            if (e.key === "Enter") {
+              submitRename();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancelRename();
+            }
+          }}
+          onblur={() => {
+            if ($renamingPath === item.path) {
+              submitRename();
+            }
+          }}
+          onclick={(e) => {
+            e.stopPropagation();
+          }}
+          onmousedown={(e) => {
+            e.stopPropagation();
+          }}
+          oncontextmenu={(e) => {
+            e.preventDefault();
+          }}
+          class="rename-input"
+          type="text"
+        />
+      {:else}
+        <span class="name">{item.name}</span>
+      {/if}
+    </div>
+    {#if expanded.has(item.path)}
+      {#if needsLoad && !sortedChildren.length && item.has_children !== false}
+        <ul>
+          <li class="tree-loading" style="--level: {level + 1}">Loading…</li>
+        </ul>
+      {:else if sortedChildren.length}
+        <ul>
+          {#each sortedChildren as child (child.path)}
+            <Self
+              item={child}
+              {expanded}
+              {toggleDir}
+              {selectFile}
+              {selectFolder}
+              {selectedFolder}
+              {selectedFile}
+              level={level + 1}
+              {onRename}
+              {onDelete}
+              {onCreateFolder}
+              {onCopy}
+              {onLoad}
+            />
+          {/each}
+        </ul>
+      {/if}
+    {/if}
+    {#if $contextMenu.isOpen && $contextMenu.path === item.path}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        bind:this={menuRef}
+        id={`context-menu-${item.path.replace(/[^a-zA-Z0-9]/g, "-")}`}
+        class="context-menu"
+        style="left: {menuStyle.left}; top: {menuStyle.top};"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <ul>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={startRename}>Rename</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={handleSmartRename}>Smart Rename</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={handleSmartRenameAllFiles}>Smart Rename All Audio</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={() => openFetcher("album", item.path, true)}>
+            Fetch Album Metadata
+          </li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={() => onCopy(item.path)}>Copy</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={handleDownload}>Download</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={handleCreateFolder}>Create folder</li>
+          <li class="hold-delete-item">
+            <HoldButton
+              variant="menu"
+              duration={holdDeleteDuration}
+              onConfirm={handleDeleteWithHold}
+              title="Hold to delete"
+            >
+              Delete
+            </HoldButton>
+          </li>
+        </ul>
+      </div>
+    {/if}
+  </li>
+{:else}
+  <!-- Get filename from path -->
+  {@const filename = item.path.split(/[\\/]/).pop() ?? item.path}
+  <!-- Get format from file extension -->
+  {@const fileExt = (filename.split(".").pop() ?? "").toLowerCase()}
+
+  {@const isAudio = isAudioFile(filename, item.file_type)}
+  {@const isImage =
+    item.file_type === "image" ||
+    [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"].includes("." + fileExt)}
+  {@const isText =
+    item.file_type === "text" || [".txt", ".lrc"].includes("." + fileExt)}
+  {@const isOther = !isAudio && !isImage && !isText}
+
+  {@const format = (() => {
+    /** @type {Record<string, string>} */
+    const imageFormatMap = {
+      jpg: "JPG",
+      jpeg: "JPEG",
+      png: "PNG",
+      gif: "GIF",
+      bmp: "BMP",
+      webp: "WEBP",
+    };
+    /** @type {Record<string, string>} */
+    const textFormatMap = {
+      txt: "TXT",
+      lrc: "LRC",
+    };
+    if (isAudio) return getAudioFormatLabel(filename);
+    if (isImage) return imageFormatMap[fileExt] || fileExt.toUpperCase();
+    if (isText) return textFormatMap[fileExt] || fileExt.toUpperCase();
+    return fileExt.toUpperCase();
+  })()}
+
+  <li>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      role="listitem"
+      class="file"
+      class:indented={level > 0}
+      class:selected={item.path === selectedFile}
+      style="--level: {level}"
+      onclick={() => {
+        // Call selectFile for both audio AND images
+        handleFileClick();
+      }}
+      oncontextmenu={(e) => {
+        e.preventDefault();
+        handleContextMenu(e);
+      }}
+      data-file-path={item.path}
+      data-folder-path={item.path.substring(0, item.path.lastIndexOf("/"))}
+    >
+      <span class="file-icon">
+        <!-- File icon - same for both, just different color maybe -->
+        <svg
+          width="14"
+          height="16"
+          viewBox="0 0 14 16"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M2 1.5C2 1.22386 2.22386 1 2.5 1H9.5C9.77614 1 10 1.22386 10 1.5V3.5C10 3.77614 10.2239 4 10.5 4H12.5C12.7761 4 13 4.22386 13 4.5V14.5C13 14.7761 12.7761 15 12.5 15H2.5C2.22386 15 2 14.7761 2 14.5V1.5Z"
+            fill="currentColor"
+            fill-opacity="0.7"
+          />
+          <path d="M10 1L12 3H10V1Z" fill="currentColor" fill-opacity="0.7" />
+        </svg>
+      </span>
+      {#if $renamingPath === item.path}
+        <input
+          bind:this={inputRef}
+          bind:value={newName}
+          onkeydown={(e) => {
+            if (e.key === "Enter") {
+              submitRename();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancelRename();
+            }
+          }}
+          onblur={() => {
+            if ($renamingPath === item.path) {
+              submitRename();
+            }
+          }}
+          onclick={(e) => {
+            e.stopPropagation();
+          }}
+          onmousedown={(e) => {
+            e.stopPropagation();
+          }}
+          oncontextmenu={(e) => {
+            e.preventDefault();
+            handleContextMenu(e);
+          }}
+          class="rename-input"
+          type="text"
+        />
+      {:else}
+        <span class="name">{filename}</span>
+        <span class="file-info">
+          <span
+            class="format"
+            class:image-format={isImage}
+            class:text-format={isText}
+            class:other-format={isOther}
+          >
+            {format}
+          </span>
+          <span class="size">({((item.size ?? 0) / 1024).toFixed(0)} KB)</span>
+        </span>
+      {/if}
+    </div>
+
+    <!-- Context menu -->
+    {#if $contextMenu.isOpen && $contextMenu.path === item.path}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        bind:this={menuRef}
+        id={`context-menu-${item.path.replace(/[^a-zA-Z0-9]/g, "-")}`}
+        class="context-menu"
+        style="left: {menuStyle.left}; top: {menuStyle.top};"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <ul>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={startRename}>Rename</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          {#if isAudio}
+            <li onclick={handleSmartRename}>Smart Rename</li>
+          {/if}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          {#if isAudio}
+            <li onclick={() => openFetcher("song", item.path, false)}>
+              Fetch Song Metadata
+            </li>
+          {/if}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={() => onCopy(item.path)}>Copy</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={handleDownload}>Download</li>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li onclick={handleCreateFolder}>Create folder</li>
+          <li class="hold-delete-item">
+            <HoldButton
+              variant="menu"
+              duration={holdDeleteDuration}
+              onConfirm={() => {
+                onDelete(item.path);
+                contextMenu.update((curr) => ({
+                  ...curr,
+                  isOpen: false,
+                }));
+              }}
+            >
+              Delete
+            </HoldButton>
+          </li>
+        </ul>
+      </div>
+    {/if}
+  </li>
+{/if}
+
+<MetadataFetcher
+  isOpen={showFetcher}
+  onClose={() => (showFetcher = false)}
+  mode={fetcherMode}
+  targetPath={fetcherPath}
+  isFolder={fetcherIsFolder}
+/>
+
+<style>
+  li {
+    list-style: none;
+    margin: 2px 2px;
+  }
+
+  .tree-loading {
+    padding: 8px 12px 8px calc(12px + var(--level, 0) * 16px);
+    color: #888;
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  .directory,
+  .file {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    transition: background-color 0.15s;
+    position: relative;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .directory:hover,
+  .file:hover {
+    background-color: #f5f5f5;
+  }
+
+  .directory .toggle,
+  .file .file-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    color: var(--color-primary);
+  }
+
+  .file .file-icon {
+    color: #888;
+  }
+
+  .directory .name {
+    font-weight: 500;
+    color: #333;
+  }
+
+  .file .file-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0; /* Prevents the info from shrinking */
+  }
+
+  .file .format {
+    color: var(--color-badge-audio);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 6px;
+    background: var(--color-badge-audio-background);
+    border-radius: 4px;
+    text-transform: uppercase;
+    min-width: 50px; /* Gives a minimum width for consistency */
+    text-align: center; /* Centers the text within the badge */
+  }
+
+  .file .name {
+    flex: 1; /* This makes the filename take all available space, pushing the info to the right */
+    color: #555;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis; /* Adds ellipsis for very long filenames */
+  }
+
+  .file .size {
+    color: #888;
+    font-size: 12px;
+    min-width: 100px; /* Gives a minimum width for file sizes */
+    text-align: right; /* Right-aligns the file size */
+  }
+
+  /* Highlight for selected node */
+  .file.selected,
+  .directory.selected {
+    background-color: var(--color-primary-transparent);
+    border-left: 3px solid var(--color-primary);
+  }
+
+  /* Keep hover effect but ensure selected stands out */
+  .file.selected:hover,
+  .directory.selected:hover {
+    background-color: var(--color-primary-transparent);
+  }
+
+  .context-menu {
+    position: fixed;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    padding: 4px 0;
+    z-index: 1000;
+    min-width: 120px;
+  }
+
+  .context-menu ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .context-menu li {
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .context-menu li:hover {
+    background-color: #f0f0f0;
+  }
+
+  .rename-input {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--color-primary);
+    border-radius: 4px;
+    font-size: 14px;
+    outline: none;
+    background: white;
+    color: #333;
+  }
+
+  .file .format.image-format {
+    background: var(--color-badge-image-background);
+    min-width: 50px;
+    color: var(--color-badge-image);
+  }
+
+  .context-menu li.hold-delete-item {
+    padding: 0;
+  }
+
+  .file .format.text-format {
+    background: var(--color-badge-text-background);
+    color: var(--color-badge-text);
+  }
+
+  .file .format.other-format {
+    background: rgba(0, 0, 0, 0.06);
+    color: #777;
+  }
+
+  /* Dark mode overrides */
+  :global(body.dark) .directory .name,
+  :global(body.dark) .file .name {
+    color: #e0e0e0;
+  }
+
+  :global(body.dark) .file .size {
+    color: #808080;
+  }
+
+  :global(body.dark) .directory:hover,
+  :global(body.dark) .file:hover {
+    background-color: #3d3d3d;
+  }
+
+  :global(body.dark) .directory .toggle {
+    color: var(--color-primary-dark);
+  }
+
+  :global(body.dark) .file .file-icon {
+    color: #aaa;
+  }
+
+  :global(body.dark) .file.selected,
+  :global(body.dark) .directory.selected {
+    background-color: var(--color-primary-transparent-dark);
+    border-left-color: var(--color-primary-dark);
+  }
+
+  /* Keep hover effect but ensure selected stands out */
+  :global(body.dark) .file.selected:hover,
+  :global(body.dark) .directory.selected:hover {
+    background-color: var(--color-primary-transparent-dark);
+  }
+
+  :global(body.dark) .file .format {
+    background: var(--color-badge-audio-background-dark);
+    color: var(--color-badge-audio-dark);
+  }
+
+  :global(body.dark) .context-menu {
+    background: #2d2d2d;
+    border-color: #444;
+    color: #e0e0e0;
+  }
+
+  :global(body.dark) .context-menu li:hover {
+    background-color: #3d3d3d;
+  }
+
+  :global(body.dark) .rename-input {
+    background: #3d3d3d;
+    color: #e0e0e0;
+    border-color: var(--color-primary-dark);
+  }
+
+  :global(body.dark) .file .format.image-format {
+    background: var(--color-badge-image-background-dark);
+    color: var(--color-badge-image-dark);
+  }
+
+  :global(body.dark) .file .format.text-format {
+    background: var(--color-badge-text-background-dark);
+    color: var(--color-badge-text-dark);
+  }
+
+  :global(body.dark) .file .format.other-format {
+    background: rgba(255, 255, 255, 0.1);
+    color: #aaa;
+  }
+</style>
