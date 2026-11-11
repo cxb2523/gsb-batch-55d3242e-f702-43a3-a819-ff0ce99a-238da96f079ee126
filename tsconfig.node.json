@@ -1,0 +1,20 @@
+{
+  "include": [
+    "electron.vite.config.*",
+    "eslint.config.js",
+    "src/shared/**/*",
+    "src/main/**/*",
+    "src/preload/**/*",
+    "vitest.config.ts"
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  }
+}

@@ -1,0 +1,57 @@
+/* ---------- VU meter ---------- */
+
+.vu {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.vu-meter {
+  display: flex;
+  width: 12px;
+  height: var(--vu-height);
+  flex-direction: column-reverse;
+  gap: 1px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  background: #04060a;
+  padding: 2px;
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.9);
+}
+
+.vu-segment {
+  flex: 1;
+  border-radius: 1.5px;
+  opacity: 0.3;
+  transition: opacity 60ms linear;
+}
+
+.vu-green {
+  background: #22c55e;
+  color: #22c55e;
+}
+
+.vu-yellow {
+  background: #facc15;
+  color: #facc15;
+}
+
+.vu-red {
+  background: #ef4444;
+  color: #ef4444;
+}
+
+.vu-lit {
+  opacity: 1;
+  box-shadow: 0 0 7px currentColor;
+}
+
+.vu-label {
+  color: var(--text-dim);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+

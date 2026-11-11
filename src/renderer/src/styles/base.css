@@ -1,0 +1,44 @@
+:root {
+  --accent-a: #22d3ee;
+  --accent-b: #f59e0b;
+  --panel-edge: rgba(255, 255, 255, 0.085);
+  --well-bg: #070a0f;
+  --text-dim: #64748b;
+  --knob-size: 48px;
+  --fader-length: 150px;
+  --vu-height: 130px;
+  --library-docked-height: 176px;
+  --library-collapsed-height: 48px;
+  --library-expanded-height: min(68vh, 680px, calc(100vh - 1.5rem));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 8%, rgba(34, 211, 238, 0.035), transparent 24rem),
+    radial-gradient(circle at 84% 12%, rgba(245, 158, 11, 0.032), transparent 26rem),
+    linear-gradient(135deg, #030406, #080a0e 46%, #030406);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.micro-label {
+  color: var(--text-dim);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+

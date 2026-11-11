@@ -1,0 +1,173 @@
+/* ---------- Compact heights ---------- */
+
+@media (max-height: 900px) {
+  :root {
+    --fader-length: 130px;
+    --library-docked-height: 142px;
+    --library-expanded-height: min(68vh, 600px, calc(100vh - 1.5rem));
+  }
+
+  .mixer-panel {
+    --mixer-padding: 0.58rem;
+    gap: 0.35rem;
+  }
+
+  .mixer-body {
+    grid-template-columns: 1fr 92px 1fr;
+    gap: 0.42rem;
+  }
+
+  .channel-strip {
+    --knob-size: 38px;
+    --channel-fader-height: clamp(140px, 20vh, 150px);
+    gap: 0.5rem;
+  }
+
+  .channel-strip > .cue-button {
+    margin-top: 0.75rem;
+  }
+
+  .channel-fader-row {
+    margin-top: 1.5rem;
+  }
+
+  .master-strip {
+    --knob-size: 42px;
+    --vu-height: clamp(158px, 23vh, 190px);
+    gap: 0.35rem;
+  }
+
+  .mixer-session {
+    gap: 0.28rem;
+    padding: 0.3rem 0;
+  }
+
+  .master-meter-bank {
+    padding: 0.35rem;
+  }
+
+  .knob-label {
+    font-size: 0.52rem;
+  }
+
+  .cue-button {
+    padding: 0.28rem 0.6rem;
+  }
+
+  .waveform-zoom {
+    height: 52px;
+  }
+
+  .deck-center {
+    min-height: 250px;
+  }
+
+  .deck-panel {
+    --jog-max-size: 350px;
+  }
+
+  .deck-drop-hint {
+    height: min(46%, 140px);
+  }
+
+  .transport-button {
+    height: 38px;
+  }
+
+  .loop-button {
+    height: 38px;
+  }
+
+  .crossfader-well {
+    min-height: 72px;
+    padding: 0.5rem 0.8rem 0.6rem;
+  }
+}
+
+/* ---------- Short consoles ---------- */
+
+@media (max-height: 730px) {
+  :root {
+    --fader-length: 112px;
+    --library-docked-height: 116px;
+  }
+
+  .channel-strip {
+    --knob-size: 38px;
+    --channel-fader-height: 150px;
+    gap: 0.62rem;
+  }
+
+  .channel-strip > .cue-button {
+    margin-top: 1rem;
+  }
+
+  .channel-fader-row {
+    margin-top: 1.7rem;
+  }
+
+  .master-strip {
+    --knob-size: 42px;
+    --vu-height: 174px;
+    gap: 0.25rem;
+    padding: 0.45rem 0.3rem 0.55rem;
+  }
+
+  .mixer-header {
+    padding-top: 0;
+  }
+
+  .mixer-brand {
+    font-size: 0.78rem;
+  }
+
+  .mixer-session {
+    gap: 0.18rem;
+    padding: 0.15rem 0;
+  }
+
+  .waveform-zoom {
+    height: 42px;
+  }
+
+  .deck-center {
+    min-height: 220px;
+  }
+
+  .deck-panel {
+    --jog-max-size: 300px;
+  }
+
+  .transport-button,
+  .loop-button {
+    height: 34px;
+  }
+}
+
+/* ---------- Compact widths ---------- */
+
+@media (max-width: 1360px) {
+  .console-grid {
+    grid-template-columns: minmax(0, 1fr) 330px minmax(0, 1fr);
+  }
+
+  .deck-panel {
+    --jog-max-size: 300px;
+  }
+
+  .deck-drop-hint {
+    height: min(46%, 135px);
+  }
+
+  .deck-center {
+    min-height: 230px;
+  }
+}
+
+/* ---------- Wide consoles ---------- */
+
+@media (min-width: 1600px) {
+  .deck-panel {
+    --jog-max-size: clamp(380px, 24vw, 460px);
+  }
+}

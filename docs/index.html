@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NextDJ - Open-source desktop DJ console</title>
+    <meta
+      name="description"
+      content="NextDJ is an open-source desktop DJ console for local mixing, two decks, waveforms, cue monitoring, recording, and playlist imports."
+    />
+    <meta property="og:title" content="NextDJ" />
+    <meta property="og:description" content="An open-source desktop DJ console for local mixing." />
+    <meta property="og:image" content="media/nextdj-screenshot.jpg" />
+    <meta name="theme-color" content="#05080c" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="NextDJ home">
+        <span class="mark">N</span>
+        <span>NextDJ</span>
+      </a>
+      <nav class="nav" aria-label="Page sections">
+        <a href="#features">Features</a>
+        <a href="#downloads">Downloads</a>
+        <a href="https://github.com/antoniolg/next-dj">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-label="NextDJ landing hero">
+        <div class="hero-content">
+          <p class="eyebrow"><span class="led"></span> Open-source desktop DJ console</p>
+          <h1>NextDJ</h1>
+          <p class="hero-copy">
+            Mix local tracks with two tactile decks, live waveforms, cue monitoring, BPM sync, loops, hot cues,
+            recording, and a focused hardware-inspired console.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="#downloads">Download alpha</a>
+            <a class="button" href="https://github.com/antoniolg/next-dj">View on GitHub</a>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="section">
+        <div class="section-inner">
+          <div class="section-head">
+            <p class="section-label">Built for local sets</p>
+            <h2>A compact booth for your desktop.</h2>
+            <p class="section-copy">
+              NextDJ keeps the session in one place: decks on the sides, mixer in the center, crate at the bottom.
+              Load files, shape the transition, monitor cues, and record without leaving the console.
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature">
+              <div class="feature-kicker"><span class="meter"><span></span><span></span><span></span></span> Decks</div>
+              <h3>Waveforms, jog wheels, pitch, sync, cue, loops, and hot cues.</h3>
+              <p>Two deck control with overview and zoomed waveforms tuned for quick track reading.</p>
+            </article>
+            <article class="feature">
+              <div class="feature-kicker"><span class="meter"><span></span><span></span><span></span></span> Mixer</div>
+              <h3>Gain, EQ, filters, channel faders, crossfader, and VU metering.</h3>
+              <p>Shape the blend with visual level feedback and a central master beat reference.</p>
+            </article>
+            <article class="feature">
+              <div class="feature-kicker"><span class="meter"><span></span><span></span><span></span></span> Output</div>
+              <h3>Master routing, cue routing, session recording, and plugin imports.</h3>
+              <p>Choose supported output devices and extend playlist imports through the local provider API.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section showcase" aria-label="NextDJ screenshot">
+        <div class="section-inner">
+          <div class="screenshot">
+            <img src="media/nextdj-screenshot.jpg" alt="NextDJ desktop console with two decks, mixer, waveforms, and crate" />
+          </div>
+        </div>
+      </section>
+
+      <section id="downloads" class="section">
+        <div class="section-inner">
+          <div class="section-head">
+            <p class="section-label">Alpha downloads</p>
+            <h2>Get the first public build.</h2>
+            <p class="section-copy">
+              These early binaries are unsigned pre-releases. macOS and Windows can show operating-system warnings.
+              Build from source if you prefer to inspect the app before running it.
+            </p>
+          </div>
+          <div class="download-grid">
+            <article class="download">
+              <div>
+                <h3>macOS Apple Silicon</h3>
+                <p>DMG build for arm64 Macs.</p>
+                <div class="download-meta"><span>v0.1.0-alpha.1</span><span>119 MB</span></div>
+              </div>
+              <a
+                class="button primary"
+                href="https://github.com/antoniolg/next-dj/releases/download/v0.1.0-alpha.1/NextDJ-0.1.0-mac-arm64.dmg"
+                >Download DMG</a
+              >
+            </article>
+            <article class="download">
+              <div>
+                <h3>Windows x64</h3>
+                <p>Installer for 64-bit Windows.</p>
+                <div class="download-meta"><span>v0.1.0-alpha.1</span><span>97 MB</span></div>
+              </div>
+              <a
+                class="button amber"
+                href="https://github.com/antoniolg/next-dj/releases/download/v0.1.0-alpha.1/NextDJ-0.1.0-win-x64-setup.exe"
+                >Download EXE</a
+              >
+            </article>
+            <article class="download">
+              <div>
+                <h3>Linux x64</h3>
+                <p>Portable AppImage for common Linux desktops.</p>
+                <div class="download-meta"><span>v0.1.0-alpha.1</span><span>124 MB</span></div>
+              </div>
+              <a
+                class="button"
+                href="https://github.com/antoniolg/next-dj/releases/download/v0.1.0-alpha.1/NextDJ-0.1.0-linux-x86_64.AppImage"
+                >Download AppImage</a
+              >
+            </article>
+          </div>
+
+          <div class="notice">
+            <h3>Need Intel Mac, portable Windows, DEB, ZIP, or checksums?</h3>
+            <p>
+              The full release includes macOS x64 builds, macOS ZIP files, Windows portable EXE, Linux DEB, and
+              SHA256 checksums.
+            </p>
+            <div class="actions">
+              <a class="button" href="https://github.com/antoniolg/next-dj/releases/tag/v0.1.0-alpha.1"
+                >Open all release assets</a
+              >
+              <a
+                class="button"
+                href="https://github.com/antoniolg/next-dj/releases/download/v0.1.0-alpha.1/SHA256SUMS.txt"
+                >SHA256 checksums</a
+              >
+            </div>
+          </div>
+
+          <div class="source-panel">
+            <div>
+              <h3>Run from source</h3>
+              <p>Use npm because this repository commits `package-lock.json`.</p>
+              <div class="source-row">
+                <code>npm install</code>
+                <code>npm run dev</code>
+              </div>
+            </div>
+            <a class="button" href="https://github.com/antoniolg/next-dj#readme">Read the README</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="section-inner">
+        <span>NextDJ is released under the MIT License.</span>
+        <a href="https://github.com/antoniolg/next-dj">github.com/antoniolg/next-dj</a>
+      </div>
+    </footer>
+  </body>
+</html>

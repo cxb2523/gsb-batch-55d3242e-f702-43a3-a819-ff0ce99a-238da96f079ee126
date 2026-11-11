@@ -1,0 +1,319 @@
+/* ---------- Fader ---------- */
+
+.fader {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.fader-vertical {
+  flex-direction: column;
+}
+
+.fader-horizontal {
+  width: 100%;
+  flex-direction: column;
+}
+
+.fader-disabled {
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.fader-track {
+  position: relative;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.fader-track::before {
+  position: absolute;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #030507, #10141b 48%, #05070a);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.07);
+  content: '';
+  pointer-events: none;
+}
+
+.fader-track:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
+}
+
+.fader-vertical .fader-track {
+  width: 44px;
+  height: var(--fader-length);
+}
+
+.fader-vertical .fader-track::before {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 8px;
+  transform: translateX(-50%);
+}
+
+.fader-horizontal .fader-track {
+  height: 36px;
+  width: 100%;
+}
+
+.fader-horizontal .fader-track::before {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 12px;
+  transform: translateY(-50%);
+}
+
+.fader-thumb {
+  position: absolute;
+  z-index: 1;
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, 0.72));
+  pointer-events: none;
+}
+
+.fader-thumb > span {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.fader-thumb-backplate {
+  z-index: 0;
+  border: 1px solid #05080c;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #5b6672 0, #303945 24%, #11171e 52%, #343d48 78%, #0b0f14 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(218, 228, 237, 0.24),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.82);
+}
+
+.fader-thumb-face {
+  z-index: 1;
+  border: 1px solid #070a0e;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(222, 231, 239, 0.11), transparent 16% 82%, rgba(0, 0, 0, 0.4));
+  box-shadow:
+    inset 0 1px 0 rgba(235, 241, 247, 0.42),
+    inset 1px 0 0 rgba(190, 201, 211, 0.1),
+    inset -1px 0 0 rgba(0, 0, 0, 0.48);
+}
+
+.fader-thumb-face-start {
+  background-color: #252c35;
+  background-image:
+    linear-gradient(90deg, rgba(222, 231, 239, 0.11), transparent 16% 82%, rgba(0, 0, 0, 0.4)),
+    linear-gradient(180deg, #77828e 0, #46505b 18%, #252c35 58%, #0b0f14 100%);
+}
+
+.fader-thumb-face-end {
+  background-color: #161b22;
+  background-image:
+    linear-gradient(90deg, rgba(222, 231, 239, 0.08), transparent 16% 82%, rgba(0, 0, 0, 0.44)),
+    linear-gradient(180deg, #56616c 0, #343d47 26%, #181e26 72%, #080b0f 100%);
+  box-shadow:
+    inset 1px 0 0 rgba(190, 201, 211, 0.08),
+    inset -1px 0 0 rgba(0, 0, 0, 0.48),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.9);
+}
+
+.fader-thumb-ridge {
+  z-index: 2;
+  border: 1px solid #05070a;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #080b0f 0 16%, #e1e6eb 17% 38%, #929da8 39% 62%, #38414b 63% 78%, #06080b 79% 100%);
+  box-shadow:
+    0 -1px 0 rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(0, 0, 0, 0.9);
+}
+
+.fader-vertical .fader-thumb {
+  left: 50%;
+  width: 38px;
+  height: 30px;
+  transform: translate(-50%, 50%);
+}
+
+.fader-variant-channel .fader-track {
+  width: 56px;
+}
+
+.fader-variant-channel .fader-thumb {
+  width: 48px;
+}
+
+.fader-variant-channel .fader-tick {
+  width: 52px;
+}
+
+.fader-vertical .fader-thumb-backplate {
+  top: 5px;
+  right: 2px;
+  bottom: 5px;
+  left: 2px;
+}
+
+.fader-vertical .fader-thumb-face {
+  right: 0;
+  left: 0;
+  height: 14px;
+}
+
+.fader-vertical .fader-thumb-face-start {
+  top: 0;
+}
+
+.fader-vertical .fader-thumb-face-end {
+  bottom: 0;
+}
+
+.fader-vertical .fader-thumb-ridge {
+  top: 50%;
+  right: -1px;
+  left: -1px;
+  height: 4px;
+  transform: translateY(-50%);
+}
+
+.fader-horizontal .fader-thumb {
+  top: 50%;
+  width: 30px;
+  height: 38px;
+  transform: translate(-50%, -50%);
+}
+
+.fader-variant-crossfader .fader-thumb {
+  width: 30px;
+  height: 46px;
+}
+
+.fader-horizontal .fader-thumb-backplate {
+  top: 2px;
+  right: 5px;
+  bottom: 2px;
+  left: 5px;
+  background: linear-gradient(90deg, #5b6672 0, #303945 24%, #11171e 52%, #343d48 78%, #0b0f14 100%);
+}
+
+.fader-horizontal .fader-thumb-face {
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  height: auto;
+}
+
+.fader-horizontal .fader-thumb-face-start {
+  left: 0;
+  background-image:
+    linear-gradient(180deg, rgba(222, 231, 239, 0.11), transparent 16% 82%, rgba(0, 0, 0, 0.4)),
+    linear-gradient(90deg, #77828e 0, #46505b 18%, #252c35 58%, #0b0f14 100%);
+}
+
+.fader-horizontal .fader-thumb-face-end {
+  right: 0;
+  background-image:
+    linear-gradient(180deg, rgba(222, 231, 239, 0.08), transparent 16% 82%, rgba(0, 0, 0, 0.44)),
+    linear-gradient(90deg, #56616c 0, #343d47 26%, #181e26 72%, #080b0f 100%);
+}
+
+.fader-horizontal .fader-thumb-ridge {
+  top: -1px;
+  bottom: -1px;
+  left: 50%;
+  width: 4px;
+  background: linear-gradient(90deg, #080b0f 0 16%, #e1e6eb 17% 38%, #929da8 39% 62%, #38414b 63% 78%, #06080b 79% 100%);
+  box-shadow:
+    -1px 0 0 rgba(0, 0, 0, 0.9),
+    1px 0 0 rgba(0, 0, 0, 0.9);
+  transform: translateX(-50%);
+}
+
+.fader-detent {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.fader-vertical .fader-detent {
+  top: 50%;
+  left: -6px;
+  right: -6px;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+.fader-horizontal .fader-detent {
+  left: 50%;
+  top: -6px;
+  bottom: -6px;
+  width: 2px;
+  transform: translateX(-50%);
+}
+
+.fader-scale {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Ticks alineados a porcentajes exactos del recorrido; los mayores sobresalen
+   hacia fuera manteniendo el borde interior a la misma distancia del track */
+.fader-tick {
+  position: absolute;
+  left: 50%;
+  width: 40px;
+  height: 1px;
+  transform: translate(-50%, 50%);
+}
+
+.fader-tick::before,
+.fader-tick::after {
+  position: absolute;
+  top: 0;
+  width: 7px;
+  height: 1px;
+  background: rgba(150, 163, 180, 0.4);
+  content: '';
+}
+
+.fader-tick::before {
+  left: 5px;
+}
+
+.fader-tick::after {
+  right: 5px;
+}
+
+.fader-tick-major::before,
+.fader-tick-major::after {
+  width: 12px;
+  background: rgba(205, 214, 226, 0.55);
+}
+
+.fader-tick-major::before {
+  left: 0;
+}
+
+.fader-tick-major::after {
+  right: 0;
+}
+
+.fader-tick-center::before,
+.fader-tick-center::after {
+  background: rgba(228, 236, 245, 0.75);
+}
+
+.fader-label {
+  color: #94a3b8;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}

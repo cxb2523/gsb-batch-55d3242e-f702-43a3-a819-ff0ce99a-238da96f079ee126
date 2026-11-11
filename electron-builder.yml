@@ -1,0 +1,40 @@
+appId: com.antoniolg.nextdj
+productName: NextDJ
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**
+  - package.json
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+mac:
+  icon: build/icon.icns
+  target:
+    - dmg
+    - zip
+  category: public.app-category.music
+  identity: '-'
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSCameraUsageDescription: NextDJ uses the camera for the picture-in-picture overlay in session recordings.
+    NSMicrophoneUsageDescription: NextDJ requests audio access to list and route your audio output devices.
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+    - portable
+nsis:
+  artifactName: ${productName}-${version}-${os}-${arch}-setup.${ext}
+portable:
+  artifactName: ${productName}-${version}-${os}-${arch}-portable.${ext}
+linux:
+  icon: build/icon.png
+  category: Audio
+  maintainer: NextDJ <contact@devexpert.io>
+  syncDesktopName: true
+  target:
+    - AppImage
+    - deb
+npmRebuild: false

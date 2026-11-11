@@ -1,0 +1,12 @@
+node_modules
+dist
+out
+coverage
+.DS_Store
+*.local
+.npm-cache
+vendor
+*.tsbuildinfo
+release/
+.claude/
+AGENTS.md

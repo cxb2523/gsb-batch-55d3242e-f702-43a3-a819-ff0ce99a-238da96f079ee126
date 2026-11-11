@@ -1,0 +1,102 @@
+/* ---------- Knob ---------- */
+
+.knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.knob-well {
+  position: relative;
+  display: grid;
+  width: calc(var(--knob-size) + 16px);
+  height: calc(var(--knob-size) + 16px);
+  place-items: center;
+}
+
+.knob-shell {
+  width: var(--knob-size);
+  height: var(--knob-size);
+}
+
+.knob-tick {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1px;
+  height: 5px;
+  margin: -0.5px;
+  background: rgba(255, 255, 255, 0.32);
+  transform-origin: center;
+}
+
+.knob-value-tip {
+  position: absolute;
+  top: -1.4rem;
+  z-index: 10;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+  background: #05070a;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem;
+  padding: 0.12rem 0.35rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.knob-shell {
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: ns-resize;
+  padding: 0;
+  touch-action: none;
+}
+
+.knob-shell:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
+}
+
+.knob-face {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(0, 0, 0, 0.65);
+  border-radius: 999px;
+  background:
+    radial-gradient(ellipse at 50% 10%, rgba(255, 255, 255, 0.34), transparent 44%),
+    conic-gradient(from -50deg, rgba(255, 255, 255, 0.07), transparent 22%, rgba(255, 255, 255, 0.04) 46%, transparent 72%, rgba(255, 255, 255, 0.07)),
+    radial-gradient(circle, #2c323c 0 52%, #161b22 53% 100%);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.28),
+    inset 0 -5px 10px rgba(0, 0, 0, 0.6),
+    0 6px 12px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.knob-pointer {
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 3px;
+  height: 42%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--knob-accent) 0 62%, transparent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--knob-accent), transparent 50%);
+  transform-origin: 50% 100%;
+}
+
+.knob-label {
+  color: #94a3b8;
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+

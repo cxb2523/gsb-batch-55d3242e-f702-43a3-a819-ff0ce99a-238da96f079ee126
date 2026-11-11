@@ -1,0 +1,56 @@
+/* ---------- Loops ---------- */
+
+.control-button-label {
+  color: #64748b;
+  font-size: 0.54rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.loop-button {
+  display: inline-flex;
+  flex-direction: column;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.18rem;
+  border: 1px solid rgba(202, 211, 223, 0.2);
+  border-radius: 5px;
+  background: #0d1116;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 3px 0 rgba(0, 0, 0, 0.62),
+    0 6px 10px rgba(0, 0, 0, 0.32);
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 800;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.loop-button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #e2e8f0;
+}
+
+.loop-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.loop-button-lit {
+  border-color: color-mix(in srgb, var(--deck-accent), transparent 45%);
+  color: var(--deck-accent);
+  box-shadow: inset 0 0 10px color-mix(in srgb, var(--deck-accent), transparent 84%);
+}
+
+.loop-button-lit .control-button-label {
+  color: currentColor;
+}
+
+

@@ -1,0 +1,52 @@
+/* ---------- Shell & layout ---------- */
+
+.console-shell {
+  background: transparent;
+  box-shadow: none;
+}
+
+.console-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.status-dot {
+  height: 6px;
+  width: 6px;
+  border-radius: 50%;
+  background: #2c3543;
+  transition: background 60ms linear, box-shadow 60ms linear;
+}
+
+.status-dot-lit {
+  background: var(--status-accent, #22d3ee);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-accent, #22d3ee), transparent 40%);
+}
+
+.console-grid {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) 350px minmax(0, 1fr);
+  gap: 0.65rem;
+  padding: 0.75rem 1rem calc(var(--library-docked-height) + 1.4rem);
+  transition: padding-bottom 180ms ease;
+}
+
+.console-stage:has(.library-collapsed) .console-grid {
+  padding-bottom: calc(var(--library-collapsed-height) + 1.4rem);
+}
+
+.library-dock {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  z-index: 32;
+  pointer-events: none;
+}
+

@@ -1,0 +1,63 @@
+/* ---------- Animations ---------- */
+
+@keyframes nextdj-led-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+
+  50% {
+    filter: brightness(1.2);
+  }
+}
+
+@keyframes nextdj-cue-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 10px color-mix(in srgb, var(--cue-accent), transparent 80%),
+      0 0 12px color-mix(in srgb, var(--cue-accent), transparent 68%);
+  }
+
+  50% {
+    box-shadow:
+      inset 0 0 14px color-mix(in srgb, var(--cue-accent), transparent 74%),
+      0 0 20px color-mix(in srgb, var(--cue-accent), transparent 54%);
+  }
+}
+
+@keyframes nextdj-sync-flash {
+  0% {
+    box-shadow:
+      inset 0 0 16px color-mix(in srgb, var(--deck-accent), transparent 72%),
+      0 0 20px color-mix(in srgb, var(--deck-accent), transparent 48%);
+  }
+
+  100% {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 2px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+@keyframes nextdj-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
