@@ -16,8 +16,11 @@ function daysBetween(a, b) {
 }
 
 // 找到「最接近 N 天前」的那份快照。
-// 窗口放宽到 [N, N+4] 天：Actions 偶发延迟会让某天缺拍，硬卡死会直接算不出来。
-async function pickBaseline(snapshotDir, today, targetDays) {
+// 首选窗口 [N, N+4] 天：Actions 偶发延迟会让某天缺拍，硬卡死会直接算不出来。
+// fallbackToOlder 时，窗口内没有就继续向更早回退到最近一份可用快照——
+// 连续缺拍不该把已有历史全部作废、退化成「首跑」。回退份会标 fallback: true，
+// 调用方必须如实把实际基线日期与天数写进结果（perDay 也按实际天数算）。
+async function pickBaseline(snapshotDir, today, targetDays, { fallbackToOlder = false, windowSlack = 4 } = {}) {
   let files;
   try {
     files = (await fs.readdir(snapshotDir)).filter((f) => f.endsWith('.json')).sort();
@@ -28,13 +31,15 @@ async function pickBaseline(snapshotDir, today, targetDays) {
     .map((f) => f.replace('.json', ''))
     .filter((d) => d < today)
     .map((d) => ({ date: d, age: daysBetween(d, today) }))
-    .filter((x) => x.age >= targetDays && x.age <= targetDays + 4)
+    .filter((x) => x.age >= targetDays)
     .sort((a, b) => a.age - b.age);
 
   if (!candidates.length) return null;
-  const chosen = candidates[0];
+  const inWindow = candidates.find((x) => x.age <= targetDays + windowSlack);
+  const chosen = inWindow ?? (fallbackToOlder ? candidates[0] : null);
+  if (!chosen) return null;
   const snap = await readJson(path.join(snapshotDir, `${chosen.date}.json`));
-  return snap ? { ...snap, age: chosen.age } : null;
+  return snap ? { ...snap, age: chosen.age, fallback: chosen.age > targetDays + windowSlack } : null;
 }
 
 export async function run(dataset, { dataDir, log = console.log, tracked } = {}) {
@@ -57,7 +62,9 @@ export async function run(dataset, { dataDir, log = console.log, tracked } = {})
     Object.values(dataset.legs).forEach((leg) => leg.repos.forEach((r) => push(r, leg.key)));
   }
 
-  const baseline7 = await pickBaseline(snapshotDir, today, 7);
+  // 7 日基线允许向更早回退：连续缺拍时保住历史对比能力，而不是作废成首跑。
+  // 24h 基线不回退——「日增」用 5 天前的快照冒充只会误导。
+  const baseline7 = await pickBaseline(snapshotDir, today, 7, { fallbackToOlder: true });
   const baseline1 = await pickBaseline(snapshotDir, today, 1);
 
   if (!baseline7 && !baseline1) {
@@ -125,13 +132,18 @@ export async function run(dataset, { dataDir, log = console.log, tracked } = {})
   const surges = rising7d.filter((r) => r.delta >= surgeThreshold);
 
   log(`📈 7 日涨星榜 ${rising7d.length} 条（基线 ${baseline7?.date ?? '无'}）`);
+  if (baseline7?.fallback) {
+    log(`⚠️  7–11 天窗口内无快照，已回退到 ${baseline7.date}（${baseline7.age} 天前）作为基线，perDay 按实际天数计算`);
+  }
   log(`🌱 本周新面孔 ${newEntries.length} 条`);
   if (surges.length) log(`🚨 异常飙升告警 ${surges.length} 条`);
 
   return {
     generatedAt: new Date().toISOString(),
     date: today,
-    baseline: baseline7 ? { date: baseline7.date, age: baseline7.age } : null,
+    baseline: baseline7
+      ? { date: baseline7.date, age: baseline7.age, fallback: !!baseline7.fallback }
+      : null,
     baseline24h: baseline1 ? { date: baseline1.date, age: baseline1.age } : null,
     rising7d,
     rising24h,

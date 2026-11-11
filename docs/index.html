@@ -77,7 +77,7 @@
 
   .empty{padding:44px 18px;text-align:center;color:var(--fg3);font-size:13.5px}
   .empty b{display:block;color:var(--fg2);font-size:14.5px;margin-bottom:6px;font-weight:600}
-
+  .collect-warn{background:#2c2113;border:1px solid #5c3a1e;color:var(--hot);border-radius:var(--radius);padding:11px 16px;margin:18px 0 0;font-size:13px}
   footer{border-top:1px solid var(--line);margin-top:40px;padding:26px 0 44px;color:var(--fg3);font-size:12.5px}
   footer a{color:var(--fg2)}
   footer a:hover{color:var(--accent2)}
@@ -206,6 +206,15 @@ function render(key){
 
   const d = DATA;
   document.getElementById('upd').textContent = d.date + ' ' + new Date(d.updatedAt).toISOString().slice(11,16) + ' UTC';
+
+  // 采集不完整时置顶告警：本轮榜单是残缺数据，不能当完整榜单看
+  const col = d.collection;
+  if (col && col.complete === false) {
+    const warn = document.createElement('div');
+    warn.className = 'collect-warn';
+    warn.textContent = `⚠️ 本轮采集不完整：${col.failedQueries}/${col.totalQueries} 条查询失败，以下榜单为残缺数据`;
+    document.getElementById('stats').before(warn);
+  }
 
   const ins = d.insight || {};
   const risingCount = (ins.rising7d || []).length;

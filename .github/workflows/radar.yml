@@ -69,7 +69,13 @@ jobs:
                 console.log('| 7 日涨星 | ' + ((ins.rising7d||[]).length) + ' |');
                 console.log('| 资源清单 | ' + d.stats.resourceLists + ' |');
                 console.log('');
-                if (ins.baseline) console.log('基线日期：' + ins.baseline.date + '（' + ins.baseline.age + ' 天前）');
+                const col = d.collection || {};
+                if (col.complete === false) {
+                  console.log('> ⚠️ **本轮采集不完整**：' + col.failedQueries + '/' + col.totalQueries + ' 条查询失败，榜单为残缺数据');
+                  (col.failures || []).slice(0, 5).forEach(f => console.log('> - `' + f.query + '` — ' + f.reason));
+                  console.log('');
+                }
+                if (ins.baseline) console.log('基线日期：' + ins.baseline.date + '（' + ins.baseline.age + ' 天前）' + (ins.baseline.fallback ? ' · 窗口内缺拍，已回退到更早快照' : ''));
                 else console.log('基线积累中（首跑）');
                 console.log('');
                 console.log('在线看板：https://hedongli1.github.io/reverse-radar/');

@@ -106,7 +106,8 @@ hooking OR mitmproxy in:name,description     →   1392 条（干净）
 ### 已知风险
 
 - **公开仓库 60 天无活动 → GitHub 会自动禁用定时任务**。本仓库每日提交数据，不会触发；但如果雷达停摆超过 60 天，需要在 Actions 页面手动重新启用。
-- 单条查询失败不会中断整个 workflow，只会在日志里记录 `⚠️ 查询失败`。定期检查日志，避免某条查询长期静默失效。
+- 单条查询失败不会中断整个 workflow，但会记入 `latest.json` 的 `collection` 字段（成功/失败查询数、失败明细、`complete` 标志）。看板在采集不完整时会置顶告警，避免把残缺榜单当完整榜单看。
+- 7 日基线在 7–11 天窗口内找不到快照时，会回退到最近一份更早的快照，并在 `insight.baseline` 中如实写出实际日期、天数与 `fallback: true`（`perDay` 按实际天数计算）；只有完全没有任何更早快照时才返回首跑语义。
 
 ---
 
@@ -115,9 +116,10 @@ hooking OR mitmproxy in:name,description     →   1392 条（干净）
 ```bash
 GITHUB_TOKEN=<token> node scripts/fetch.js        # 抓取 + 算增量
 GITHUB_TOKEN=<token> node scripts/report-issue.js # 投递 issue（可选）
+node --test "tests/*.test.mjs"                    # 离线测试（伪造查询结果 + 自造快照目录，不访问网络）
 ```
 
-零依赖，Node.js >= 18。
+零依赖，Node.js >= 18（测试需 >= 20，使用内置 node:test）。
 
 ---
 
