@@ -1,0 +1,552 @@
+# Changelog
+
+## Unreleased (release as minor: 0.4.0)
+
+Clearer errors, search fixes, and install and polling reliability. Error messages, poll timeouts, `search({ filter })`, and `shot.text` behave differently from 0.3.2; see Upgrade notes.
+
+### Changed
+
+- **Error messages include the server's explanation.** `Error 400: Bad Request` is now `Error 400: Video not found`, and `Authentication Error: ` is now `Authentication Error: Invalid API key`. The `connect()` hint for a missing API key is in the message. Network and unexpected errors include their reason (`Request failed: <reason>`). Classes and `cause` are unchanged.
+- **A poll timeout throws `RequestTimeoutError`.** It used to surface as `VideodbError('Unidentified Error')` with the timeout buried in `cause.cause`. The message and `data.outputUrl` give the job's output URL, so the result can be fetched later.
+- **`search({ filter })` sends the filter.** `Video.search()` and `Collection.search()` used to drop it.
+- **Search V2 shots have `text`.** V2 hits put their text in `metadata.embeddedText` and left `shot.text` null. It now falls back to that.
+- **Upload errors name the reason.** A missing local file throws `File not found: <path>` before any network call, and other failures read `Upload failed: <reason>` instead of `Upload failed, reason: `.
+
+### Added
+
+- **Error details.** API errors carry `status` (HTTP status, or a numeric `error_code` from a `success: false` body), `code` (the server's `error_code`, such as `llm_dollar_budget_reached`), and `data` (the response body).
+- **`VdbBaseError` is exported.** Every SDK error extends it, so `instanceof VdbBaseError` catches them all.
+- **Search and ask warnings.** `SearchResponse`, `SearchResult`, and `AskResponse` expose the server's `warnings`, for example why `search()` on a video with no Search V2 index came back empty. Nothing is printed.
+- **`SearchResponse.compile()`, `play()`, `getEmbedCode()`, and `getShotResults()`.** Code that chained `.compile()` on `search()` threw `compile is not a function` after `search()` started returning a `SearchResponse`. These delegate to the shot results, matching `videodb-python`.
+- **Typed uploads.** `uploadURL()` and `uploadFile()` on `Collection` and `Connection` return `Video`, `Audio`, or `Image` when `mediaType` is given, and drop `| undefined` when there is no `callbackUrl`. Type-only; run with `npm run typecheck:tests`.
+- **`VIDEODB_SKIP_CAPTURE_INSTALL=1`** skips the Capture binary download during `npm install`.
+
+### Fixed
+
+- **Polling survives transient failures.** Up to 3 consecutive network errors, 429s, or 5xx responses while polling a long job are retried instead of failing it.
+- **`npm install` no longer fails, or hangs, when the Capture binary download fails.** It logs a warning instead. Capture already downloads the binary on first use.
+
+### Upgrade notes
+
+- Code that matches exact error message strings should switch to `err.status` or `err.code`.
+- Code that caught `VideodbError` to handle poll timeouts should catch `RequestTimeoutError` (or `VdbBaseError`).
+- A `filter` passed to `search()` is now applied, so results can be narrower than before. A filter on a field the index can't filter on now fails with the server's reason (e.g. `Field 'start' is not filterable on index 'transcript'`) instead of being ignored.
+- `shot.text` can now be a string where it used to be `null` for Search V2 hits.
+
+## [0.3.2] (2026-09-02)
+
+A patch fixing snake_case-to-camelCase conversion of responses whose payload is a top-level array.
+
+### Fixed
+
+- **Top-level arrays survive the response key conversion** — `fromSnakeToCamel()` ran arrays through lodash `mapKeys`, which returns a plain object keyed `"0"`, `"1"`, and so on, so any response whose `data` was an array came back as an index-keyed object. `Collection.searchTitle()` and `Video.getThumbnails()` threw `(res.data || []).map is not a function`, and `Connection.getInvoices()` resolved to an object instead of the array its signature declares. Arrays are now mapped element-wise, matching the guard `fromCamelToSnake()` already had; object conversion is unchanged
+
+## [0.3.1] (2026-09-02)
+
+Parity fixes aligning `Video` legacy search and analyzer output with `videodb-python`, plus fixes for Search v2 result shapes and `ask()` argument handling.
+
+### Added
+
+- **Legacy scene-index targeting** — `Video.legacySearch()` now accepts `sceneIndexId`, `indexId` (an alias for `sceneIndexId`, matching `videodb-python`'s `index_id` → `scene_index_id` aliasing), and `algorithm`, forwarding them to the wire. `Video.search()` forwards these when it routes to legacy. `sceneIndexId` and `algorithm` were added to the `SearchBase` type and are now emitted by the legacy search request builders (`scene_index_id`, `algorithm`)
+
+### Changed
+
+- **`ask()` accepts an options object** — `Video.ask()` and `Collection.ask()` now take an `AskOptions` (`topK`, `mode`, `includeSources`) as their second argument. The parameter was previously `topK: number`, so an options object was serialised into `top_k` and `mode` / `includeSources` were silently dropped. The positional form (`ask(question, 20, 'default', true)`) still works, and `AskOptions` is exported from `@/types/search`
+- **`Shot` metadata widened for Search v2** — `videoLength` and `videoTitle` are now optional and `streamUrl` / `playerUrl` nullable on both `Shot` and `ShotBase`, since Search v2 omits length and title and sends explicit nulls for stream keys. `getEmbedCode()`'s error no longer suggests `generateStream()` or `autoGenerate`, neither of which helps when the server returns no player URL
+
+### Fixed
+
+- **`search({ indexId })` no longer throws** — the singular `indexId` was incorrectly listed as an unsupported selector, so passing it raised "Cannot mix legacy search params" instead of routing to `legacySearch()`. It is now treated as a legacy selector, mirroring `videodb-python` whose `unsupported_params` holds `index_ids` but not `index_id`
+- **Legacy `SemanticSearch` payload parity** — `dynamic_score_percentage` (defaulting `null`) and `filter` (defaulting `[]`) are now always emitted, matching `videodb-python`'s `SemanticSearch` request payload; previously they were omitted when unset, which changed server-side ranking/results
+- **`Understanding.getAnalyzerOutput()` preserves raw keys** — the call now skips camelCase conversion (`convert: false`), so the server's snake_case keys (e.g. `scene_id`) survive. Camelcasing renamed `scene_id` → `sceneId`, which the index endpoint does not recognize, breaking the round-trip of analyzer output back into `Video.index()` as a `source`
+- **`getEmbedCode({ autoGenerate: true })` on search shots** — `generateStream()` short-circuited when `streamUrl` alone was set, so shots returned by search never fetched their `playerUrl` and `getEmbedCode()` threw despite auto-generation. The request is now skipped only when both URLs are already known, and sends `length: null` for shots that carry no video length rather than letting `JSON.stringify` coerce `NaN`
+- **`videoLength` is no longer `NaN`** — `parseFloat(result.length)` produced `NaN` when Search v2 sent `length: null`. Values now pass through a finite-number coercion that yields `undefined` for null, empty, or non-numeric input
+- **`streamUrl` no longer dropped from serialised shots** — `doc.streamLink ?? doc.streamUrl` fell through a real `null` onto a key the server never emits, leaving `streamUrl` as `undefined` so `JSON.stringify()` omitted it entirely. It now uses `||` and normalises absent streams to `null`, matching `videodb-python`
+
+## [0.3.0] (2026-07-25)
+
+Indexing v2 — a new retrieval architecture plus a generation/compute stack, ported from `videodb-python`'s `feat/add-indexing-v2`.
+
+### Added
+
+- **Search v2 on `Video` and `Collection`** — new `search()` dispatcher with dedicated `ask()`, `semanticSearch()`, `query()`, and `aggregate()` methods, returning the v2 `SearchResponse` / `AskResponse` envelopes (iterable `SearchResult`). `legacySearch()` preserves the old behavior behind a one-time deprecation warning
+- **Understanding runs** — `Video.understand()` / `getUnderstanding()` / `listUnderstandings()` / `deleteUnderstanding()`, backed by new `Understanding` and `UnderstandingAnalyzer` classes and analyzer-normalization helpers (`normalizeUnderstandingAnalyzers`, `normalizeAnalyzerType`, `defaultAnalyzerName`)
+- **Index manifest** — `Video.index()` / `getIndex()` / `listIndexes()` / `deleteIndex()`, backed by new `Index`, `IndexRecord`, `FieldSchema`, and `RecordPage` classes with `IndexCapability` and `FieldGroup` constants
+- **Sandboxes (persistent GPU compute pools)** — `Connection.createSandbox()` / `getSandbox()` / `listSandboxes()`, a `Sandbox` class with `waitForReady()` / `stop()` / `waitForStop()` lifecycle polling, and `SandboxTier` / `SandboxStatus` constants
+- **Async generation jobs** — `GenerationJob` with `wait()` polling, plus `Connection.getJobStatus()` and `waitForJob()`. `Collection.generateImage()` / `generateVoice()` / `generateText()` gain self-inference model routing (`SandboxModel`), `sandboxId`, and `wait` options, returning a `GenerationJob` when the server dispatches async work
+- **Voice clones** — `VoiceClone` class and CRUD on both `Connection` and `Collection` (`createVoiceClone` / `getVoiceClone` / `listVoiceClones` / `deleteVoiceClone`), plus `voiceCloneId` support in `generateVoice()`
+- **Real-time stream understanding & indexing** — new `RTStreamUnderstanding` and `RTStreamIndex` classes with `understand()` / `index()` on `RTStream`, alert management (`createAlert` / `listAlerts` / `enableAlert` / `disableAlert`), and record retrieval
+- **Embed-code helpers** — `getEmbedCode()` on `Video`, `Shot`, `Timeline`, and RTStream types, plus `buildIframeEmbedCode()` / `playerUrlToEmbedUrl()` utilities. `Video`, `Shot`, and RTStream types now carry `playerUrl`
+- **`sandboxId` threading** into `Video.indexScenes()` / `indexVisuals()`, `Scene.describe()` (also gains `modelConfig`), and all `RTStream` indexing methods, to route inference to a specific sandbox
+- **`Connection.getAsyncResponse()`** to fetch a stored async response without polling
+
+### Changed
+
+- `HttpClient` `get`/`post` accept a `wait` flag and per-call poll overrides (`maxPollTime` / `pollInterval`); the async-output poll loop was rewritten from `backoff` to a monotonic-clock loop that throws `RequestTimeoutError` on timeout
+- `uploadBytes()` helper added for in-memory uploads; `upload()` refactored to reuse it, and large `generateText()` prompts are now offloaded to a presigned URL (`prompt_url`) above ~250 KB to avoid gateway payload limits
+- `ResponseStatus` gains `complete`; new `ApiPath` segments and polling defaults added
+
+### Fixed
+
+- `Sandbox.isReady` and `waitForReady()` now treat `alert` as a ready state (matching `videodb-python`'s `READY_STATUSES`) and no longer report `provisioning` as ready
+
+---
+
+## [0.2.7] (2026-06-03)
+
+### Added
+
+- Custom headers support in `connect()` via a new `headers` option. Keys are auto-formatted to `x-kebab-case` (e.g. `org_id` → `x-org-id`), mirroring `videodb-python`'s kwarg-to-header behavior
+- `HttpClientOptions` exported alongside `HttpClient` for downstream consumers
+
+### Changed
+
+- All Node.js built-in imports now use the `node:` specifier prefix (`node:fs`, `node:path`, `node:child_process`, etc.) for stricter ESM/CJS interop
+
+### Fixed
+
+- `Video.addSubtitle()` now merges defaults from `SubtitleStyleDefaultValues` and converts keys to snake_case before sending, so partial style overrides are applied correctly server-side
+
+---
+
+## [0.2.6] (2026-04-03)
+
+### Changed
+
+- Binary updates for better audio input device support
+- Updated capture binary to v0.3.1
+- Split `SearchTypeValues` into public (`semantic`, `keyword`) and internal (`InternalSearchTypeValues`: `scene`, `llm`) to avoid exposing unsupported search types to users
+
+### Fixed
+
+- Added input validation for `segmenter`, `start`, and `end` in `Video.getTranscript()` and `Audio.getTranscript()`
+- Fixed file upload name extraction for paths containing dots
+- Improved `getTranscript` docstrings for both Video and Audio
+
+---
+
+## [0.2.5] (2026-03-31)
+
+### Changed
+- Pinned `axios` dependency's version to `1.14.0`
+- Updated `.npmrc` to install new versions which are atleast 7 days old
+
+---
+
+## [0.2.4] (2026-03-26)
+
+### Added
+
+- `sortDocsOn` parameter in `Collection.search()` and `Video.search()` to sort docs by "score" or "start"
+- `modelConfig` parameter in `Scene.describe()` for custom model configuration
+- `Video.update()` method to update video metadata (currently supports `name`)
+
+### Changed
+
+- `Video.name` is no longer readonly (required for `update()`)
+- Updated capture binary to v0.3.0
+- Bumped version to 0.2.4
+
+---
+
+## [0.2.3] (2026-03-18)
+
+### Changed
+
+- Synced channel config with Python SDK: removed `transcript` field, added `isPrimary` to `RecordingChannelConfig`, `ChannelConfig`, and `Channel`
+- Removed `record` from `Channel.toDict()` (always sent as `true` server-side)
+- Updated capture binary to v0.2.10
+
+### Fixed
+
+- Clip literal types for `contentType` parameter
+- Shot URLs from search results
+- Caption style warning on missing fields
+- `generateTranscript` language code parameter
+
+---
+
+## [0.2.2] (2026-03-10)
+
+### Added
+
+- RTStream `generateStream()` now returns `playerUrl` and stores both `streamUrl` and `playerUrl`
+- RTStream `playerConfig` parameter with `title`, `description`, and `slug` for player share metadata
+- CaptureSession `channels`, `primaryVideoChannelId`, and `exportStatus` properties
+- CaptureSession `displays` getter for video channels
+- CaptureSession `export()` method with optional `videoChannelId` and `wsConnectionId`
+
+### Changed
+
+- Updated capture binary to v0.2.8 with new checksums
+- Binary distribution URL migrated to CloudFront (`https://artifacts.videodb.io/capture`)
+
+---
+
+## [0.2.1] (2026-02-06)
+
+### Changed
+
+- Binary distribution URL migrated and checksum updates
+
+---
+
+## [0.2.0] (2026-02-02)
+
+### ⚠️ Breaking Changes
+
+- **Removed meta wrapper from all classes** - Access properties directly instead of through `.meta`
+- **Removed Job-based pattern** - All async operations now use async/await directly
+- **Upload methods now return media objects directly** - No longer returns Job instances
+- **Removed exports:** `Job`, `TranscriptJob`, `UploadJob`, `IndexJob`, `SceneIndexJob`, `ExtractScenesJob`
+
+### New Modules
+
+#### Capture Sessions (Desktop Recording)
+
+Backend orchestration for desktop capture sessions with native binary support:
+
+- **CaptureSession** (`cap-xxx`) - Server-side lifecycle object for capture runs
+- **CaptureClient** - Desktop client for recording mic, system audio, and display
+- **Session Token Authentication** - Secure client auth without exposing API keys
+- **WebSocket Integration** - Real-time transcript and indexing event delivery
+
+```typescript
+// Backend: Create session and generate token
+const cap = await coll.createCaptureSession({
+  endUserId: 'user_abc',
+  callbackUrl: 'https://example.com/webhook',
+});
+const token = await conn.generateClientToken(86400);
+
+// Desktop client: Start capture
+import { CaptureClient } from 'videodb/capture';
+const client = new CaptureClient({ sessionToken: token });
+await client.requestPermission('microphone');
+await client.startCaptureSession({ sessionId: cap.id, channels: [...] });
+```
+
+**Supported channels:**
+- `mic:default` (audio)
+- `system_audio:default` (audio)
+- `display:1`, `display:2`, ... (video)
+
+#### Meeting Module
+
+Record and manage meetings with bot integration:
+
+```typescript
+const meeting = await coll.recordMeeting({
+  meetingUrl: 'https://meet.google.com/xxx',
+  botName: 'RecorderBot',
+  callbackUrl: 'https://example.com/webhook',
+});
+```
+
+#### RTStream Module
+
+Real-time media streams for live capture and indexing:
+
+- **RTStream** (`rts-xxx`) - Real-time media stream per channel
+- **RTStreamSceneIndex** - Visual scene indexing on live streams
+- **RTStreamSearchResult** / **RTStreamShot** - Search results from RTStreams
+
+```typescript
+const mic = cap.getRtstream('mic:default');
+await mic.startTranscript({ socketId: ws.connectionId });
+
+const scenes = await display.indexVisuals({
+  batchConfig: { type: 'time', value: 2, frameCount: 2 },
+  prompt: 'Describe the scene',
+  socketId: ws.connectionId,
+});
+await scenes.start();
+```
+
+#### Editor Module
+
+Comprehensive video editing with Timeline, Track, and asset classes:
+
+```typescript
+import {
+  EditorTimeline,
+  Track,
+  Clip,
+  EditorVideoAsset,
+  CaptionAsset,
+} from 'videodb';
+
+const timeline = new EditorTimeline(conn);
+const track = new Track();
+track.addItem(new Clip({ asset: new EditorVideoAsset({ assetId: video.id }) }));
+timeline.addTrack(track);
+```
+
+**New asset classes:**
+- `EditorVideoAsset`, `EditorImageAsset`, `EditorAudioAsset`, `EditorTextAsset`, `CaptionAsset`
+
+**Helper classes:**
+- `Offset`, `Crop`, `Transition`, `Font`, `Border`, `Shadow`, `Background`, `Alignment`, `FontStyling`, `BorderAndShadow`, `Positioning`
+
+**Enums:**
+- `AssetType`, `Fit`, `Position`, `Filter`, `TextAlignment`, `HorizontalAlignment`, `VerticalAlignment`, `CaptionBorderStyle`, `CaptionAlignment`, `CaptionAnimation`
+
+#### WebSocket Module
+
+Real-time event streaming for transcript and indexing:
+
+```typescript
+const ws = await conn.connectWebsocket();
+await ws.connect();
+
+for await (const ev of ws.stream()) {
+  if (ev.channel === 'transcript') console.log(ev.data?.text);
+  if (ev.channel === 'scene_index') console.log(ev.data);
+}
+```
+
+### New Methods
+
+#### Video
+
+- `getTranscriptText(start?, end?)` - Get plain text transcript
+- `generateTranscript(force?)` - Generate transcript via POST
+- `translateTranscript(language, additionalNotes?, callbackUrl?)` - Translate transcript
+- `removeStorage()` - Remove video storage
+- `getThumbnails()` - Get all thumbnails as Image objects
+- `insertVideo(video, timestamp)` - Insert another video at timestamp
+- `reframe(options?)` - Reframe video to new aspect ratio
+- `smartVerticalReframe(options?)` - Object-aware vertical reframing
+- `download(name?)` - Download video from stream URL
+- `getMeeting()` - Get associated meeting info
+- `clip(prompt, contentType, modelName)` - Generate clip from prompt
+
+#### Audio
+
+- `getTranscript(start?, end?, segmenter?, length?, force?)` - Get timestamped transcript
+- `getTranscriptText(start?, end?)` - Get plain text transcript
+- `generateTranscript(force?, languageCode?)` - Generate transcript
+- `generateUrl()` - Generate signed URL
+
+#### Image
+
+- `generateUrl()` - Generate signed URL
+
+#### Collection
+
+- `delete()` - Delete the collection
+- `makePublic()` / `makePrivate()` - Toggle collection visibility
+- `generateVideo(prompt, duration?, callbackUrl?)` - Generate video from prompt
+- `generateImage(prompt, aspectRatio?, callbackUrl?)` - Generate image from prompt
+- `generateMusic(prompt, duration?, callbackUrl?)` - Generate music from prompt
+- `generateSoundEffect(prompt, duration?, config?, callbackUrl?)` - Generate sound effect
+- `generateVoice(text, voiceName?, config?, callbackUrl?)` - Generate voice from text
+- `generateText(prompt, modelName?, responseType?)` - Generate text with GenAI
+- `dubVideo(videoId, languageCode, callbackUrl?)` - Dub video to another language
+- `searchTitle(query)` - Search by video title
+- `connectRTStream(url, name, ...)` - Connect to real-time stream
+- `getRTStream(id)` - Get RTStream by ID
+- `listRTStreams(options?)` - List all RTStreams
+- `recordMeeting(config)` - Record a meeting
+- `getMeeting(meetingId)` - Get meeting by ID
+- `createCaptureSession(config)` - Create capture session
+
+#### Connection
+
+- `recordMeeting(config)` - Record meeting to default collection
+- `getMeeting(meetingId)` - Get meeting by ID
+- `youtubeSearch(query, resultThreshold?, duration?)` - Search YouTube
+- `download(streamLink, name)` - Download from stream link
+- `transcode(source, callbackUrl, mode?, videoConfig?, audioConfig?)` - Transcode video
+- `getTranscodeDetails(jobId)` - Get transcode job details
+- `createEvent(eventPrompt, label)` - Create RTStream event
+- `listEvents()` - List all RTStream events
+- `checkUsage()` - Check account usage
+- `getInvoices()` - Get list of invoices
+- `connectWebsocket(collectionId?)` - Connect to WebSocket service
+- `getCaptureSession(sessionId, collectionId?)` - Get capture session
+- `listCaptureSessions(collectionId?, config?)` - List capture sessions
+- `createCaptureSession(config)` - Create capture session (convenience)
+- `generateClientToken(expiresIn?)` - Generate client token for capture
+
+#### Scene
+
+- Added `metadata` property for scene metadata
+
+### New Types & Exports
+
+#### Capture Session Types
+
+```typescript
+export {
+  ConnectionConfig,
+  CaptureSessionStatus,
+  ChannelType,
+  PermissionKind,
+  TranscriptStatusValues,
+  WebSocketChannel,
+  BatchConfig,
+  IndexVisualsConfig,
+  IndexSpokenWordsConfig,
+  AlertConfig,
+  // ... and more
+} from 'videodb';
+```
+
+#### Editor Types
+
+```typescript
+export {
+  OffsetConfig,
+  CropConfig,
+  TransitionConfig,
+  FontConfig,
+  EditorVideoAssetConfig,
+  ClipConfig,
+  // ... and more
+} from 'videodb';
+```
+
+#### Additional Exports
+
+- `MeetingStatus`, `Segmenter`, `SegmentationType`
+- `ReframeMode`, `ReframePreset`
+- `TranscodeMode`, `ResizeMode`, `MediaType`
+- `TextStyle`, `TextStyleConfig`
+- `SpokenIndex`, `SceneIndex`, `SceneData`, `AlertData`
+
+### Internal Improvements
+
+- **Centralized snake_case/camelCase conversion** - Handled in HttpClient for consistent API communication
+- **Simplified error handling** - Proper exception propagation with typed errors
+- **Reduced bundle size** - Removed Job infrastructure (~400 lines)
+- **Dual authentication support** - API key (backend) and session token (client) modes
+
+### New Error Types
+
+- `CaptureError` - Capture session related errors
+- `BinaryError` - Native binary communication errors
+- `PermissionError` - System permission errors
+
+---
+
+## [0.1.3] (2026-01-19)
+
+### Added
+
+- Scene Collection management methods:
+  - `listSceneCollection()` - Fetch list of scene collections
+  - `getSceneCollection()` - Fetch a specific scene collection
+  - `deleteSceneCollection()` - Delete a scene collection
+- Version header for Node.js SDK identification
+
+### Fixed
+
+- Spoken word indexing using correct index name
+- Frame describe with correct input parameters
+- Index spoken words without requiring transcript fetching
+
+## [0.1.3-alpha] (2025-01-23)
+
+### Added
+
+- Scene index playground function
+
+## [0.1.2]() (2025-01-22)
+
+### Added
+
+- Support for Scene Index
+
+## [0.1.1]() (2024-04-02)
+
+### Added
+
+- Support for Multiple Collections
+  - Create New Collection : `Connection.createCollection()`
+  - Get all Collections : `Connection.getCollections()`
+  - Get a Collection : `Connection.getCollection()`
+  - Update a Collection : `Connection.updateCollection()`
+
+## [0.1.0]() (2024-03-21)
+
+### Added
+
+- Scene Search
+  - Index Videos on Scene using `Video.indexScenes()`
+  - Get Scenes Data using `Video.getScenes()`
+  - Search in Video using `Video.search()` on basis of scenes (pass `searchType` = `"scene"`)
+    > Note: Collection Scene Search is not available
+
+### Changed
+
+- Deprecate `TextStyle` with `TextStyleProps`
+  - Instead of a accepting Instance of `TextStyle` class, `TextAsset` now accepts an object of type `Partial<TextStyleProps>`
+- Deprecate `SubtitleStyle` with `SubtitleStyleProps`
+  - Instead of a accepting Instance of `SubtitleStyle` class, `Video.addSubtitle` now accepts an object of type `Partial<SubtitleStyleProps>`
+- Deprecate `indexType` param in `Video.indexSpokenWords()`
+
+## [0.0.4]() (2024-03-07)
+
+### Added
+
+- `Image` class
+  - Upload image using `Collection.upload()`
+  - Get an image using `Collection.getImage()`
+  - Get all images using `Colection.getImages()`
+  - Delete image using `Collection.deleteImage()` or `Image.delete()`
+- `ImageAsset` class
+  - Create a `ImageAsset` using `ImageAsset()` class
+  - Overlay `ImageAsset` in timeline using `Timeline.addOverlay()`
+- `TextAsset` & `TextStyle` class
+  - Create a `TextAsset` using `TextAsset()` class
+  - Configure styling of `TextAsset` using `TextStyle()`
+- `SubtitleStyle`
+  - Configure subtitle styling by passing a `SubtitleStyle` in `Video.addSubtitle()`
+- Keyword Search
+  Search using Keyword in Video using `Video.search()` (pass searchType = "keyword")
+  > Note: Collection Keyword Search is not available
+
+### Changed
+
+- `Video.index()` -> `Video.indexSpokenWords()`
+- param `type` -> `searchType` in `Video.search()`
+- param `type` -> `searchType` in `Collection.search()`
+
+### Fixed
+
+- Pass undefined params as `null` to VideoDB Server API
+
+## [0.0.3]() (2024-02-13)
+
+### Added
+
+- Concept of Audio Files 🔈
+- Concept of MediaAsset : VideoAsset, AudioAsset 💼
+- Concept of Timeline for editing workflows ✂️
+- Export `VideodbError`
+- Minor updates in readme & package.json
+
+### Changed
+
+- Http client timeout 30s -> 60s
+
+### Fixed
+
+- Better Error handling
+- Param validation in
+  - `Coll.getVideo()`
+  - `Coll.getAudio()`
+  - `Coll.getVideo()`
+  - `Coll.deleteAudio()`
+
+## [0.0.2]() (2024-01-24)
+
+### Added
+
+- Upload through file and external links - supports YouTube for now.
+- Semantic Index : Index & search spoken content.
+- Editing: Add subtitle to videos with default style.
+- Search across collections [supports a default collection for now]
+- `Video` and `Collection` object access without saving.
+- `playStream` function to get playable video links.

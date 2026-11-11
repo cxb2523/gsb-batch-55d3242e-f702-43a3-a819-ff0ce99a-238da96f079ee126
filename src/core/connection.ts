@@ -1,0 +1,756 @@
+import { ApiPath, TranscodeMode } from '@/constants';
+import { Collection } from '@/core/collection';
+import { Meeting } from '@/core/meeting';
+import { CaptureSession } from '@/core/captureSession';
+import { WebSocketConnection } from '@/core/websocket';
+import type {
+  CollectionBase,
+  MeetingBase,
+  RecordMeetingConfig,
+  VideoConfig,
+  AudioConfig,
+  CaptureSessionBase,
+  RTStreamBase,
+} from '@/interfaces/core';
+import type {
+  FileUploadConfig,
+  UploadResult,
+  URLUploadConfig,
+} from '@/types/collection';
+import type { CollectionResponse, GetCollections } from '@/types/response';
+import type {
+  ListCaptureSessionsConfig,
+  CreateCaptureSessionConfig,
+} from '@/types/capture';
+import {
+  HttpClient,
+  type HttpClientAuthConfig,
+  type HttpClientOptions,
+} from '@/utils/httpClient';
+import { uploadToServer } from '@/utils/upload';
+import { Sandbox, type SandboxBase } from '@/core/sandbox';
+import { VoiceClone, type VoiceCloneBase } from '@/core/voiceClone';
+import { GenerationJob, fetchJobStatus, type JobStatus } from '@/core/job';
+import type { Audio } from '@/core/audio';
+import type { Image } from '@/core/image';
+
+const {
+  collection,
+  billing,
+  usage,
+  invoices,
+  rtstream,
+  event,
+  download,
+  search,
+  web,
+  transcode,
+  meeting,
+  record,
+  websocket,
+  capture,
+  session,
+  sandbox,
+  voice_clone,
+  async_response,
+} = ApiPath;
+
+class VdbHttpClient extends HttpClient {
+  constructor(
+    baseURL: string,
+    authConfig: HttpClientAuthConfig,
+    options?: HttpClientOptions
+  );
+  constructor(baseURL: string, apiKey: string, options?: HttpClientOptions);
+  constructor(
+    baseURL: string,
+    authConfigOrApiKey: HttpClientAuthConfig | string,
+    options?: HttpClientOptions
+  ) {
+    super(baseURL, authConfigOrApiKey as HttpClientAuthConfig, options);
+  }
+}
+
+/**
+ * Connection class for initializing the VideoDB SDK
+ * Supports dual authentication modes:
+ * - API key: Full backend access
+ * - Session token: Limited client access
+ */
+export class Connection {
+  public vhttp: HttpClient;
+
+  /**
+   * Create a connection with auth configuration
+   * @param baseURL - Base URL for the API
+   * @param authConfig - Authentication configuration (apiKey or sessionToken)
+   * @param options - Optional client configuration (custom headers).
+   *                  `headers` are auto-formatted to `x-kebab-case`, mirroring
+   *                  the kwarg-to-header behavior of `videodb-python`.
+   */
+  constructor(
+    baseURL: string,
+    authConfig: HttpClientAuthConfig,
+    options?: HttpClientOptions
+  );
+  /**
+   * Create a connection with API key (legacy signature)
+   * @param baseURL - Base URL for the API
+   * @param apiKey - API key for authentication
+   * @param options - Optional client configuration (custom headers)
+   * @deprecated Use the object-based constructor instead
+   */
+  constructor(baseURL: string, apiKey: string, options?: HttpClientOptions);
+  constructor(
+    baseURL: string,
+    authConfigOrApiKey: HttpClientAuthConfig | string,
+    options?: HttpClientOptions
+  ) {
+    this.vhttp = new VdbHttpClient(
+      baseURL,
+      authConfigOrApiKey as HttpClientAuthConfig,
+      options
+    );
+  }
+
+  /**
+   * Get an instance of the Collection class
+   * @param id - [Optional] ID of the collection
+   * @returns
+   * If ID is provided, returns the corresponding collection,
+   * else returns the default collection.
+   */
+  public async getCollection(id = 'default'): Promise<Collection> {
+    const res = await this.vhttp.get<CollectionResponse>([collection, id]);
+    return new Collection(this.vhttp, res.data as CollectionBase);
+  }
+
+  /**
+   * Get all Collections from db
+   * @returns
+   * Returns an array of Collection objects
+   */
+  public async getCollections(): Promise<Collection[]> {
+    const res = await this.vhttp.get<GetCollections>([collection]);
+    return res.data.collections.map(
+      coll => new Collection(this.vhttp, coll as CollectionBase)
+    );
+  }
+
+  /**
+   * Create a new collection
+   * @param name - Name of the collection
+   * @param description - Description of the collection
+   * @param isPublic - Make collection public (optional, default: false)
+   * @returns
+   * Returns a new Collection object
+   */
+  public createCollection = async (
+    name: string,
+    description: string,
+    isPublic: boolean = false
+  ) => {
+    const res = await this.vhttp.post<CollectionResponse, object>(
+      [collection],
+      {
+        name,
+        description,
+        is_public: isPublic,
+      }
+    );
+    return new Collection(this.vhttp, res.data as CollectionBase);
+  };
+
+  /**
+   * Update a collection
+   * @param id - ID of the collection
+   * @param name - Name of the collection
+   * @param desscription - Description of the collection
+   * @returns
+   * Returns an updated Collection object
+   */
+  public async updateCollection(
+    id: string,
+    name: string,
+    description: string
+  ): Promise<Collection> {
+    const res = await this.vhttp.patch<CollectionResponse, object>(
+      [collection, id],
+      {
+        name,
+        description,
+      }
+    );
+    return new Collection(this.vhttp, res.data as CollectionBase);
+  }
+
+  /**
+   * Unified upload method for files and URLs
+   * @param source - Local path or URL of the file to upload
+   * @param mediaType - Type of media (video, audio, image) - optional
+   * @param name - Name of the file - optional
+   * @param description - Description of the file - optional
+   * @param callbackUrl - URL to receive the callback - optional
+   * @returns Video, Audio, or Image object. Returns undefined if callbackUrl is provided.
+   */
+  public upload = async (
+    source: string,
+    mediaType?: 'video' | 'audio' | 'image',
+    name?: string,
+    description?: string,
+    callbackUrl?: string
+  ) => {
+    const isUrl = source.startsWith('http://') || source.startsWith('https://');
+    if (isUrl) {
+      return uploadToServer(this.vhttp, 'default', {
+        url: source,
+        mediaType,
+        name,
+        description,
+        callbackUrl,
+      });
+    } else {
+      return uploadToServer(this.vhttp, 'default', {
+        filePath: source,
+        mediaType,
+        name,
+        description,
+        callbackUrl,
+      });
+    }
+  };
+
+  /**
+   * @param filePath - absolute path to a file
+   * @param callbackUrl- [optional] A url that will be called once upload is finished
+   * @param name - [optional] Name of the file
+   * @param description - [optional] Description of the file
+   *
+   * @see
+   * Providing a callbackUrl will return undefined and not providing one
+   * will return a Job object (TODO: Implement proper type for this condition)
+   */
+  public uploadFile = async <C extends FileUploadConfig>(
+    collectionId: string = 'default',
+    data: C
+  ): Promise<UploadResult<C>> => {
+    return uploadToServer(this.vhttp, collectionId, data) as Promise<
+      UploadResult<C>
+    >;
+  };
+
+  /**
+   * @param URL - URL of the hosted file
+   * @param callbackUrl- [optional] A url that will be called once upload is finished
+   * @param name - [optional] Name of the file
+   * @param description - [optional] Description of the file
+   *
+   * @see
+   * Providing a callbackUrl will return undefined and not providing one
+   * will return a Job object (TODO: Implement proper type for this condition)
+   */
+  public uploadURL = async <C extends URLUploadConfig>(
+    collectionId: string = 'default',
+    data: C
+  ): Promise<UploadResult<C>> => {
+    return uploadToServer(this.vhttp, collectionId, data) as Promise<
+      UploadResult<C>
+    >;
+  };
+
+  /**
+   * Check the account usage
+   * @returns Usage data
+   */
+  public checkUsage = async (): Promise<Record<string, unknown>> => {
+    const res = await this.vhttp.get<Record<string, unknown>>([billing, usage]);
+    return res.data;
+  };
+
+  /**
+   * Get a list of all invoices
+   * @returns List of invoices
+   */
+  public getInvoices = async (): Promise<unknown[]> => {
+    const res = await this.vhttp.get<unknown[]>([billing, invoices]);
+    return res.data;
+  };
+
+  /**
+   * Create an rtstream event
+   * @param eventPrompt - Prompt for the event
+   * @param label - Label for the event
+   * @returns Event ID
+   *
+   * @example
+   * ```typescript
+   * const eventId = await conn.createEvent('Detect when someone enters the room', 'room_entry');
+   * ```
+   */
+  public createEvent = async (
+    eventPrompt: string,
+    label: string
+  ): Promise<string | undefined> => {
+    const res = await this.vhttp.post<{ eventId?: string }, object>(
+      [rtstream, event],
+      { event_prompt: eventPrompt, label }
+    );
+    return res.data?.eventId;
+  };
+
+  /**
+   * List all rtstream events
+   * @returns List of events
+   */
+  public listEvents = async (): Promise<unknown[]> => {
+    const res = await this.vhttp.get<{ events: unknown[] }>([rtstream, event]);
+    return res.data?.events || [];
+  };
+
+  /**
+   * Download a file from a stream link
+   * @param streamLink - URL of the stream to download
+   * @param name - Name to save the downloaded file as
+   * @returns Download response data
+   */
+  public download = async (
+    streamLink: string,
+    name: string
+  ): Promise<Record<string, unknown>> => {
+    const res = await this.vhttp.post<Record<string, unknown>, object>(
+      [download],
+      { stream_link: streamLink, name }
+    );
+    return res.data;
+  };
+
+  /**
+   * Search for a query on YouTube
+   * @param query - Query to search for
+   * @param resultThreshold - Number of results to return (optional)
+   * @param duration - Duration of the video (optional)
+   * @returns List of YouTube search results
+   */
+  public youtubeSearch = async (
+    query: string,
+    resultThreshold: number = 10,
+    duration: string = 'medium'
+  ): Promise<unknown[]> => {
+    const res = await this.vhttp.post<{ results: unknown[] }, object>(
+      [collection, 'default', search, web],
+      {
+        query,
+        result_threshold: resultThreshold,
+        platform: 'youtube',
+        duration,
+      }
+    );
+    return res.data?.results || [];
+  };
+
+  /**
+   * Transcode the video
+   * @param source - URL of the video to transcode
+   * @param callbackUrl - URL to receive the callback
+   * @param mode - Mode of the transcoding
+   * @param videoConfig - Video configuration (optional)
+   * @param audioConfig - Audio configuration (optional)
+   * @returns Transcode job ID
+   */
+  public transcode = async (
+    source: string,
+    callbackUrl: string,
+    mode: string = TranscodeMode.economy,
+    videoConfig: VideoConfig = {},
+    audioConfig: AudioConfig = {}
+  ): Promise<string | undefined> => {
+    const res = await this.vhttp.post<{ jobId: string }, object>([transcode], {
+      source,
+      callback_url: callbackUrl,
+      mode,
+      video_config: videoConfig,
+      audio_config: audioConfig,
+    });
+    return res.data?.jobId;
+  };
+
+  /**
+   * Get the details of a transcode job
+   * @param jobId - ID of the transcode job
+   * @returns Details of the transcode job
+   */
+  public getTranscodeDetails = async (
+    jobId: string
+  ): Promise<Record<string, unknown>> => {
+    const res = await this.vhttp.get<Record<string, unknown>>([
+      transcode,
+      jobId,
+    ]);
+    return res.data;
+  };
+
+  /**
+   * Record a meeting and upload it to the default collection
+   * @param config - Meeting recording configuration
+   * @returns Meeting object representing the recording bot
+   */
+  public recordMeeting = async (
+    config: RecordMeetingConfig
+  ): Promise<Meeting> => {
+    const res = await this.vhttp.post<
+      MeetingBase & { meetingId: string },
+      object
+    >([collection, 'default', meeting, record], {
+      meeting_url: config.meetingUrl,
+      bot_name: config.botName,
+      bot_image_url: config.botImageUrl,
+      meeting_title: config.meetingTitle,
+      callback_url: config.callbackUrl,
+      callback_data: config.callbackData || {},
+      time_zone: config.timeZone || 'UTC',
+    });
+    return new Meeting(this.vhttp, {
+      ...res.data,
+      id: res.data.meetingId,
+      collectionId: 'default',
+    });
+  };
+
+  /**
+   * Get a meeting by its ID
+   * @param meetingId - ID of the meeting
+   * @returns Meeting object
+   */
+  public getMeeting = async (meetingId: string): Promise<Meeting> => {
+    const meetingObj = new Meeting(this.vhttp, {
+      id: meetingId,
+      collectionId: 'default',
+    });
+    await meetingObj.refresh();
+    return meetingObj;
+  };
+
+  /**
+   * Connect to the VideoDB WebSocket service for real-time events
+   * @param collectionId - ID of the collection (default: "default")
+   * @returns WebSocketConnection object (call .connect() to establish connection)
+   *
+   * @example
+   * ```typescript
+   * const ws = await conn.connectWebsocket();
+   * await ws.connect();
+   *
+   * for await (const message of ws.receive()) {
+   *   console.log('Event:', message);
+   * }
+   * ```
+   */
+  public connectWebsocket = async (
+    collectionId: string = 'default'
+  ): Promise<WebSocketConnection> => {
+    const res = await this.vhttp.get<{ websocketUrl: string }>([
+      collection,
+      collectionId,
+      websocket,
+    ]);
+    const wsUrl = res.data?.websocketUrl;
+    if (!wsUrl) {
+      throw new Error('Failed to get WebSocket URL from server');
+    }
+    return new WebSocketConnection(wsUrl);
+  };
+
+  /**
+   * Get an existing capture session by ID
+   * @param sessionId - ID of the capture session (cap-xxx)
+   * @param collectionId - ID of the collection (default: "default")
+   * @returns CaptureSession object
+   *
+   * @example
+   * ```typescript
+   * const session = await conn.getCaptureSession('cap-xxx');
+   * await session.refresh();
+   * console.log(session.status);
+   * ```
+   */
+  public getCaptureSession = async (
+    sessionId: string,
+    collectionId: string = 'default'
+  ): Promise<CaptureSession> => {
+    const res = await this.vhttp.get<
+      CaptureSessionBase & { rtstreams?: RTStreamBase[] }
+    >([collection, collectionId, capture, session, sessionId]);
+
+    const sessionObj = new CaptureSession(this.vhttp, {
+      id: res.data.id || sessionId,
+      collectionId: res.data.collectionId || collectionId,
+      status: res.data.status,
+      endUserId: res.data.endUserId,
+      callbackUrl: res.data.callbackUrl,
+      metadata: res.data.metadata,
+      exportedVideoId: res.data.exportedVideoId,
+      createdAt: res.data.createdAt,
+    });
+
+    // Populate rtstreams if present in response
+    if (res.data.rtstreams) {
+      await sessionObj.refresh();
+    }
+
+    return sessionObj;
+  };
+
+  /**
+   * List all capture sessions in a collection
+   * @param collectionId - ID of the collection (default: "default")
+   * @param config - Filter configuration
+   * @returns List of CaptureSession objects
+   *
+   * @example
+   * ```typescript
+   * const sessions = await conn.listCaptureSessions('default', { status: 'active' });
+   * ```
+   */
+  public listCaptureSessions = async (
+    collectionId: string = 'default',
+    config: ListCaptureSessionsConfig = {}
+  ): Promise<CaptureSession[]> => {
+    const params: Record<string, unknown> = {};
+    if (config.endUserId) params.end_user_id = config.endUserId;
+    if (config.status) params.status = config.status;
+    if (config.limit) params.limit = config.limit;
+    if (config.cursor) params.cursor = config.cursor;
+
+    const res = await this.vhttp.get<{
+      sessions: Array<CaptureSessionBase & { id: string }>;
+    }>([collection, collectionId, capture, session], { params });
+
+    return (res.data?.sessions || []).map(
+      sess =>
+        new CaptureSession(this.vhttp, {
+          id: sess.id,
+          collectionId: collectionId,
+          status: sess.status,
+          endUserId: sess.endUserId,
+          callbackUrl: sess.callbackUrl,
+          metadata: sess.metadata,
+          exportedVideoId: sess.exportedVideoId,
+          createdAt: sess.createdAt,
+        })
+    );
+  };
+
+  /**
+   * Create a capture session (convenience method)
+   * Creates in the default collection
+   * @param config - Capture session configuration
+   * @returns CaptureSession object
+   *
+   * @example
+   * ```typescript
+   * const session = await conn.createCaptureSession({
+   *   endUserId: 'user_abc',
+   *   callbackUrl: 'https://example.com/webhook',
+   * });
+   * const token = await conn.generateClientToken(86400);
+   * ```
+   */
+  public createCaptureSession = async (
+    config: CreateCaptureSessionConfig
+  ): Promise<CaptureSession> => {
+    const coll = await this.getCollection('default');
+    return coll.createCaptureSession(config);
+  };
+
+  /**
+   * Generate a client token for capture operations
+   * This is an account-scoped token that can be used for capture sessions and WebSocket connections
+   *
+   * @param expiresIn - Token expiration time in seconds (default: 86400 = 24 hours)
+   * @returns Client token string (st-xxx format)
+   *
+   * @example
+   * ```typescript
+   * // Generate a token valid for 24 hours
+   * const token = await conn.generateClientToken();
+   *
+   * // Generate a token valid for 1 hour
+   * const token = await conn.generateClientToken(3600);
+   *
+   * // Use with CaptureClient
+   * const client = new CaptureClient({ sessionToken: token });
+   * ```
+   */
+  public generateClientToken = async (
+    expiresIn: number = 86400
+  ): Promise<string> => {
+    const res = await this.vhttp.post<{ token: string }, object>(
+      [capture, session, ApiPath.token],
+      { expires_in: expiresIn }
+    );
+    return res.data.token;
+  };
+
+  /**
+   * Fetch the normalized status of a generation job.
+   * @param jobId - ID of the generation job
+   */
+  public getJobStatus = async (jobId: string): Promise<JobStatus> => {
+    return fetchJobStatus(this.vhttp, jobId);
+  };
+
+  /**
+   * Poll a generation job until it completes and return the generated asset.
+   * @param jobId - ID of the generation job
+   * @param timeout - Maximum seconds to wait (default 600)
+   * @param interval - Seconds between polls (default 5)
+   * @param resultType - Expected asset type (`"audio"` or `"image"`)
+   */
+  public waitForJob = async (
+    jobId: string,
+    timeout: number = 600,
+    interval: number = 5,
+    resultType?: string
+  ): Promise<Audio | Image | Record<string, unknown>> => {
+    const job = new GenerationJob(this.vhttp, { jobId, resultType });
+    return job.wait(timeout, interval);
+  };
+
+  /**
+   * Create a persistent GPU sandbox.
+   * @param tier - Compute tier (see {@link SandboxTier})
+   * @param name - Human-readable name
+   * @param callbackUrl - URL to notify on provisioning events
+   * @param modelCategories - Model categories to prepare for this sandbox, e.g. `["vlm", "image_generation"]`
+   * @param models - Specific model names to prepare for this sandbox
+   */
+  public createSandbox = async (
+    tier?: string,
+    name?: string,
+    callbackUrl?: string,
+    modelCategories?: string[],
+    models?: string[]
+  ): Promise<Sandbox> => {
+    const res = await this.vhttp.post<SandboxBase, object>([sandbox], {
+      tier,
+      name,
+      callback_url: callbackUrl,
+      model_categories: modelCategories,
+      models,
+    });
+    return new Sandbox(this.vhttp, res.data);
+  };
+
+  /**
+   * Fetch a sandbox by ID.
+   * @param sandboxId - ID of the sandbox
+   */
+  public getSandbox = async (sandboxId: string): Promise<Sandbox> => {
+    const res = await this.vhttp.get<SandboxBase>([sandbox, sandboxId]);
+    return new Sandbox(this.vhttp, res.data);
+  };
+
+  /**
+   * List sandboxes, optionally filtered by status.
+   * @param status - Filter by sandbox status (see {@link SandboxStatus})
+   * @param page - Page number (default 1)
+   * @param pageSize - Sandboxes per page (default 20, maximum 100)
+   */
+  public listSandboxes = async (
+    status?: string,
+    page: number = 1,
+    pageSize: number = 20
+  ): Promise<Sandbox[]> => {
+    const params: Record<string, unknown> = { page, page_size: pageSize };
+    if (status) params.status = status;
+    const res = await this.vhttp.get<{ sandboxes?: SandboxBase[] }>([sandbox], {
+      params,
+    });
+    return (res.data?.sandboxes || []).map(s => new Sandbox(this.vhttp, s));
+  };
+
+  /**
+   * Create a reusable cloned voice.
+   * @param refAudioId - ID of the reference audio asset
+   * @param name - Name for the voice clone
+   * @param description - Description of the voice clone
+   * @param refText - Reference transcript for the audio
+   * @param language - Language code
+   * @param collectionId - Collection to create the clone in
+   */
+  public createVoiceClone = async (
+    refAudioId: string,
+    name?: string,
+    description?: string,
+    refText?: string,
+    language?: string,
+    collectionId?: string
+  ): Promise<VoiceClone> => {
+    const res = await this.vhttp.post<VoiceCloneBase, object>([voice_clone], {
+      ref_audio_id: refAudioId,
+      name,
+      description,
+      ref_text: refText,
+      language,
+      collection_id: collectionId,
+    });
+    return new VoiceClone(this.vhttp, res.data);
+  };
+
+  /**
+   * Fetch a voice clone by ID.
+   * @param voiceCloneId - ID of the voice clone
+   */
+  public getVoiceClone = async (voiceCloneId: string): Promise<VoiceClone> => {
+    const res = await this.vhttp.get<VoiceCloneBase>([
+      voice_clone,
+      voiceCloneId,
+    ]);
+    return new VoiceClone(this.vhttp, res.data);
+  };
+
+  /**
+   * List voice clones.
+   * @param page - Page number (default 1)
+   * @param pageSize - Page size (default 20)
+   * @param language - Filter by language code
+   */
+  public listVoiceClones = async (
+    page: number = 1,
+    pageSize: number = 20,
+    language?: string
+  ): Promise<VoiceClone[]> => {
+    const params: Record<string, unknown> = { page, page_size: pageSize };
+    if (language) params.language = language;
+    const res = await this.vhttp.get<{ voiceClones?: VoiceCloneBase[] }>(
+      [voice_clone],
+      { params }
+    );
+    return (res.data?.voiceClones || []).map(
+      v => new VoiceClone(this.vhttp, v)
+    );
+  };
+
+  /**
+   * Delete a voice clone by ID.
+   * @param voiceCloneId - ID of the voice clone
+   */
+  public deleteVoiceClone = async (voiceCloneId: string): Promise<void> => {
+    await this.vhttp.delete([voice_clone, voiceCloneId]);
+  };
+
+  /**
+   * Fetch a stored async response by ID without polling.
+   * @param id - ID of the async response
+   */
+  public getAsyncResponse = async (
+    id: string
+  ): Promise<Record<string, unknown>> => {
+    const res = await this.vhttp.get<Record<string, unknown>>(
+      [async_response, id],
+      undefined,
+      { wait: false }
+    );
+    return res.data;
+  };
+}

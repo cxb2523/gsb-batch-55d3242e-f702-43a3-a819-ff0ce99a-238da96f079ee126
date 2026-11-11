@@ -1,0 +1,252 @@
+import {
+  ApiPath,
+  SemanticSearchDefaultValues,
+  KeywordSearchDefaultValues,
+} from '@/constants';
+import type { Search } from '@/interfaces/core';
+import type { AnySearchType } from '@/types/search';
+import { IndexTypeValues, SearchTypeValues, InternalSearchTypeValues } from '@/core/config';
+import type { SearchResponse } from '@/types/response';
+import type {
+  KeywordCollectionSearch,
+  KeywordVideoSearch,
+  SemanticCollectionSearch,
+  SemanticVideoSearch,
+  SceneCollectionSearch,
+  SceneVideoSearch,
+} from '@/types/search';
+import { HttpClient } from '@/utils/httpClient';
+import { SearchResult } from './searchResult';
+
+const { video, search, collection } = ApiPath;
+
+class SceneSearch implements Search<SceneVideoSearch, SceneCollectionSearch> {
+  #vhttp: HttpClient;
+  constructor(http: HttpClient) {
+    this.#vhttp = http;
+  }
+
+  private getRequestData = (data: SceneVideoSearch | SceneCollectionSearch) => {
+    const reqData: Record<string, unknown> = {
+      search_type: data.searchType ?? InternalSearchTypeValues.scene,
+      index_type: IndexTypeValues.scene,
+      query: data.query,
+      score_threshold:
+        data.scoreThreshold ?? SemanticSearchDefaultValues.scoreThreshold,
+      result_threshold:
+        data.resultThreshold ?? SemanticSearchDefaultValues.resultThreshold,
+    };
+    if (data.dynamicScorePercentage !== undefined) {
+      reqData.dynamic_score_percentage = data.dynamicScorePercentage;
+    }
+    if (data.filter !== undefined) {
+      reqData.filter = data.filter;
+    }
+    if (data.sceneIndexId !== undefined) {
+      reqData.scene_index_id = data.sceneIndexId;
+    }
+    if (data.algorithm !== undefined) {
+      reqData.algorithm = data.algorithm;
+    }
+    return reqData;
+  };
+
+  searchInsideVideo = async (data: SceneVideoSearch) => {
+    const reqData = this.getRequestData(data);
+    const res = await this.#vhttp.post<SearchResponse, typeof reqData>(
+      [video, data.videoId, search],
+      reqData
+    );
+    return new SearchResult(this.#vhttp, res.data);
+  };
+
+  searchInsideCollection = (
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _: SceneCollectionSearch
+  ): Promise<SearchResult> => {
+    return Promise.reject(
+      new Error('Scene search is not supported for Collection')
+    );
+  };
+}
+
+class SemanticSearch
+  implements Search<SemanticVideoSearch, SemanticCollectionSearch>
+{
+  #vhttp: HttpClient;
+  constructor(http: HttpClient) {
+    this.#vhttp = http;
+  }
+
+  private getRequestData = (
+    data: SemanticVideoSearch | SemanticCollectionSearch
+  ) => {
+    const reqData: Record<string, unknown> = {
+      search_type: data.searchType ?? SearchTypeValues.semantic,
+      index_type: data.indexType ?? SearchTypeValues.semantic,
+      query: data.query,
+      score_threshold:
+        data.scoreThreshold ?? SemanticSearchDefaultValues.scoreThreshold,
+      result_threshold:
+        data.resultThreshold ?? SemanticSearchDefaultValues.resultThreshold,
+      // Always emitted, matching videodb-python's SemanticSearch payload where
+      // `dynamic_score_percentage` is always present (null when unset) and
+      // legacy_search passes `filter=[]` by default.
+      dynamic_score_percentage: data.dynamicScorePercentage ?? null,
+      filter: data.filter ?? [],
+    };
+    if (data.sortDocsOn !== undefined) {
+      reqData.sort_docs_on = data.sortDocsOn;
+    }
+    if (data.sceneIndexId !== undefined) {
+      reqData.scene_index_id = data.sceneIndexId;
+    }
+    if (data.algorithm !== undefined) {
+      reqData.algorithm = data.algorithm;
+    }
+    return reqData;
+  };
+
+  searchInsideVideo = async (data: SemanticVideoSearch) => {
+    const reqData = this.getRequestData(data);
+    const res = await this.#vhttp.post<SearchResponse, typeof reqData>(
+      [video, data.videoId, search],
+      reqData
+    );
+    return new SearchResult(this.#vhttp, res.data);
+  };
+
+  searchInsideCollection = async (data: SemanticCollectionSearch) => {
+    const reqData = this.getRequestData(data);
+    const res = await this.#vhttp.post<SearchResponse, typeof reqData>(
+      [collection, data.collectionId, search],
+      reqData
+    );
+    return new SearchResult(this.#vhttp, res.data);
+  };
+}
+
+class KeywordSearch
+  implements Search<KeywordVideoSearch, KeywordCollectionSearch>
+{
+  #vhttp: HttpClient;
+  constructor(http: HttpClient) {
+    this.#vhttp = http;
+  }
+
+  private getRequestData = (
+    data: KeywordVideoSearch | KeywordCollectionSearch
+  ) => {
+    const reqData: Record<string, unknown> = {
+      search_type: data.searchType ?? SearchTypeValues.keyword,
+      index_type: data.indexType ?? SearchTypeValues.keyword,
+      query: data.query,
+      score_threshold:
+        data.scoreThreshold ?? KeywordSearchDefaultValues.scoreThreshold,
+      result_threshold:
+        data.resultThreshold ?? KeywordSearchDefaultValues.resultThreshold,
+    };
+    if (data.dynamicScorePercentage !== undefined) {
+      reqData.dynamic_score_percentage = data.dynamicScorePercentage;
+    }
+    if (data.filter !== undefined) {
+      reqData.filter = data.filter;
+    }
+    if (data.sceneIndexId !== undefined) {
+      reqData.scene_index_id = data.sceneIndexId;
+    }
+    if (data.algorithm !== undefined) {
+      reqData.algorithm = data.algorithm;
+    }
+    return reqData;
+  };
+
+  searchInsideVideo = async (data: KeywordVideoSearch) => {
+    const reqData = this.getRequestData(data);
+    const res = await this.#vhttp.post<SearchResponse, typeof reqData>(
+      [video, data.videoId, search],
+      reqData
+    );
+    return new SearchResult(this.#vhttp, res.data);
+  };
+
+  searchInsideCollection = (
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _: KeywordCollectionSearch
+  ): Promise<SearchResult> => {
+    return Promise.reject(
+      new Error('Keyword search is not supported for Collection')
+    );
+  };
+}
+
+class LLMSearch
+  implements Search<SemanticVideoSearch, SemanticCollectionSearch>
+{
+  #vhttp: HttpClient;
+  constructor(http: HttpClient) {
+    this.#vhttp = http;
+  }
+
+  private getRequestData = (
+    data: SemanticVideoSearch | SemanticCollectionSearch
+  ) => {
+    const reqData: Record<string, unknown> = {
+      search_type: data.searchType ?? InternalSearchTypeValues.llm,
+      index_type: data.indexType ?? InternalSearchTypeValues.llm,
+      query: data.query,
+      score_threshold:
+        data.scoreThreshold ?? SemanticSearchDefaultValues.scoreThreshold,
+      result_threshold:
+        data.resultThreshold ?? SemanticSearchDefaultValues.resultThreshold,
+    };
+    if (data.dynamicScorePercentage !== undefined) {
+      reqData.dynamic_score_percentage = data.dynamicScorePercentage;
+    }
+    if (data.filter !== undefined) {
+      reqData.filter = data.filter;
+    }
+    if (data.sceneIndexId !== undefined) {
+      reqData.scene_index_id = data.sceneIndexId;
+    }
+    if (data.algorithm !== undefined) {
+      reqData.algorithm = data.algorithm;
+    }
+    return reqData;
+  };
+
+  searchInsideVideo = async (data: SemanticVideoSearch) => {
+    const reqData = this.getRequestData(data);
+    const res = await this.#vhttp.post<SearchResponse, typeof reqData>(
+      [video, data.videoId, search],
+      reqData
+    );
+    return new SearchResult(this.#vhttp, res.data);
+  };
+
+  searchInsideCollection = async (data: SemanticCollectionSearch) => {
+    const reqData = this.getRequestData(data);
+    const res = await this.#vhttp.post<SearchResponse, typeof reqData>(
+      [collection, data.collectionId, search],
+      reqData
+    );
+    return new SearchResult(this.#vhttp, res.data);
+  };
+}
+
+const searchType = {
+  semantic: SemanticSearch,
+  keyword: KeywordSearch,
+  scene: SceneSearch,
+  llm: LLMSearch,
+};
+
+export class SearchFactory {
+  private vhttp: HttpClient;
+  constructor(http: HttpClient) {
+    this.vhttp = http;
+  }
+  getSearch(type: AnySearchType) {
+    return new searchType[type](this.vhttp);
+  }
+}
