@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "node --no-warnings --experimental-strip-types --test \"tests/**/*.test.mts\"",
     "kysely": "kysely",
     "migrate": "kysely migrate:latest",
     "codegen": "kysely-codegen --dialect postgres --camel-case --out-file ./database/kysely-types.d.ts"
