@@ -17,6 +17,27 @@ export const OUTPUT_ROOT = process.env.OUTPUT_DIR
   ? path.resolve(process.env.OUTPUT_DIR)
   : path.resolve(__dirname, '../../../../output');
 
+// One-line human-readable summary of a crawl diagnostics object (see
+// crawl.js), emitted as a discover-stage log event.
+export function formatCrawlDiagnostics(diagnostics, pageCount) {
+  const d = diagnostics || {};
+  const login = d.login || {};
+  const loginPart = !login.attempted
+    ? 'login=not-attempted'
+    : login.success
+      ? 'login=success'
+      : `login=failed(${login.reason || 'unknown'})`;
+  const early = d.earlyStop || {};
+  const earlyPart = early.stoppedEarly ? `early-stop=${early.reason}` : 'early-stop=no';
+  return [
+    loginPart,
+    `pages=${pageCount}`,
+    `excluded=${(d.excludedUrls || []).length}`,
+    `failed=${(d.failedPages || []).length}`,
+    earlyPart,
+  ].join(' ');
+}
+
 /**
  * makedemo pipeline brain — drop-in for the web shell.
  *
@@ -37,13 +58,14 @@ export async function runPipeline(job, emit) {
 
   // STAGE 1 — discover: crawl + Claude feature detection.
   e('stage', { stage: 'discover', status: 'running' });
-  const pages = await crawlSite({
+  const { pages, diagnostics } = await crawlSite({
     homepageUrl: job.url,
     maxPages: job.maxPages || 20,
     credentials: job.credentials || null,
     excludedPaths: job.excludedPaths || [],
     log,
   });
+  log(`Crawl diagnostics: ${formatCrawlDiagnostics(diagnostics, pages.length)}`);
   const features = await detectFeatures({
     homepageUrl: job.url,
     pages,
