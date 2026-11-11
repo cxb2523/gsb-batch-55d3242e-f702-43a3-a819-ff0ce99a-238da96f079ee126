@@ -296,10 +296,103 @@ describe('the model-free lane', () => {
 			motionFromText('clap 4 times').clip.duration > motionFromText('clap once').clip.duration,
 			'more claps take longer',
 		);
+		assert.equal(composeScore('wave hello twice, excitedly').score.effort, 'playful', 'a trailing manner still applies');
 		const left = composeScore('wave with your left hand').score;
 		assert.ok(left.beats.some((b) => b.arms?.left?.at === 'overhead'), 'the left hand did the waving');
 		const right = composeScore('wave').score;
 		assert.ok(right.beats.some((b) => b.arms?.right?.at === 'overhead'), 'the right hand is the default');
+	});
+
+	it('runs several actions in the order they were written', () => {
+		const { score, matched } = composeScore('nod then wave twice');
+		assert.equal(matched, 'nod+wave');
+		const labels = score.beats.map((b) => b.label);
+		const firstWave = score.beats.findIndex((b) => b.arms);
+		assert.ok(firstWave > 0, 'the nod comes first');
+		assert.ok(score.beats.slice(0, firstWave).every((b) => !b.arms), 'nothing waves before the nod');
+		assert.ok(labels.slice(firstWave).includes('hand up'), 'the wave follows the nod');
+		assert.ok(labels.slice(firstWave).filter((label) => label === 'out').length === 2, 'twice means two waves');
+		assert.deepEqual(motionFromText('nod then wave twice').warnings, []);
+
+		const clip = motionFromText('nod then wave twice').clip;
+		assert.ok(clip.duration > motionFromText('nod').clip.duration, 'the clip contains both actions');
+		assert.ok(clip.duration > motionFromText('wave twice').clip.duration, 'the clip contains both actions');
+	});
+
+	it('joins actions in one continuous body instead of restarting at the origin', () => {
+		const { score } = composeScore('walk then nod');
+		const stop = score.beats.find((b) => b.label === 'stop');
+		const nodBeats = score.beats.slice(score.beats.findIndex((b) => b.label === 'level'));
+		assert.ok(stop.root.forward > 1, 'the walk travelled');
+		assert.ok(
+			nodBeats.every((b) => b.root.forward === stop.root.forward),
+			'the nod happens where the walk stopped',
+		);
+
+		const clip = motionFromText('walk then nod').clip;
+		const root = clip.tracks.find((t) => t.name === 'Hips.position');
+		assert.ok(root, 'the sequence carries root motion');
+		const zs = root.values.filter((_, i) => i % 3 === 2);
+		assert.ok(zs[zs.length - 1] > 1, 'the nod is at the travelled position');
+		let largestStep = 0;
+		for (let i = 1; i < zs.length; i++) largestStep = Math.max(largestStep, Math.abs(zs[i] - zs[i - 1]));
+		assert.ok(largestStep < 0.5, `the join does not teleport the body (largest step ${largestStep})`);
+
+		const turned = composeScore('turn then wave').score;
+		const waveBeats = turned.beats.slice(turned.beats.findIndex((b) => b.label === 'ready'));
+		assert.ok(waveBeats.every((b) => b.root.turn === 90), 'the wave happens in the turned frame');
+	});
+
+	it('uses the side the prompt names for the acting arm', () => {
+		const leftWave = composeScore('wave left hand').score;
+		assert.ok(leftWave.beats.some((b) => b.arms?.left?.at === 'overhead'), 'the left hand waves');
+		assert.ok(!leftWave.beats.some((b) => b.arms?.right?.at === 'overhead'), 'the right hand does not');
+
+		const leftPoint = composeScore('point with your left arm').score;
+		assert.ok(leftPoint.beats.some((b) => b.arms?.left?.at === 'front'), 'the left arm points');
+		assert.ok(!leftPoint.beats.some((b) => b.arms?.right), 'the right arm stays out of it');
+
+		const rightWave = composeScore('wave right hand').score;
+		assert.ok(rightWave.beats.some((b) => b.arms?.right?.at === 'overhead'), 'the right hand waves');
+		assert.ok(!rightWave.beats.some((b) => b.arms?.left?.at === 'overhead'), 'the left hand does not');
+
+		const plain = composeScore('wave').score;
+		assert.ok(plain.beats.some((b) => b.arms?.right?.at === 'overhead'), 'no side still means the right');
+
+		const sequence = composeScore('wave with your right hand then point with your left arm').score;
+		const firstPoint = sequence.beats.findIndex((b) => b.label === 'point');
+		assert.ok(
+			sequence.beats.slice(0, firstPoint).some((b) => b.arms?.right?.at === 'overhead'),
+			'the first clause uses the right hand',
+		);
+		assert.ok(sequence.beats[firstPoint].arms?.left?.at === 'front', 'the second clause uses the left arm');
+	});
+
+	it('does not perform a negated action', () => {
+		for (const prompt of ["don't clap", 'do not nod', 'never wave', 'no clap']) {
+			const miss = composeScore(prompt);
+			assert.equal(miss.score, null, `${prompt} is not performed`);
+			assert.equal(miss.matched, null, `${prompt} matched nothing`);
+			assert.match(miss.reason, /negat/i);
+			assert.throws(
+				() => motionFromText(prompt),
+				(err) => err.code === 'unrecognized_motion' && /negat/i.test(err.message),
+			);
+		}
+	});
+
+	it('performs only the positive actions when a sentence mixes them', () => {
+		const then = composeScore("don't clap then nod");
+		assert.equal(then.matched, 'nod');
+		assert.ok(!then.score.beats.some((b) => b.label === 'clap'), 'the clap was dropped');
+
+		const and = composeScore("don't clap and wave");
+		assert.equal(and.matched, 'wave');
+		assert.ok(!and.score.beats.some((b) => b.label === 'clap'), 'the clap was dropped');
+
+		// "don't know" is a way to ask for a shrug, not a negation of one.
+		assert.equal(composeScore("don't know").matched, 'shrug');
+		assert.equal(composeScore('say no').matched, 'shake');
 	});
 
 	it('throws something a caller can act on when it does not know the words', () => {
@@ -313,6 +406,10 @@ describe('the model-free lane', () => {
 		const a = motionFromText('sit down heavily');
 		const b = motionFromText('sit down heavily');
 		assert.equal(JSON.stringify(a.clip), JSON.stringify(b.clip));
+
+		const c = motionFromText('nod then wave twice');
+		const d = motionFromText('nod then wave twice');
+		assert.equal(JSON.stringify(c.clip), JSON.stringify(d.clip), 'a sequence is deterministic too');
 	});
 });
 

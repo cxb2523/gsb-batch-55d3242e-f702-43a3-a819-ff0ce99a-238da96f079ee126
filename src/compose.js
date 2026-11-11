@@ -4,8 +4,9 @@
 // `scoreSchema()`: that is what handles "she sits down heavily, thinks for a
 // moment, then looks up". This module is the other lane, and it is a real one,
 // not a stub. It reads a prompt for the things a motion is actually made of
-// (an action, a body part, a direction, a manner, a repeat count) and composes
-// beats from the same vocabulary the model authors against.
+// (actions and their order, a body part, a direction, a manner, a repeat count,
+// what is negated) and composes beats from the same vocabulary the model
+// authors against.
 //
 // It exists for three reasons, in order of how often they bite:
 //
@@ -299,62 +300,230 @@ const MANNERS = Object.freeze([
 
 const NUMBER_WORDS = Object.freeze({ once: 1, twice: 2, two: 2, three: 3, four: 4, five: 5, six: 6, several: 3, a: 1, one: 1 });
 
+// Every way a prompt can name an action, as one searchable list. Sorting by
+// phrase length first (then by the order above) makes the longest intent win:
+// "shake head" beats "shake", "take a bow" beats "take".
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const PHRASES = Object.freeze(
+	[...SYNONYMS, ...ACTION_NAMES.map((action) => [action.replace(/_/g, ' '), action])]
+		.map(([phrase, action], order) => ({
+			action,
+			order,
+			phrase: phrase.toLowerCase(),
+			pattern: new RegExp(`\\b${escapeRegExp(phrase).replace(/\s+/g, '\\s+')}\\b`, 'i'),
+		}))
+		.sort((a, b) => b.phrase.length - a.phrase.length || a.order - b.order),
+);
+
+// What separates one action from the next. "and" is a sequence word too:
+// "nod and wave" is two motions, not one motion called "nod and wave".
+const SEQUENCE = /\s*(?:;|,|&|\band\s+then\b|\bthen\b|\bafter\s+that\b|\bfollowed\s+by\b|\bafterwards\b|\band\b|\bbut\b)\s*/gi;
+
+// These phrases contain "and" but describe one performance, not two. Masking
+// them keeps "wave over and over" a single clause with a repetition count.
+const AND_IDIOMS = Object.freeze([
+	/\bover\s+and\s+over\b/g,
+	/\bagain\s+and\s+again\b/g,
+	/\bmore\s+and\s+more\b/g,
+]);
+
+// Negation words. A negator is only read as negating an action when it appears
+// before that action's phrase, so idioms that are themselves the action
+// ("don't know" -> shrug, "say no" -> shake) stay positive.
+const NEGATION = /\b(?:don't|dont|do\s+not|does\s+not|doesn't|doesnt|did\s+not|didn't|didnt|won't|wont|would\s+not|wouldn't|could\s+not|couldn't|should\s+not|shouldn't|can't|cant|cannot|never|not|no)\b/g;
+
+// An explicit acting side, tied to a body part rather than a direction:
+// "left hand", "with your left arm", "on your left". A bare "left" remains a
+// direction, except where the old lane already read it as a side ("wave left").
+const EXPLICIT_SIDE = /\b(?:with|using|on)\s+(?:your\s+|the\s+)?(left|right)\b|\b(?:your|the)\s+(left|right)\s+(?:hand|arm|side)\b|\b(left|right)\s*(?:-| )\s*(?:hand|arm|side|handed)\b/;
+
 /**
  * Read a prompt into a score, with no model involved.
+ *
+ * A prompt may name more than one action, joined by "then", "and then", "after
+ * that", "followed by", a comma, a semicolon, or "and". Each clause is read on
+ * its own, so its side, direction, manner and repetition count belong to that
+ * action and not to the sentence as a whole. Actions run in the order they were
+ * written; body travel is carried from one to the next so a sequence walks,
+ * turns, and gestures in one continuous world instead of restarting at the
+ * origin.
+ *
+ * A negated action ("don't clap", "do not nod") is not performed. If every
+ * recognized action is negated, the result is a miss so the caller can escalate
+ * to a model; if some actions are positive, only those are performed.
  *
  * @param {string} prompt
  * @param {{ name?: string, loop?: boolean, effort?: string }} [opts]
  * @returns {{ score: object|null, matched: string|null, reason: string|null }}
  *   `score` is a raw score, ready for `normalizeScore`. `matched` names the
- *   action recognized. `reason` explains a miss, for a caller deciding whether
- *   to escalate to a model.
+ *   action recognized, or the actions joined with "+" when several run in
+ *   sequence. `reason` explains a miss, for a caller deciding whether to
+ *   escalate to a model.
  */
 export function composeScore(prompt, opts = {}) {
-	const text = String(prompt ?? '').toLowerCase().trim();
+	const original = String(prompt ?? '');
+	const text = original.toLowerCase().replace(/[’‘]/g, "'").trim();
 	if (!text) return { score: null, matched: null, reason: 'empty prompt' };
 
-	// Phrases first, longest-intent first, then the bare action names, so
-	// "shake head" beats "shake" and "shake" still resolves on its own.
-	const match = SYNONYMS.find(([phrase]) => text.includes(phrase))
-		?? ACTION_NAMES.map((a) => [a.replace(/_/g, ' '), a]).find(([phrase]) => text.includes(phrase));
-	if (!match) {
+	const actions = [];
+	const negated = [];
+	for (const clause of actionClauses(text)) {
+		const mention = findActionMention(clause);
+		if (!mention) continue;
+		if (isNegated(clause, mention.index)) {
+			negated.push(mention.action);
+			continue;
+		}
+		const manner = MANNERS.find(([word]) => new RegExp(`\\b${word}\\b`).test(clause));
+		actions.push({
+			action: mention.action,
+			side: readSide(clause, mention.action),
+			direction: readDirection(clause),
+			effort: opts.effort && EFFORTS[opts.effort] ? opts.effort : (manner ? manner[1] : 'neutral'),
+			repeats: readRepeats(clause),
+		});
+	}
+
+	if (!actions.length) {
+		if (negated.length) {
+			return {
+				score: null,
+				matched: null,
+				reason: `no known action to perform in "${original.trim()}": ${negated.join(', ')} ${negated.length === 1 ? 'is' : 'are'} negated`,
+			};
+		}
 		return {
 			score: null,
 			matched: null,
-			reason: `no known action in "${prompt}"; this lane covers ${ACTION_NAMES.join(', ')}`,
+			reason: `no known action in "${original.trim()}"; this lane covers ${ACTION_NAMES.join(', ')}`,
 		};
 	}
-	const action = match[1];
 
-	const side = /\bleft\b/.test(text) && !/\bturn(s|ing)? left\b/.test(text) ? 'left' : 'right';
-	const direction = /\b(down|downward|floor|ground)\b/.test(text)
-		? 'down'
-		: /\b(up|upward|sky|ceiling)\b/.test(text)
-			? 'up'
-			: /\bleft\b/.test(text)
-				? 'left'
-				: /\bright\b/.test(text)
-					? 'right'
-					: 'forward';
+	// Build the actions in written order. Travel, side-step and turn accumulate
+	// across the joins, so "walk then nod" nods where the walk stopped rather
+	// than snapping back to the starting mark.
+	const beats = [];
+	let carried = { forward: 0, side: 0, rise: 0, turn: 0 };
+	for (const plan of actions) {
+		const actionBeats = ACTIONS[plan.action]({
+			side: plan.side,
+			direction: plan.direction,
+			effort: plan.effort,
+			repeats: plan.repeats,
+		}).map((beat) => paced(beat, plan.effort));
+		for (const beat of actionBeats) beats.push(carryRoot(beat, carried));
+		const finalRoot = actionBeats[actionBeats.length - 1]?.root ?? {};
+		carried = {
+			forward: carried.forward + (finalRoot.forward ?? 0),
+			side: carried.side + (finalRoot.side ?? 0),
+			rise: carried.rise + (finalRoot.rise ?? 0),
+			turn: carried.turn + (finalRoot.turn ?? 0),
+		};
+	}
 
-	const manner = MANNERS.find(([word]) => new RegExp(`\\b${word}\\b`).test(text));
-	const effort = opts.effort && EFFORTS[opts.effort] ? opts.effort : (manner ? manner[1] : 'neutral');
-
-	const repeats = readRepeats(text);
-
-	const beats = ACTIONS[action]({ side, direction, effort, repeats }).map((beat) => paced(beat, effort));
+	const stamp = actions
+		.map((plan) => `${plan.action}:${plan.side}:${plan.direction}:${plan.effort}:${plan.repeats}`)
+		.join('>');
 	return {
 		score: {
 			version: 1,
-			name: opts.name || prompt.trim().slice(0, 120),
-			seed: `${action}:${side}:${direction}:${effort}:${repeats}:${opts.loop ? 'loop' : 'once'}`,
+			name: opts.name || original.trim().slice(0, 120),
+			seed: `${stamp}:${opts.loop ? 'loop' : 'once'}`,
 			loop: opts.loop === true,
-			effort,
+			effort: actions[0].effort,
 			beats,
 		},
-		matched: action,
+		matched: actions.map((plan) => plan.action).join('+'),
 		reason: null,
 	};
+}
+
+/** Split a prompt into action clauses, protecting idioms that contain "and". */
+function splitClauses(text) {
+	const holes = [];
+	let masked = text;
+	for (const idiom of AND_IDIOMS) {
+		masked = masked.replace(idiom, (match) => {
+			holes.push(match);
+			return `\u0000${holes.length - 1}\u0000`;
+		});
+	}
+	return masked
+		.split(SEQUENCE)
+		.map((clause) => clause.replace(/\u0000(\d+)\u0000/g, (_, index) => holes[Number(index)]))
+		.map((clause) => clause.trim())
+		.filter(Boolean);
+}
+
+/**
+ * Clauses that each contain an action. A clause with modifiers but no action
+ * ("wave twice, excitedly") belongs to the action beside it, not to a new
+ * action of its own, so it is folded back into its neighbor.
+ */
+function actionClauses(text) {
+	const groups = [];
+	let pending = '';
+	for (const clause of splitClauses(text)) {
+		const mention = findActionMention(clause);
+		if (mention) {
+			groups.push(pending ? `${pending}, ${clause}` : clause);
+			pending = '';
+		} else if (groups.length) {
+			groups[groups.length - 1] = `${groups[groups.length - 1]}, ${clause}`;
+		} else {
+			pending = pending ? `${pending}, ${clause}` : clause;
+		}
+	}
+	return groups;
+}
+
+/** The first, longest action phrase in a clause. */
+function findActionMention(clause) {
+	let best = null;
+	for (const entry of PHRASES) {
+		const match = entry.pattern.exec(clause);
+		if (!match) continue;
+		const candidate = { action: entry.action, index: match.index, length: match[0].length };
+		if (!best || candidate.index < best.index || (candidate.index === best.index && candidate.length > best.length)) {
+			best = candidate;
+		}
+	}
+	return best;
+}
+
+/** True when a negator sits before the action, not inside an idiom that names it. */
+function isNegated(clause, actionIndex) {
+	for (const match of clause.matchAll(NEGATION)) {
+		if (match.index < actionIndex) return true;
+	}
+	return false;
+}
+
+function readSide(clause, action) {
+	const explicit = EXPLICIT_SIDE.exec(clause);
+	if (explicit) return explicit[1] ?? explicit[2] ?? explicit[3];
+	// "turn left" names a heading, not the arm doing the turn.
+	if (action !== 'turn' && /\bleft\b/.test(clause)) return 'left';
+	return 'right';
+}
+
+function readDirection(clause) {
+	if (/\b(down|downward|floor|ground)\b/.test(clause)) return 'down';
+	if (/\b(up|upward|sky|ceiling)\b/.test(clause)) return 'up';
+	if (/\bleft\b/.test(clause)) return 'left';
+	if (/\bright\b/.test(clause)) return 'right';
+	return 'forward';
+}
+
+/** Carry accumulated body travel into a beat that was authored from the origin. */
+function carryRoot(beat, carried) {
+	const keys = ['forward', 'side', 'rise', 'turn'];
+	if (keys.every((key) => carried[key] === 0)) return beat;
+	const root = { ...(beat.root ?? {}) };
+	for (const key of keys) {
+		if (root[key] != null || carried[key] !== 0) root[key] = (root[key] ?? 0) + carried[key];
+	}
+	return { ...beat, root };
 }
 
 /**
