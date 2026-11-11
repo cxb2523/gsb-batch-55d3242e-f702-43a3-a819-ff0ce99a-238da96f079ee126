@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The Astro Cloudflare adapter auto-generates the rest of the config
+  // (assets directory, server entrypoint, default bindings) and merges it with
+  // whatever is declared here. We only pin a valid Worker name because the
+  // package/folder name contains a dot, which isn't a valid Worker name.
+  "name": "subthis-now",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-06-02",
+  "assets": {
+    "run_worker_first": ["/"]
+  }
+}

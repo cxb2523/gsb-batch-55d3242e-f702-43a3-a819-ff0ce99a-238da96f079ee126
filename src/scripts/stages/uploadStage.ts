@@ -1,0 +1,335 @@
+import { $$ } from "@/scripts/dom.ts";
+import { prettifyBytes } from "@/scripts/file.ts";
+import type { Stage } from "@/scripts/stageManager.ts";
+import type { ui as appUi } from "@/scripts/ui.ts";
+
+type UploadStageOptions = {
+  ui: typeof appUi;
+  tt: (path: string, vars?: Record<string, unknown>) => string;
+  setStage: (stage: Stage) => void;
+  setStatus: (message: string, kind?: string) => void;
+  setProgress: (percent: number) => void;
+  isExporting: () => boolean;
+  getVideoObjectUrl: () => string;
+  setVideoObjectUrl: (url: string) => void;
+  setSelectedVideoFile: (file: File | null) => void;
+  resetEditorState: () => void;
+  setLangAddStatus: (message: string, kind?: string) => void;
+  populateAddLang: () => void;
+  renderSegments: () => void;
+  enableExports: (on: boolean) => void;
+  resetHistory: () => void;
+  startEarlyTranscription: (file: File) => void;
+  resetTranscriptionCache: () => void;
+  generate: () => void;
+};
+
+function isVideoFile(file: File) {
+  return (
+    file.type.startsWith("video/") ||
+    /\.(mp4|mov|webm|mkv|avi|m4v|ogv|wmv)$/i.test(file.name)
+  );
+}
+
+function isAudioFile(file: File) {
+  return (
+    file.type.startsWith("audio/") ||
+    /\.(mp3|wav|ogg|m4a|aac|flac|wma|opus)$/i.test(file.name)
+  );
+}
+
+function isMediaFile(file: File) {
+  return isVideoFile(file) || isAudioFile(file);
+}
+
+export function createUploadStageController({
+  ui,
+  tt,
+  setStage,
+  setStatus,
+  setProgress,
+  isExporting,
+  getVideoObjectUrl,
+  setVideoObjectUrl,
+  setSelectedVideoFile,
+  resetEditorState,
+  setLangAddStatus,
+  populateAddLang,
+  renderSegments,
+  enableExports,
+  resetHistory,
+  startEarlyTranscription,
+  resetTranscriptionCache,
+  generate,
+}: UploadStageOptions) {
+  let dragDepth = 0;
+  let unsupportedTimer: number | undefined;
+  const dropzoneCopy = {
+    defaultLabel:
+      ui.dropzone.dataset.defaultLabel || ui.dropzoneLabel.textContent || "",
+    defaultHint:
+      ui.dropzone.dataset.defaultHint || ui.dropzoneHint.textContent || "",
+    unsupportedLabel:
+      ui.dropzone.dataset.unsupportedLabel ||
+      ui.dropzoneLabel.textContent ||
+      "",
+    unsupportedHint:
+      ui.dropzone.dataset.unsupportedHint || ui.dropzoneHint.textContent || "",
+  };
+
+  function getDraggedFileSupport(dataTransfer: DataTransfer | null) {
+    const [file] = Array.from(dataTransfer?.files || []);
+    if (file) return isMediaFile(file);
+
+    const [item] = Array.from(dataTransfer?.items || []).filter(
+      (dataTransferItem) => dataTransferItem.kind === "file",
+    );
+    if (!item) return null;
+    if (item.type)
+      return item.type.startsWith("video/") || item.type.startsWith("audio/");
+
+    const itemFile = item.getAsFile();
+    return itemFile ? isMediaFile(itemFile) : null;
+  }
+
+  function clearUnsupportedTimer() {
+    if (!unsupportedTimer) return;
+    window.clearTimeout(unsupportedTimer);
+    unsupportedTimer = undefined;
+  }
+
+  function setDropzoneCopy(isUnsupported: boolean) {
+    ui.dropzoneLabel.textContent = isUnsupported
+      ? dropzoneCopy.unsupportedLabel
+      : dropzoneCopy.defaultLabel;
+    ui.dropzoneHint.textContent = isUnsupported
+      ? dropzoneCopy.unsupportedHint
+      : dropzoneCopy.defaultHint;
+  }
+
+  function resetDropzoneState() {
+    clearUnsupportedTimer();
+    ui.dropzone.classList.remove("over", "is-unsupported");
+    ui.app.classList.remove("is-dragging", "is-dragging-unsupported");
+    ui.dropzone.removeAttribute("aria-invalid");
+    setDropzoneCopy(false);
+  }
+
+  function showSupportedDrag() {
+    clearUnsupportedTimer();
+    ui.dropzone.classList.add("over");
+    ui.dropzone.classList.remove("is-unsupported");
+    ui.app.classList.add("is-dragging");
+    ui.app.classList.remove("is-dragging-unsupported");
+    ui.dropzone.removeAttribute("aria-invalid");
+    setDropzoneCopy(false);
+  }
+
+  function showUnsupportedFile({ dragging = false, persist = false } = {}) {
+    clearUnsupportedTimer();
+    ui.dropzone.classList.toggle("over", dragging);
+    ui.dropzone.classList.add("is-unsupported");
+    ui.app.classList.toggle("is-dragging", dragging);
+    ui.app.classList.toggle("is-dragging-unsupported", dragging);
+    ui.dropzone.setAttribute("aria-invalid", "true");
+    setDropzoneCopy(true);
+
+    if (persist) {
+      unsupportedTimer = window.setTimeout(resetDropzoneState, 2400);
+    }
+  }
+
+  function handleSelectedFile(file?: File) {
+    if (!file) return;
+    if (!isMediaFile(file)) {
+      showUnsupportedFile({ persist: true });
+      ui.input.value = "";
+      return;
+    }
+
+    const isAudio = isAudioFile(file);
+
+    resetDropzoneState();
+    resetTranscriptionCache();
+
+    const previousUrl = getVideoObjectUrl();
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+
+    const videoObjectUrl = URL.createObjectURL(file);
+    setSelectedVideoFile(file);
+    setVideoObjectUrl(videoObjectUrl);
+    ui.video.src = videoObjectUrl;
+    ui.video.load();
+    ui.configVideo.src = videoObjectUrl;
+    ui.configVideo.load();
+
+    // Hide video elements and export options for audio-only files
+    // Keep preview containers visible so subtitles can be displayed
+    if (isAudio) {
+      ui.configPreview.style.display = "none";
+      ui.video.style.display = "none"; // Hide video element but keep container
+      ui.downloadVideoBtn.style.display = "none";
+      ui.exportFormat.closest("label")?.setAttribute("style", "display: none");
+      ui.exportQuality.closest("label")?.setAttribute("style", "display: none");
+    } else {
+      ui.configPreview.style.display = "";
+      ui.video.style.display = "";
+      ui.downloadVideoBtn.style.display = "";
+      ui.exportFormat.closest("label")?.removeAttribute("style");
+      ui.exportQuality.closest("label")?.removeAttribute("style");
+    }
+
+    resetEditorState();
+    ui.langTabs.innerHTML = "";
+    setLangAddStatus("");
+    populateAddLang();
+    renderSegments();
+    enableExports(false);
+    resetHistory();
+
+    ui.outputLang.value = "same";
+    ui.inputLang.value = "";
+    ui.wordAnimation.checked = true;
+
+    const metaText = `${file.name} · ${prettifyBytes(file.size)}`;
+    ui.meta.textContent = metaText;
+    ui.configMeta.textContent = metaText;
+    setStatus(tt("videoLoaded"), "ok");
+    setProgress(0);
+    ui.configProgress.hidden = true;
+    ui.configError.hidden = true;
+    ui.configError.textContent = "";
+    setStage("config");
+    startEarlyTranscription(file);
+  }
+
+  function resetFlow() {
+    if (isExporting()) return;
+
+    const videoObjectUrl = getVideoObjectUrl();
+    if (videoObjectUrl) {
+      URL.revokeObjectURL(videoObjectUrl);
+      setVideoObjectUrl("");
+    }
+
+    setSelectedVideoFile(null);
+    resetTranscriptionCache();
+    resetEditorState();
+    ui.langTabs.innerHTML = "";
+    setLangAddStatus("");
+    populateAddLang();
+    ui.caption.textContent = "";
+    ui.video.removeAttribute("src");
+    ui.video.load();
+    ui.configVideo.removeAttribute("src");
+    ui.configVideo.load();
+    enableExports(false);
+    resetHistory();
+    setStage("upload");
+  }
+
+  function attachGlobalDrop() {
+    const hasFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types || []).includes("Files");
+
+    document.addEventListener("dragenter", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepth += 1;
+      const isSupported = getDraggedFileSupport(event.dataTransfer);
+      if (isSupported === false) showUnsupportedFile({ dragging: true });
+      else showSupportedDrag();
+    });
+    document.addEventListener("dragover", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      const isSupported = getDraggedFileSupport(event.dataTransfer);
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = isSupported === false ? "none" : "copy";
+      }
+      if (isSupported === false) showUnsupportedFile({ dragging: true });
+      else showSupportedDrag();
+    });
+    document.addEventListener("dragleave", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) resetDropzoneState();
+    });
+    document.addEventListener("drop", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepth = 0;
+      resetDropzoneState();
+      handleSelectedFile(event.dataTransfer?.files?.[0]);
+    });
+  }
+
+  // Sample clips are fetched once and handed over as if the user had picked
+  // the file; hovering a sample starts the download ahead of the click.
+  const sampleFiles = new Map<string, Promise<File>>();
+  function loadSample(url: string) {
+    let pending = sampleFiles.get(url);
+    if (!pending) {
+      pending = fetch(url).then(async (response) => {
+        if (!response.ok) throw new Error(`Sample ${url}: ${response.status}`);
+        const blob = await response.blob();
+        const name = url.slice(url.lastIndexOf("/") + 1);
+        return new File([blob], name, { type: blob.type || "video/mp4" });
+      });
+      pending.catch(() => sampleFiles.delete(url));
+      sampleFiles.set(url, pending);
+    }
+    return pending;
+  }
+
+  function wireSamples() {
+    const buttons = $$<HTMLButtonElement>("[data-sample]", ui.stageUpload);
+    for (const button of buttons) {
+      const url = button.dataset.sample || "";
+      const warm = () => void loadSample(url).catch(() => {});
+      button.addEventListener("pointerenter", warm);
+      button.addEventListener("focus", warm);
+      button.addEventListener("click", async () => {
+        if (button.getAttribute("aria-busy") === "true") return;
+        button.setAttribute("aria-busy", "true");
+        try {
+          const file = await loadSample(url);
+          // A file dropped while the sample was downloading wins.
+          if (ui.stageUpload.hidden) return;
+          handleSelectedFile(file);
+          // Samples skip the wait on the options: they go straight to the editor.
+          generate();
+        } catch (error) {
+          console.warn("[samples] could not load", url, error);
+        } finally {
+          button.removeAttribute("aria-busy");
+        }
+      });
+    }
+  }
+
+  function wireUploadStage() {
+    attachGlobalDrop();
+    wireSamples();
+    ui.dropzone.addEventListener("click", () => ui.input.click());
+    ui.dropzone.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        ui.input.click();
+      }
+    });
+    ui.input.addEventListener("change", (event) => {
+      const target = event.target as HTMLInputElement | null;
+      handleSelectedFile(target?.files?.[0]);
+    });
+    ui.configBackBtn.addEventListener("click", resetFlow);
+  }
+
+  return {
+    handleSelectedFile,
+    resetFlow,
+    attachGlobalDrop,
+    wireUploadStage,
+  };
+}

@@ -1,0 +1,681 @@
+// ─────────────────────────────────────────────────────────────────────────
+// i18n dictionary
+// ─────────────────────────────────────────────────────────────────────────
+// To add a new language: add its code to `astro.config.mjs` (`i18n.locales`),
+// create `@/pages/<code>/index.astro` (copy `@/pages/es/index.astro`),
+// add it to `@/i18n/locales.ts`, and add a `<code>: { ... }` block below mirroring
+// the English keys.
+//
+// Strings under `t.<group>` are used at build time inside `.astro` components
+// (zero client cost). Strings under `t.client` are serialized into each static
+// page and read by `app.ts` at runtime — only the active language ships, so
+// there is no performance penalty.
+
+export { defaultLang, languages, type Lang } from "@/i18n/locales";
+import { defaultLang, type Lang } from "@/i18n/locales";
+
+export const ui = {
+  en: {
+    meta: {
+      title: "subvid.app — Subtitles for any video",
+      description:
+        "Generate and edit subtitles with AI right in your browser. No uploads, no servers.",
+      siteName: "subvid.app",
+      ogTitle: "subvid.app — AI subtitles for any video",
+      ogDescription:
+        "Generate, edit, translate and export subtitles locally in your browser with AI. Private by design: no uploads, no servers.",
+      keywords:
+        "AI subtitles, automatic subtitles, video subtitles, subtitle generator, SRT editor, browser transcription, Whisper, WebGPU",
+      locale: "en_US",
+      imageAlt: "subvid.app interface for generating subtitles in the browser",
+    },
+    hero: {
+      title: "Subtitles for any\u00A0video",
+      sub: "Generate, edit and translate subtitles with AI. Everything runs in your browser: nothing is uploaded to any server.",
+      dropLabel: "Drop your video or audio here",
+      dropButton: "Choose file",
+      dropHint: "MP4, MOV, WebM, MKV, MP3, WAV or OGG",
+      samplesLabel: "Or try it with a sample",
+      samplesCredit: "Clips: NASA",
+      samples: ["How big is space?", "Greetings from the ISS", "Life in orbit"],
+      steps: [
+        {
+          title: "Upload",
+          text: "A video or audio file. It never leaves your device.",
+        },
+        {
+          title: "Generate",
+          text: "Pick the languages and let the AI transcribe.",
+        },
+        {
+          title: "Edit and export",
+          text: "Fix the text and download an .srt or the subtitled video.",
+        },
+      ],
+      dropUnsupportedLabel: "File not supported",
+      dropUnsupportedHint:
+        "Use a video file (MP4, MOV, WebM, MKV) or audio file (MP3, WAV, OGG).",
+    },
+    demo: {
+      aria: "Demo: an interview is transcribed, translated into Spanish and exported as subtitles.",
+      file: "interview.mp4",
+      srt: "interview.srt",
+      source: "EN",
+      target: "ES",
+      reading: "Reading interview.mp4",
+      transcribing: "Transcribing\u2026 {pct}\u00A0%",
+      translating: "Translating into Spanish\u2026",
+      playing: "Playing with subtitles",
+      exported: "interview.srt downloaded",
+      cues: [
+        {
+          text: "Hi, this is just any old video.",
+          translation: "Hola, esto es un vídeo cualquiera.",
+        },
+        {
+          text: "These subtitles were made right here,",
+          translation: "Estos subtítulos se han hecho aquí mismo,",
+        },
+        {
+          text: "in your browser. Nothing uploaded.",
+          translation: "en tu navegador. Sin subir nada.",
+        },
+      ],
+    },
+    footer: {
+      developedBy: "Developed by",
+      and: "and",
+      contributors: "contributors",
+      with: "with",
+      code: "Code",
+      sponsor: "Sponsor",
+      repoAria: "View repository on GitHub",
+      contributorsUrl:
+        "https://github.com/midudev/subvid.app/graphs/contributors",
+      language: "Language",
+    },
+    config: {
+      changeVideo: "Change video",
+      title: "Configure your subtitles",
+      sub: "Choose the audio language and the subtitle language.",
+      audioLang: "Audio language",
+      detectAuto: "Detect automatically",
+      subtitleLang: "Subtitle language",
+      sameAsAudio: "Same as audio",
+      dualTrack: "Show transcription and subtitles",
+      dualTrackHint:
+        "Keep the detected original text next to the translated subtitles.",
+      wordAnimation: "Animate by word",
+      wordAnimationHint: "Highlight each word while the video plays.",
+      generate: "Generate subtitles",
+      preparing: "Preparing\u2026",
+    },
+    editor: {
+      back: "Back",
+      undo: "Undo",
+      undoTitle: "Undo (Ctrl/Cmd+Z)",
+      redo: "Redo",
+      redoTitle: "Redo (Ctrl/Cmd+Shift+Z)",
+      downloadSrt: "Download subtitles (.srt)",
+      downloadVideo: "Download video",
+      videoExportOptions: "Video export options",
+      videoFormat: "Format",
+      formatMp4: "MP4",
+      formatWebm: "WebM",
+      videoQuality: "Quality",
+      qualityOptimized: "Optimized",
+      qualityHigh: "High",
+      qualityLossless: "Lossless",
+    },
+    status: {
+      modelsAria: "Models status",
+    },
+    downloads: {
+      loadingModels: "Loading models",
+      deleteModels: "Delete downloaded models",
+    },
+    sidebar: {
+      addLangAria: "Add subtitle language",
+      addLangOption: "+ Add language",
+      segEmpty: "Generate subtitles to edit them here.",
+      transcriptAria: "Transcript",
+    },
+    style: {
+      presetsAria: "Subtitle style presets",
+      trackAria: "Subtitle to style",
+      customize: "Customize",
+      animation: "Animation",
+      typography: "Typography",
+      font: "Font",
+      fontSans: "Sans",
+      fontSerif: "Serif",
+      fontRounded: "Rounded",
+      fontCondensed: "Condensed",
+      fontMono: "Mono",
+      size: "Size",
+      position: "Position",
+      top: "Top",
+      mid: "Mid",
+      bottom: "Bottom",
+      custom: "Custom",
+      dragAria:
+        "Move subtitles. Drag with the pointer or use arrow keys to reposition. Resize from the corner.",
+      text: "Text",
+      textStyle: "Text style",
+      bold: "Bold",
+      italic: "Italic",
+      outline: "Outline",
+      wordHighlight: "Word highlight",
+      align: "Align",
+      alignLeft: "Align left",
+      alignCenter: "Align center",
+      alignRight: "Align right",
+      background: "Background",
+      backgroundStyle: "Background style",
+      bgColor: "BG color",
+      bgOpacity: "BG opacity",
+    },
+    timeline: {
+      playPause: "Play / pause",
+      mute: "Mute / unmute",
+      volume: "Volume",
+      fullscreen: "Toggle fullscreen",
+      zoomOut: "Zoom out",
+      zoomIn: "Zoom in",
+      speed: "Playback speed",
+    },
+    export: {
+      exporting: "Exporting video",
+      close: "Close",
+      preparing: "Preparing\u2026",
+      hint: "Fast export is used when available. Compatibility mode may play the video once.",
+    },
+    client: {
+      downloads: {
+        ffmpeg: "FFmpeg WASM core",
+        whisper: "Whisper model",
+        translation: "Translation model",
+        pendingNote: "Only if you translate",
+        pendingNoteChrome:
+          "Chrome en/es/ja: Gemini Nano \u00B7 other pairs: 110\u2013900 MB download",
+        translationBuiltin: "{engine} \u00B7 no app download",
+        allReady: "All ready",
+        withErrors: "With errors",
+        inProgress: "{n} in progress",
+        downloadFailed: "Download failed",
+        downloadInProgress: "Download in progress",
+        preparingModels: "Preparing models",
+        ffmpegPendingNote: "Only downloaded if a file needs it.",
+        clearWithSize: "Delete downloaded models ({size})",
+        clearNone: "No downloaded models",
+        clearConfirm: "Delete {size}? Click to confirm",
+        deleting: "Deleting\u2026",
+        freed: "Freed {size} \u00B7 models re-download next visit.",
+        clearFailed: "Couldn't access the model cache.",
+      },
+      detectAuto: "Detect automatically",
+      sameAsAudio: "Same as audio",
+      tracks: {
+        transcription: "Transcription ({lang})",
+        subtitles: "Subtitles ({lang})",
+      },
+      trackHide: "Hide track",
+      trackShow: "Show track",
+      trackLock: "Lock track",
+      trackUnlock: "Unlock track",
+      addLangOption: "+ Add language",
+      removeLang: "Remove {lang}",
+      segEmpty: "Generate subtitles to edit them here.",
+      steps: {
+        loadingFfmpeg: "Step 1/5 \u00B7 Loading FFmpeg\u2026",
+        readingVideo: "Step 2/5 \u00B7 Reading video file\u2026",
+        extractingAudio: "Step 2/5 \u00B7 Extracting audio track\u2026",
+        readingAudio: "Step 3/5 \u00B7 Reading audio\u2026",
+        decodingAudio: "Step 3/5 \u00B7 Decoding audio\u2026",
+        preparing: "Preparing\u2026",
+        loadingSpeech: "Step 4/5 \u00B7 Loading speech model\u2026",
+        downloadingSpeech: "Step 4/5 \u00B7 Downloading speech model\u2026 {meta}",
+        transcribing: "Step 4/5 \u00B7 Transcribing\u2026",
+        buildingLines: "Step 5/5 \u00B7 Building subtitle lines\u2026",
+        downloadingTranslation:
+          "Step 5/5 \u00B7 Downloading translation model\u2026",
+        translatingTo: "Step 5/5 \u00B7 Translating to {lang}\u2026",
+        translatingBatch:
+          "Step 5/5 \u00B7 Translating to {lang}\u2026 batch {current}/{total}",
+        translationFallback:
+          "Chrome translation is taking too long. Loading the local translation model\u2026",
+      },
+      noSpeech: "No speech detected in the video.",
+      genError: "Error during generation.",
+      ready: "Ready \u00B7 {n} lines \u00B7 {count} language(s).",
+      videoLoaded: "Video loaded.",
+      transcriptionReady: "Transcription ready. Choose options and generate.",
+      translationFailed: "Translation failed.",
+      translatingTo: "Translating to {lang}\u2026",
+      segCount: "{n} lines",
+      transcript: {
+        hint: "Edit or delete text without changing the video. Turn on word editing to cut it.",
+        wordEdit: "Word editing: deleting words cuts them from the video",
+        wordEditHint: "Word editing on \u00B7 deleting words cuts the video.",
+        cutSummary: "{time} s cut from the video",
+        cutOnSource: "Cut the video from the {lang} transcription \u2192",
+        restore: "Cut from the video \u00B7 click to restore",
+      },
+      exportSteps: {
+        prepare: "Preparing the encoder",
+        render: "Rendering video with subtitles",
+        encode: "Generating the file",
+        done: "Download ready",
+      },
+      exportStages: {
+        exporting: "Exporting video",
+        preparing: "Preparing\u2026",
+        preparingEncoder: "Preparing the encoder\u2026",
+        renderingLocally: "Rendering the video with subtitles locally\u2026",
+        renderingVideo: "Rendering video with subtitles\u2026",
+        saving: "Saving the file\u2026",
+        exported: "Video exported! Check your downloads.",
+        complete: "Export complete",
+        failed: "Export failed",
+        generatingFile: "Generating the file\u2026",
+        preparingVideo: "Preparing the video\u2026",
+        recordingAudio:
+          "Compatibility mode: recording video with subtitles\u2026",
+        recordingNoAudio:
+          "Compatibility mode: recording video with subtitles (no audio)\u2026",
+        keepTabActive:
+          "Keep this tab active: compatibility mode plays the video once.",
+        webcodecsFallbackNotice: "Using compatibility mode for this export.",
+      },
+      exportErrors: {
+        diagnosticUnavailable: "not reported",
+        noSupport:
+          "Your browser doesn't support client-side video export. Try desktop Chrome or Edge.",
+        noSupportAfterFallback:
+          "This browser cannot export the video locally. Try desktop Chrome or Edge.",
+        webcodecsMissingApis: "WebCodecs unavailable: missing {apis}.",
+        webcodecsMissingFile:
+          "WebCodecs unavailable: the original video file is missing.",
+        mediabunnyLoadFailed: "The WebCodecs helper failed to load: {error}.",
+        webcodecsInitFailed: "WebCodecs conversion could not start: {error}.",
+        webcodecsInvalid:
+          "WebCodecs conversion was invalid. Discarded tracks: {tracks}.",
+        formatNotSupported:
+          "This browser cannot export {format} in compatibility mode. Try the other format or use desktop Chrome/Edge.",
+        recordStart: "Couldn't start the video recording.",
+        playbackBlocked:
+          "The browser blocked the playback needed to record. Please try again.",
+        webcodecsFailed: "WebCodecs export failed: {error}.",
+      },
+      videoExported: "Video exported.",
+      langNames: {
+        en: "English",
+        es: "Spanish",
+        fr: "French",
+        de: "German",
+        pt: "Portuguese",
+        it: "Italian",
+        nl: "Dutch",
+        ru: "Russian",
+        ja: "Japanese",
+        ko: "Korean",
+        zh: "Chinese",
+        ar: "Arabic",
+        hi: "Hindi",
+        pl: "Polish",
+        tr: "Turkish",
+      },
+      presets: {
+        default: "Default",
+        clean: "Clean",
+        bold: "Bold",
+        pop: "Pop",
+        neon: "Neon",
+        classic: "Classic",
+        terminal: "Terminal",
+      },
+    },
+  },
+
+  es: {
+    meta: {
+      title: "subvid.app — Subtítulos para cualquier vídeo",
+      description:
+        "Genera y edita subtítulos con IA directamente en tu navegador. Sin subidas, sin servidores.",
+      siteName: "subvid.app",
+      ogTitle: "subvid.app — Subtítulos con IA para cualquier vídeo",
+      ogDescription:
+        "Genera, edita, traduce y exporta subtítulos en tu navegador con IA. Privado por diseño: sin subidas, sin servidores.",
+      keywords:
+        "subtítulos IA, subtítulos automáticos, subtítulos para vídeo, generador de subtítulos, editor SRT, transcripción en navegador, Whisper, WebGPU",
+      locale: "es_ES",
+      imageAlt:
+        "Interfaz de subvid.app para generar subtítulos en el navegador",
+    },
+    hero: {
+      title: "Subtítulos para cualquier\u00A0vídeo",
+      sub: "Genera, edita y traduce subtítulos con IA. Todo ocurre en tu navegador: no se sube nada a ningún servidor.",
+      dropLabel: "Suelta aquí tu vídeo o audio",
+      dropButton: "Elegir archivo",
+      dropHint: "MP4, MOV, WebM, MKV, MP3, WAV u OGG",
+      samplesLabel: "O pruébalo con un ejemplo",
+      samplesCredit: "Clips: NASA",
+      samples: ["El tamaño del espacio", "Saludos desde la ISS", "La vida en órbita"],
+      steps: [
+        {
+          title: "Sube",
+          text: "Un vídeo o un audio. Nunca sale de tu dispositivo.",
+        },
+        {
+          title: "Genera",
+          text: "Elige los idiomas y deja que la IA transcriba.",
+        },
+        {
+          title: "Edita y exporta",
+          text: "Corrige el texto y descarga un .srt o el vídeo subtitulado.",
+        },
+      ],
+      dropUnsupportedLabel: "Archivo no compatible",
+      dropUnsupportedHint:
+        "Usa un archivo de vídeo (MP4, MOV, WebM, MKV) o de audio (MP3, WAV, OGG).",
+    },
+    demo: {
+      aria: "Demo: una entrevista se transcribe, se traduce al inglés y se exporta como subtítulos.",
+      file: "entrevista.mp4",
+      srt: "entrevista.srt",
+      source: "ES",
+      target: "EN",
+      reading: "Leyendo entrevista.mp4",
+      transcribing: "Transcribiendo\u2026 {pct}\u00A0%",
+      translating: "Traduciendo al inglés\u2026",
+      playing: "Reproduciendo con subtítulos",
+      exported: "entrevista.srt descargado",
+      cues: [
+        {
+          text: "Hola, esto es un vídeo cualquiera.",
+          translation: "Hi, this is just any old video.",
+        },
+        {
+          text: "Los subtítulos se han hecho aquí mismo,",
+          translation: "These subtitles were made right here,",
+        },
+        {
+          text: "en tu navegador. Sin subir nada.",
+          translation: "in your browser. Nothing uploaded.",
+        },
+      ],
+    },
+    footer: {
+      developedBy: "Desarrollado por",
+      and: "y",
+      contributors: "contribuidores",
+      with: "con",
+      code: "Código",
+      sponsor: "Patrocinar",
+      repoAria: "Ver repositorio en GitHub",
+      contributorsUrl:
+        "https://github.com/midudev/subvid.app/graphs/contributors",
+      language: "Idioma",
+    },
+    config: {
+      changeVideo: "Cambiar vídeo",
+      title: "Configura tus subtítulos",
+      sub: "Elige el idioma del audio y el de los subtítulos.",
+      audioLang: "Idioma del audio",
+      detectAuto: "Detectar automáticamente",
+      subtitleLang: "Idioma de los subtítulos",
+      sameAsAudio: "Igual que el audio",
+      dualTrack: "Mostrar transcripción y subtítulos",
+      dualTrackHint:
+        "Mantén el texto original detectado junto a los subtítulos traducidos.",
+      wordAnimation: "Animar por palabra",
+      wordAnimationHint: "Resalta cada palabra mientras se reproduce el vídeo.",
+      generate: "Generar subtítulos",
+      preparing: "Preparando\u2026",
+    },
+    editor: {
+      back: "Atrás",
+      undo: "Deshacer",
+      undoTitle: "Deshacer (Ctrl/Cmd+Z)",
+      redo: "Rehacer",
+      redoTitle: "Rehacer (Ctrl/Cmd+Shift+Z)",
+      downloadSrt: "Descargar subtítulos (.srt)",
+      downloadVideo: "Descargar vídeo",
+      videoExportOptions: "Opciones de exportación de vídeo",
+      videoFormat: "Formato",
+      formatMp4: "MP4",
+      formatWebm: "WebM",
+      videoQuality: "Calidad",
+      qualityOptimized: "Optimizado",
+      qualityHigh: "Alta",
+      qualityLossless: "Sin pérdida",
+    },
+    status: {
+      modelsAria: "Estado de los modelos",
+    },
+    downloads: {
+      loadingModels: "Cargando modelos",
+      deleteModels: "Eliminar modelos descargados",
+    },
+    sidebar: {
+      addLangAria: "Añadir idioma de subtítulos",
+      addLangOption: "+ Añadir idioma",
+      segEmpty: "Genera subtítulos para editarlos aquí.",
+      transcriptAria: "Transcripción",
+    },
+    style: {
+      presetsAria: "Estilos de subtítulos predefinidos",
+      trackAria: "Subtítulo que estás personalizando",
+      customize: "Personalizar",
+      animation: "Animación",
+      typography: "Tipografía",
+      font: "Fuente",
+      fontSans: "Sans",
+      fontSerif: "Serif",
+      fontRounded: "Redondeada",
+      fontCondensed: "Condensada",
+      fontMono: "Monoespaciada",
+      size: "Tamaño",
+      position: "Posición",
+      top: "Arriba",
+      mid: "Centro",
+      bottom: "Abajo",
+      custom: "Personalizado",
+      dragAria:
+        "Mover subtítulos. Arrastra con el puntero o usa las flechas para recolocarlos. Redimensiona desde la esquina.",
+      text: "Texto",
+      textStyle: "Estilo de texto",
+      bold: "Negrita",
+      italic: "Cursiva",
+      outline: "Contorno",
+      wordHighlight: "Palabra activa",
+      align: "Alinear",
+      alignLeft: "Alinear a la izquierda",
+      alignCenter: "Alinear al centro",
+      alignRight: "Alinear a la derecha",
+      background: "Fondo",
+      backgroundStyle: "Estilo de fondo",
+      bgColor: "Color de fondo",
+      bgOpacity: "Opacidad del fondo",
+    },
+    timeline: {
+      playPause: "Reproducir / pausar",
+      mute: "Silenciar / activar",
+      volume: "Volumen",
+      fullscreen: "Pantalla completa",
+      zoomOut: "Alejar",
+      zoomIn: "Acercar",
+      speed: "Velocidad de reproducción",
+    },
+    export: {
+      exporting: "Exportando vídeo",
+      close: "Cerrar",
+      preparing: "Preparando\u2026",
+      hint: "Se usará la exportación rápida cuando esté disponible. El modo compatibilidad puede reproducir el vídeo una vez.",
+    },
+    client: {
+      downloads: {
+        ffmpeg: "Núcleo WASM de FFmpeg",
+        whisper: "Modelo Whisper",
+        translation: "Modelo de traducción",
+        pendingNote: "Solo si traduces",
+        pendingNoteChrome:
+          "Chrome en/es/ja: Gemini Nano \u00B7 otros pares: 110\u2013900 MB",
+        translationBuiltin: "{engine} \u00B7 sin descarga en la app",
+        allReady: "Todo listo",
+        withErrors: "Con errores",
+        inProgress: "{n} en curso",
+        downloadFailed: "Error de descarga",
+        downloadInProgress: "Descarga en curso",
+        preparingModels: "Preparando modelos",
+        ffmpegPendingNote: "Solo se descarga si algún archivo lo necesita.",
+        clearWithSize: "Eliminar modelos descargados ({size})",
+        clearNone: "No hay modelos descargados",
+        clearConfirm: "¿Eliminar {size}? Haz clic para confirmar",
+        deleting: "Eliminando\u2026",
+        freed:
+          "Liberados {size} \u00B7 los modelos se descargan de nuevo en la próxima visita.",
+        clearFailed: "No se pudo acceder a la caché de modelos.",
+      },
+      detectAuto: "Detectar automáticamente",
+      sameAsAudio: "Igual que el audio",
+      tracks: {
+        transcription: "Transcripción ({lang})",
+        subtitles: "Subtítulos ({lang})",
+      },
+      trackHide: "Ocultar pista",
+      trackShow: "Mostrar pista",
+      trackLock: "Bloquear pista",
+      trackUnlock: "Desbloquear pista",
+      addLangOption: "+ Añadir idioma",
+      removeLang: "Eliminar {lang}",
+      segEmpty: "Genera subtítulos para editarlos aquí.",
+      steps: {
+        loadingFfmpeg: "Paso 1/5 \u00B7 Cargando FFmpeg\u2026",
+        readingVideo: "Paso 2/5 \u00B7 Leyendo el archivo de vídeo\u2026",
+        extractingAudio: "Paso 2/5 \u00B7 Extrayendo la pista de audio\u2026",
+        readingAudio: "Paso 3/5 \u00B7 Leyendo el audio\u2026",
+        decodingAudio: "Paso 3/5 \u00B7 Decodificando el audio\u2026",
+        preparing: "Preparando\u2026",
+        loadingSpeech: "Paso 4/5 \u00B7 Cargando el modelo de voz\u2026",
+        downloadingSpeech: "Paso 4/5 \u00B7 Descargando el modelo de voz\u2026 {meta}",
+        transcribing: "Paso 4/5 \u00B7 Transcribiendo\u2026",
+        buildingLines: "Paso 5/5 \u00B7 Creando las líneas de subtítulos\u2026",
+        downloadingTranslation:
+          "Paso 5/5 \u00B7 Descargando el modelo de traducción\u2026",
+        translatingTo: "Paso 5/5 \u00B7 Traduciendo a {lang}\u2026",
+        translatingBatch:
+          "Paso 5/5 \u00B7 Traduciendo a {lang}\u2026 lote {current}/{total}",
+        translationFallback:
+          "La traducción de Chrome está tardando demasiado. Cargando el modelo local de traducción\u2026",
+      },
+      noSpeech: "No se detectó voz en el vídeo.",
+      genError: "Error durante la generación.",
+      ready: "Listo \u00B7 {n} líneas \u00B7 {count} idioma(s).",
+      videoLoaded: "Vídeo cargado.",
+      transcriptionReady: "Transcripción lista. Elige opciones y genera.",
+      translationFailed: "Error de traducción.",
+      translatingTo: "Traduciendo a {lang}\u2026",
+      segCount: "{n} líneas",
+      transcript: {
+        hint: "Edita o borra texto sin cambiar el vídeo. Activa la edición por palabras para recortarlo.",
+        wordEdit: "Edición por palabras: borrar palabras las corta del vídeo",
+        wordEditHint: "Edición por palabras activa \u00B7 borrar palabras corta el vídeo.",
+        cutSummary: "{time} s cortados del vídeo",
+        cutOnSource: "Corta el vídeo desde la transcripción en {lang} \u2192",
+        restore: "Cortado del vídeo \u00B7 clic para restaurar",
+      },
+      exportSteps: {
+        prepare: "Preparando el codificador",
+        render: "Renderizando el vídeo con subtítulos",
+        encode: "Generando el archivo",
+        done: "Descarga lista",
+      },
+      exportStages: {
+        exporting: "Exportando vídeo",
+        preparing: "Preparando\u2026",
+        preparingEncoder: "Preparando el codificador\u2026",
+        renderingLocally: "Renderizando el vídeo con subtítulos en local\u2026",
+        renderingVideo: "Renderizando el vídeo con subtítulos\u2026",
+        saving: "Guardando el archivo\u2026",
+        exported: "¡Vídeo exportado! Revisa tus descargas.",
+        complete: "Exportación completada",
+        failed: "Error en la exportación",
+        generatingFile: "Generando el archivo\u2026",
+        preparingVideo: "Preparando el vídeo\u2026",
+        recordingAudio:
+          "Modo compatibilidad: grabando el vídeo con subtítulos\u2026",
+        recordingNoAudio:
+          "Modo compatibilidad: grabando el vídeo con subtítulos (sin audio)\u2026",
+        keepTabActive:
+          "Mantén esta pestaña activa: el modo compatibilidad reproduce el vídeo una vez.",
+        webcodecsFallbackNotice:
+          "Usando el modo compatibilidad para esta exportación.",
+      },
+      exportErrors: {
+        diagnosticUnavailable: "sin información",
+        noSupport:
+          "Tu navegador no admite la exportación de vídeo en local. Prueba con Chrome o Edge en ordenador.",
+        noSupportAfterFallback:
+          "Este navegador no puede exportar el vídeo en local. Prueba con Chrome o Edge en ordenador.",
+        webcodecsMissingApis: "WebCodecs no disponible: falta {apis}.",
+        webcodecsMissingFile:
+          "WebCodecs no disponible: falta el archivo de vídeo original.",
+        mediabunnyLoadFailed:
+          "No se pudo cargar el helper de WebCodecs: {error}.",
+        webcodecsInitFailed:
+          "No se pudo iniciar la conversión con WebCodecs: {error}.",
+        webcodecsInvalid:
+          "La conversión con WebCodecs no es válida. Pistas descartadas: {tracks}.",
+        formatNotSupported:
+          "Este navegador no puede exportar {format} en modo compatibilidad. Prueba el otro formato o usa Chrome/Edge de escritorio.",
+        recordStart: "No se pudo iniciar la grabación del vídeo.",
+        playbackBlocked:
+          "El navegador bloqueó la reproducción necesaria para grabar. Inténtalo de nuevo.",
+        webcodecsFailed: "Error en la exportación con WebCodecs: {error}.",
+      },
+      videoExported: "Vídeo exportado.",
+      langNames: {
+        en: "Inglés",
+        es: "Español",
+        fr: "Francés",
+        de: "Alemán",
+        pt: "Portugués",
+        it: "Italiano",
+        nl: "Neerlandés",
+        ru: "Ruso",
+        ja: "Japonés",
+        ko: "Coreano",
+        zh: "Chino",
+        ar: "Árabe",
+        hi: "Hindi",
+        pl: "Polaco",
+        tr: "Turco",
+      },
+      presets: {
+        default: "Base",
+        clean: "Limpio",
+        bold: "Negrita",
+        pop: "Pop",
+        neon: "Neón",
+        classic: "Clásico",
+        terminal: "Terminal",
+      },
+    },
+  },
+} as const;
+
+// Normalize whatever Astro.currentLocale gives us into a known language.
+export function toLang(value: string | undefined): Lang {
+  return value && value in ui ? (value as Lang) : defaultLang;
+}
+
+// Build-time translations for `.astro` components.
+export function useTranslations(value: string | undefined) {
+  return ui[toLang(value)];
+}
+
+// Subset of strings serialized into the page for the client runtime (app.ts).
+export function clientStrings(value: string | undefined) {
+  return ui[toLang(value)].client;
+}

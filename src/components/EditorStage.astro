@@ -1,0 +1,105 @@
+---
+import ChevronLeft from "@/assets/svg/chevron-left.svg"
+import Download from "@/assets/svg/download.svg"
+import Undo from "@/assets/svg/undo.svg"
+import Redo from "@/assets/svg/redo.svg"
+import SubtitleStyleBar from "@/components/SubtitleStyleBar.astro"
+import EditorSidebar from "@/components/EditorSidebar.astro"
+import Timeline from "@/components/Timeline.astro"
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<section id="stage-editor" class="stage-editor" hidden>
+  <header class="editor-top">
+    <button id="back-btn" class="btn-ghost" type="button">
+      <ChevronLeft />
+      {t.editor.back}
+    </button>
+    <div class="editor-history">
+      <button
+        id="undo-btn"
+        class="btn-icon"
+        type="button"
+        aria-label={t.editor.undo}
+        title={t.editor.undoTitle}
+        disabled
+      >
+        <Undo />
+      </button>
+      <button
+        id="redo-btn"
+        class="btn-icon"
+        type="button"
+        aria-label={t.editor.redo}
+        title={t.editor.redoTitle}
+        disabled
+      >
+        <Redo />
+      </button>
+    </div>
+    <div id="video-meta" class="video-meta"></div>
+    <div class="editor-actions">
+      <button id="download-srt-btn" class="btn-ghost export-srt" type="button" disabled>
+        <Download />
+        {t.editor.downloadSrt}
+      </button>
+      <div class="export-group" role="group" aria-label={t.editor.videoExportOptions}>
+        <label class="export-field" title={t.editor.videoFormat}>
+          <span class="sr-only">{t.editor.videoFormat}</span>
+          <select id="export-format" name="export-format">
+            <option value="mp4">{t.editor.formatMp4}</option>
+            <option value="webm">{t.editor.formatWebm}</option>
+          </select>
+        </label>
+        <label class="export-field" title={t.editor.videoQuality}>
+          <span class="sr-only">{t.editor.videoQuality}</span>
+          <select id="export-quality" name="export-quality">
+            <option value="optimized">{t.editor.qualityOptimized}</option>
+            <option value="high">{t.editor.qualityHigh}</option>
+            <option value="lossless">{t.editor.qualityLossless}</option>
+          </select>
+        </label>
+        <button
+          id="download-video-btn"
+          class="btn-soft btn-soft--primary"
+          type="button"
+          disabled
+        >
+          <Download />
+          {t.editor.downloadVideo}
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="editor-body">
+    {/* Main column */}
+    <div class="editor-main">
+      <div class="video-preview" id="video-preview">
+        <video id="video" playsinline></video>
+        <div id="caption-guides" class="caption-guides" hidden aria-hidden="true">
+          <span class="caption-guide caption-guide-v"></span>
+          <span class="caption-guide caption-guide-h caption-guide-h--top"></span>
+          <span class="caption-guide caption-guide-h caption-guide-h--middle"
+          ></span>
+          <span class="caption-guide caption-guide-h caption-guide-h--bottom"
+          ></span>
+        </div>
+        <div
+          id="caption-overlay"
+          class="caption-layer"
+          data-drag-label={t.style.dragAria}
+        >
+        </div>
+      </div>
+
+      <SubtitleStyleBar />
+    </div>
+
+    <EditorSidebar />
+  </div>
+
+  <Timeline />
+</section>

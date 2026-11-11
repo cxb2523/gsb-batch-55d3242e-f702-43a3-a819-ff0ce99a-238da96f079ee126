@@ -1,0 +1,33 @@
+# build output
+dist/
+
+# generated types
+.astro/
+
+# wrangler / cloudflare build artifacts
+.wrangler/
+
+# dependencies
+node_modules/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# environment variables
+.env
+.env.production
+.env.*
+
+# macOS-specific files
+.DS_Store
+
+# IDEs and Editors
+.idea/
+.vscode/launch.json
+
+# AI Agents & VibeCoding artifacts
+.agents/
+.claude/

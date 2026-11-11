@@ -1,0 +1,97 @@
+---
+import Play from "@/assets/svg/play.svg"
+import Pause from "@/assets/svg/pause.svg"
+import Volume from "@/assets/svg/volume.svg"
+import VolumeMute from "@/assets/svg/volume-mute.svg"
+import Fullscreen from "@/assets/svg/fullscreen.svg"
+import FullscreenExit from "@/assets/svg/fullscreen-exit.svg"
+import ZoomIn from "@/assets/svg/zoom-in.svg"
+import ZoomOut from "@/assets/svg/zoom-out.svg"
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<div class="timeline" id="timeline">
+  <div class="timeline-toolbar">
+    <button
+      id="tl-play"
+      class="tl-play"
+      type="button"
+      aria-label={t.timeline.playPause}
+    >
+      <Play class="ic-play" />
+      <Pause class="ic-pause" />
+    </button>
+    <span id="tl-clock" class="tl-clock">0:00.00 / 0:00.00</span>
+    <button
+      id="tl-speed"
+      class="tl-speed"
+      type="button"
+      aria-label={t.timeline.speed}
+      title={t.timeline.speed}
+    >
+      1×
+    </button>
+    <div class="tl-tools">
+      <div class="tl-volume">
+        <button
+          id="vp-mute"
+          class="tl-icon-btn"
+          type="button"
+          aria-label={t.timeline.mute}
+        >
+          <Volume class="ic-vol" />
+          <VolumeMute class="ic-mute" />
+        </button>
+        <input
+          id="vp-volume"
+          class="tl-volume-range"
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          value="1"
+          aria-label={t.timeline.volume}
+        />
+      </div>
+      <button
+        id="vp-fullscreen"
+        class="tl-icon-btn"
+        type="button"
+        aria-label={t.timeline.fullscreen}
+      >
+        <Fullscreen class="ic-fs" />
+        <FullscreenExit class="ic-fs-exit" />
+      </button>
+      <div class="tl-zoom">
+        <button
+          id="tl-zoom-out"
+          class="tl-zoom-btn"
+          type="button"
+          aria-label={t.timeline.zoomOut}
+        >
+          <ZoomOut />
+        </button>
+        <button
+          id="tl-zoom-in"
+          class="tl-zoom-btn"
+          type="button"
+          aria-label={t.timeline.zoomIn}
+        >
+          <ZoomIn />
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="timeline-scroll" id="timeline-scroll">
+    <div class="timeline-track" id="timeline-track">
+      <canvas class="tl-wave" id="timeline-wave" hidden aria-hidden="true"
+      ></canvas>
+      <div class="timeline-ruler" id="timeline-ruler"></div>
+      <div class="timeline-blocks" id="timeline-blocks"></div>
+      <div class="timeline-cuts" id="timeline-cuts" aria-hidden="true"></div>
+      <div class="timeline-playhead" id="timeline-playhead"></div>
+    </div>
+  </div>
+</div>

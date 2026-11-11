@@ -1,0 +1,46 @@
+---
+import Scissors from "@/assets/svg/scissors.svg"
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<aside class="sidebar">
+  <div class="sidebar-head">
+    <div id="lang-tabs" class="lang-tabs"></div>
+    <select
+      id="lang-add-select"
+      class="lang-add-select"
+      aria-label={t.sidebar.addLangAria}
+      disabled
+    >
+      <option value="">{t.sidebar.addLangOption}</option>
+    </select>
+    <button
+      id="transcript-cut-btn"
+      type="button"
+      class="tx-word-edit"
+      aria-controls="transcript"
+      aria-pressed="false"
+      aria-label={t.client.transcript.wordEdit}
+      title={t.client.transcript.wordEdit}
+      hidden
+    >
+      <Scissors />
+    </button>
+    <span id="lang-add-status" class="lang-add-status" hidden></span>
+  </div>
+  <div
+    id="transcript"
+    class="transcript"
+    role="textbox"
+    aria-multiline="true"
+    aria-label={t.sidebar.transcriptAria}
+  >
+    <p class="tx-empty">{t.sidebar.segEmpty}</p>
+  </div>
+  <div class="sidebar-foot">
+    <span id="transcript-hint" class="tx-hint" hidden></span>
+    <span id="seg-count" class="seg-count"></span>
+  </div>
+</aside>

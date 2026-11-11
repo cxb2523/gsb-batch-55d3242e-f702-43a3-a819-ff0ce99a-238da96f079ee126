@@ -1,0 +1,202 @@
+---
+import AlignCenterIcon from "@/assets/svg/align-center.svg"
+import AlignLeftIcon from "@/assets/svg/align-left.svg"
+import AlignRightIcon from "@/assets/svg/align-right.svg"
+import ButtonCursorIcon from "@/assets/svg/button-cursor.svg"
+import FontFamilyIcon from "@/assets/svg/font-family.svg"
+import OpacityIcon from "@/assets/svg/opacity.svg"
+import TextBackgroundIcon from "@/assets/svg/text-background.svg"
+import TextBoldIcon from "@/assets/svg/text-bold.svg"
+import TextItalicIcon from "@/assets/svg/text-italic.svg"
+import TextOutlineIcon from "@/assets/svg/text-outline.svg"
+import TextSizeIcon from "@/assets/svg/text-size.svg"
+import VerticalAlignBottomIcon from "@/assets/svg/vertical-align-bottom.svg"
+import VerticalAlignMiddleIcon from "@/assets/svg/vertical-align-middle.svg"
+import VerticalAlignTopIcon from "@/assets/svg/vertical-align-top.svg"
+import Sliders from "@/assets/svg/sliders.svg"
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<div class="style-bar">
+  <div class="style-bar-head">
+    <div
+      id="style-track"
+      class="style-track"
+      role="group"
+      aria-label={t.style.trackAria}
+      hidden
+    >
+    </div>
+    <div
+      id="style-presets"
+      class="style-presets"
+      role="tablist"
+      aria-label={t.style.presetsAria}
+    >
+    </div>
+    <label class="sc-toggle style-animation-toggle" title={t.style.animation}>
+      <input id="cs-word-highlight" type="checkbox" />
+      <span class="sc-toggle-face">
+        <span class="sc-toggle-letter">W</span>
+      </span>
+      <span>{t.style.animation}</span>
+    </label>
+    <button
+      id="style-toggle"
+      class="style-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="style-controls"
+    >
+      <Sliders />
+      {t.style.customize}
+    </button>
+  </div>
+
+  <div id="style-controls" class="style-controls" hidden>
+    <div class="sc-grid">
+      <section class="sc-group sc-group--type" aria-label={t.style.typography}>
+        <label class="sc-field sc-field--font">
+          <span class="sc-label">
+            <FontFamilyIcon />
+            {t.style.font}
+          </span>
+          <select id="cs-font">
+            <option value="sans">{t.style.fontSans}</option>
+            <option value="serif">{t.style.fontSerif}</option>
+            <option value="rounded">{t.style.fontRounded}</option>
+            <option value="condensed">{t.style.fontCondensed}</option>
+            <option value="mono">{t.style.fontMono}</option>
+          </select>
+        </label>
+        <label class="sc-field sc-field--size">
+          <span class="sc-label">
+            <TextSizeIcon />
+            {t.style.size}
+          </span>
+          <input id="cs-size" type="range" min="0.7" max="1.6" step="0.05" />
+        </label>
+      </section>
+
+      <section class="sc-group sc-group--position" aria-label={t.style.position}>
+        <div class="sc-field">
+          <span class="sc-label">{t.style.position}</span>
+          <div id="cs-position" class="sc-seg sc-seg--icon">
+            <button type="button" data-pos="top" aria-label={t.style.top} title={t.style.top}>
+              <VerticalAlignTopIcon />
+            </button>
+            <button
+              type="button"
+              data-pos="middle"
+              aria-label={t.style.mid}
+              title={t.style.mid}
+            >
+              <VerticalAlignMiddleIcon />
+            </button>
+            <button
+              type="button"
+              data-pos="bottom"
+              aria-label={t.style.bottom}
+              title={t.style.bottom}
+            >
+              <VerticalAlignBottomIcon />
+            </button>
+            <button
+              type="button"
+              data-pos="custom"
+              aria-label={t.style.custom}
+              title={t.style.custom}
+            >
+              <ButtonCursorIcon />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sc-group sc-group--text" aria-label={t.style.text}>
+        <label class="sc-field sc-color">
+          <span class="sc-label">{t.style.text}</span>
+          <input id="cs-color" type="color" />
+        </label>
+        <div class="sc-toggle-group" aria-label={t.style.textStyle}>
+          <label class="sc-toggle" title={t.style.bold}>
+            <input id="cs-bold" type="checkbox" />
+            <span class="sc-toggle-face">
+              <TextBoldIcon />
+            </span>
+            <span class="sc-visually-hidden">{t.style.bold}</span>
+          </label>
+          <label class="sc-toggle" title={t.style.italic}>
+            <input id="cs-italic" type="checkbox" />
+            <span class="sc-toggle-face">
+              <TextItalicIcon />
+            </span>
+            <span class="sc-visually-hidden">{t.style.italic}</span>
+          </label>
+          <label class="sc-toggle" title={t.style.outline}>
+            <input id="cs-outline" type="checkbox" />
+            <span class="sc-toggle-face">
+              <TextOutlineIcon />
+            </span>
+            <span class="sc-visually-hidden">{t.style.outline}</span>
+          </label>
+        </div>
+        <div class="sc-field">
+          <span class="sc-label">{t.style.align}</span>
+          <div id="cs-align" class="sc-seg sc-seg--icon">
+            <button
+              type="button"
+              data-align="left"
+              aria-label={t.style.alignLeft}
+              title={t.style.alignLeft}
+            >
+              <AlignLeftIcon />
+            </button>
+            <button
+              type="button"
+              data-align="center"
+              aria-label={t.style.alignCenter}
+              title={t.style.alignCenter}
+            >
+              <AlignCenterIcon />
+            </button>
+            <button
+              type="button"
+              data-align="right"
+              aria-label={t.style.alignRight}
+              title={t.style.alignRight}
+            >
+              <AlignRightIcon />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="sc-group sc-group--background"
+        aria-label={t.style.backgroundStyle}
+      >
+        <label class="sc-toggle" title={t.style.background}>
+          <input id="cs-bg" type="checkbox" />
+          <span class="sc-toggle-face">
+            <TextBackgroundIcon />
+          </span>
+          <span>{t.style.background}</span>
+        </label>
+        <label class="sc-field sc-color">
+          <span class="sc-label">{t.style.bgColor}</span>
+          <input id="cs-bgcolor" type="color" />
+        </label>
+        <label class="sc-field sc-field--opacity">
+          <span class="sc-label">
+            <OpacityIcon />
+            {t.style.bgOpacity}
+          </span>
+          <input id="cs-bgopacity" type="range" min="0" max="1" step="0.05" />
+        </label>
+      </section>
+    </div>
+  </div>
+</div>

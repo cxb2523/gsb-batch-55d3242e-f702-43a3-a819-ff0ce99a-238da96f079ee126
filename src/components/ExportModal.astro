@@ -1,0 +1,50 @@
+---
+import Close from "@/assets/svg/close.svg"
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<div id="export-modal" class="export-modal" hidden>
+  <div class="export-backdrop" id="export-backdrop"></div>
+  <div
+    class="export-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="export-title"
+  >
+    <div class="export-head">
+      <h2 id="export-title" class="export-title">{t.export.exporting}</h2>
+      <button
+        id="export-close"
+        class="export-close"
+        type="button"
+        aria-label={t.export.close}
+        hidden
+      >
+        <Close />
+      </button>
+    </div>
+
+    <p id="export-stage" class="export-stage" role="status" aria-live="polite">{t.export.preparing}</p>
+
+    <div
+      id="export-track"
+      class="export-track"
+      role="progressbar"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow="0"
+    >
+      <div id="export-fill" class="export-fill"></div>
+    </div>
+    <div class="export-foot">
+      <span id="export-pct" class="export-pct">0%</span>
+      <span id="export-hint" class="export-hint">{t.export.hint}</span>
+    </div>
+
+    <ul id="export-steps" class="export-steps"></ul>
+
+    <p id="export-error" class="export-error" role="alert" hidden></p>
+  </div>
+</div>

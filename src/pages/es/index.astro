@@ -1,0 +1,19 @@
+---
+import Layout from "@/layouts/Layout.astro"
+import Home from "@/components/Home.astro"
+import { useTranslations } from "@/i18n/ui"
+
+export const prerender = true
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<Layout title={t.meta.title} description={t.meta.description}>
+  {
+    /* The landing is centred as a whole, so painting half of it while the
+       HTML is still streaming makes it jump when the rest arrives. Where
+       supported, the first paint waits until all of it has been parsed. */
+  }
+  <link slot="head" rel="expect" href="#landing-end" blocking="render" />
+  <Home />
+</Layout>

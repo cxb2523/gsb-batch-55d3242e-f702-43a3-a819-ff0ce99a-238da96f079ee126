@@ -1,0 +1,21 @@
+---
+import Check from "@/assets/svg/check.svg"
+import Ring from "@/assets/svg/ring.svg"
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<div id="status-dock" class="status-dock">
+  <span id="downloads-label" class="status-label" role="status" aria-live="polite"></span>
+  <button
+    id="downloads-toggle"
+    class="status-btn"
+    aria-label={t.status.modelsAria}
+    type="button"
+  >
+    <Ring class="ring" />
+    <span id="downloads-pct" class="ring-pct">0%</span>
+    <Check class="ring-check" />
+  </button>
+</div>

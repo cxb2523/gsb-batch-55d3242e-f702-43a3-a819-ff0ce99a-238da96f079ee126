@@ -1,0 +1,22 @@
+---
+import { useTranslations } from "@/i18n/ui"
+
+const t = useTranslations(Astro.currentLocale)
+---
+
+<aside id="downloads-panel" class="status-panel" hidden>
+  <div class="panel-head">
+    <p class="panel-title">{t.downloads.loadingModels}</p>
+    <span id="downloads-summary" class="panel-summary"></span>
+  </div>
+  <div class="panel-progress">
+    <div id="downloads-overall" class="panel-progress-fill"></div>
+  </div>
+  <ul id="downloads-list"></ul>
+  <div class="panel-foot">
+    <button id="clear-models-btn" class="clear-models-btn" type="button" disabled>
+      {t.downloads.deleteModels}
+    </button>
+    <p id="clear-models-note" class="clear-models-note" hidden></p>
+  </div>
+</aside>
