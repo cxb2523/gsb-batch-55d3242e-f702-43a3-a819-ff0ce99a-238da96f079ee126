@@ -1,0 +1,106 @@
+# guitarchords.info
+
+### 🎸 [Open the live tools → **guitarchords.info**](https://guitarchords.info)
+
+> **A free tool by [Suede AI](https://suedeai.ai) · Built by [Jason Colapietro](https://suedeai.ai/founder)**
+
+A zero-auth public reference site for guitar players — chord library, scale
+trainer, in-browser tuner, and metronome. No accounts, no analytics, no
+backend. Designed in the Suede Institutional IP Terminal language.
+
+## Stack
+
+- Next.js 16 (App Router)
+- TypeScript (strict)
+- Tailwind v4 (driven by CSS variables in `app/globals.css`)
+- pnpm
+
+The site is fully static where possible. The tuner and metronome use the
+Web Audio API on the client; everything else renders on the server.
+
+## Running locally
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Open <http://localhost:3000>.
+
+Other useful scripts:
+
+```bash
+pnpm typecheck   # tsc --noEmit
+pnpm build       # next build
+pnpm start       # serve the production build
+```
+
+## Project layout
+
+```
+app/
+  layout.tsx          # site shell, header, footer, Suede palette tokens
+  page.tsx            # editorial landing with four tool tiles
+  globals.css         # design tokens (Rights Red / Registry Cyan / Deep Ink)
+  chords/             # chord library route
+  chords/[chord]/     # one static page per chord in lib/chords/fingerings.ts
+  scales/             # scale trainer route
+  scales/[scale]/     # one static page per scale in lib/music/scales.ts
+  tuner/              # chromatic tuner route (Web Audio + YIN)
+  metronome/          # metronome route (Web Audio scheduler)
+components/
+  ChordDiagram.tsx    # SVG chord diagram
+  Fretboard.tsx       # SVG fretboard for the scale trainer
+lib/
+  chords/fingerings.ts  # chord-shape data (open/barre/7/maj7/m7/sus/power)
+  chords/pages.ts       # chord tones, slugs and related chords for /chords/[chord]
+  music/scales.ts       # scale theory primitives (12 scales)
+  music/fretboard.ts    # pitch-class math for standard tuning
+  music/spelling.ts     # letter-based note spelling (Bb, not A#, in G minor)
+  music/scale-pages.ts  # formulas, 12-key spellings and related scales for /scales/[scale]
+  audio/note.ts         # Hz <-> note math, standard-tuning reference
+  audio/yin.ts          # YIN pitch detector
+  audio/use-tuner.ts    # React hook for the tuner
+  audio/use-metronome.ts # React hook for the metronome + tap-tempo helper
+public/
+  tuner-audio-processor.js  # AudioWorklet for the tuner mic pump
+```
+
+## Design
+
+The visual language follows the Suede Institutional IP Terminal palette:
+
+- **Rights Red** `#9f101a` — accents, alerts, downbeat
+- **Registry Cyan** `#22d3ee` — accents, in-tune state, root notes
+- **Deep Ink** `#050b16` — page background
+
+Editorial typography (serif display + monospace eyebrow + system body),
+hairline rules, hard-edged corners, terminal-style filter pills. Not a
+generic dark Tailwind template.
+
+## Provenance
+
+Core music primitives (chord fingerings, scale intervals, YIN pitch
+detector, Web Audio worklet, metronome scheduler) are ported from
+[Strumly](https://strumly.com), Suede Labs&rsquo; onchain music oracle.
+The UI shells are rewritten in the IP Terminal language and the auth /
+paid-tier scaffolding has been removed.
+
+## License
+
+TBD by the owner.
+
+---
+
+## About the Creator
+
+Built by **Jason Colapietro** — founder and CEO of [Suede AI](https://suedeai.ai), published author, and guitarist. Suede AI publishes this reference site and related music tools.
+
+### Books
+
+- <img src="https://suedeai.ai/books/the-signal-chain-cover.webp" alt="Cover of The Signal Chain" width="80"><br>**[The Signal Chain](https://guitar.solutions)** — Illustrated history of electric guitar tone: 46 chapters, complete edition. The book that maps the signal chain and the IP chain side by side. (guitar.solutions) Includes the former *The Guitar Without a Number*.
+- <img src="https://suedeai.ai/books/human-authenticity-layer-cover.jpg" alt="Cover of The Human Authenticity Layer" width="80"><br>**[Suede Labs: The Human Authenticity Layer](https://www.amazon.com/dp/B0GD5FX6N6)** — How ownership, origin, and AI redraw the creative map. (Available in hardcover, paperback, and Kindle)
+- <img src="https://suedeai.ai/books/stake-your-claim-cover.jpg" alt="Cover of Stake Your Claim" width="80"><br>**[Stake Your Claim](https://www.amazon.com/dp/B0GRG8LGQQ)** — Hard truths on turning the AI era into a real asset. (Available in hardcover, paperback, and Kindle)
+- <img src="https://suedeai.ai/books/the-screenshot-cover.jpg" alt="Cover of The Screenshot" width="80"><br>**[The Screenshot: Why AI Recommends Your Competitors, and How to Fix It](https://seo.suedeai.ai/book)** — How answer engines decide who to name, how to see your own gap with your own eyes, and how to repair the pages the machines misread. Eleven chapters, in full on the web. (seo.suedeai.ai)
+
+Follow: [X / @johnnysuede](https://x.com/johnnysuede) · [suedeai.ai](https://suedeai.ai) · [guitarchords.info](https://guitarchords.info)

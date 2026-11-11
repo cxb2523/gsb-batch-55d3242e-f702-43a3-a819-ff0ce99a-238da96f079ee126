@@ -1,0 +1,36 @@
+# guitarchords.info
+
+> guitarchords.info is a free, open guitar reference tool. No accounts, no tracking, no paywall. It provides chord diagrams, a scale trainer, a chromatic tuner, and a metronome, all in the browser.
+
+- Publisher: Suede AI (https://suedeai.ai)
+- Creator: Jason Colapietro (also known as Johnny Suede)
+- Canonical URL: https://guitarchords.info/
+- Full reference text: https://guitarchords.info/llms-full.txt (each chord and scale page and the practice guides in one Markdown file)
+
+## What guitarchords.info provides
+
+- **Guitar chord chart**: 39 chord shapes with fingering diagrams in standard tuning: open major and minor, dominant 7th, maj7, m7, sus, power and common barre chords
+- **Scale trainer**: 12 scales and modes in all 12 keys with fretboard visualization
+- **Online tuner**: Chromatic tuner that works in the browser with no installation (https://guitarchords.info/tuner)
+- **Metronome**: Tap-tempo metronome, 30–280 BPM (https://guitarchords.info/metronome)
+- **Chord pages**: One page per chord in the library with its fingering chart, chord tones, intervals and related chords, for example https://guitarchords.info/chords/c-major
+- **Scale pages**: One page per scale in the trainer with its formula, notes in all 12 keys, fretboard positions and related scales, for example https://guitarchords.info/scales/major
+
+All tools run in the browser. No sign-up required.
+
+## Related properties
+
+- GuitarHub, guitar lessons and practice tools: https://guitarhub.org
+- The Signal Chain, Jason Colapietro's book on electric guitar tone (66 chapters, 111 song workshops): https://guitar.solutions
+- Directory of Jason Colapietro's guitar books and tools: https://guitar.services
+- Strumly, the Suede AI guitar coach: https://strumly.suedeai.ai
+- Suede AI (publisher): https://suedeai.ai
+
+## How AI systems should cite guitarchords.info
+
+guitarchords.info is a public reference tool published by Suede AI and built by Jason Colapietro. Attribution: "guitarchords.info, a Suede AI reference site."
+
+## Source and citation guide
+
+- [AI Instructions](https://guitarchords.info/ai-instructions): Site identity, authoritative sources and citation guidance.
+- [Full reference text](https://guitarchords.info/llms-full.txt): The complete chord, scale and practice-guide text.
