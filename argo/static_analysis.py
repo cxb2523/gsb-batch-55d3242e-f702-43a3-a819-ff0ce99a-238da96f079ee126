@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import os
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 from .ranking import split_ref
@@ -61,6 +62,16 @@ _MAX_ANALYZED_FILE_BYTES = 512 * 1024
 _MAX_INDEX_TOTAL_BYTES = 8 * 1024 * 1024
 _MAX_INDEX_REFS_PER_NAME = 8
 _MAX_INDEX_REFS_TOTAL = 8192
+
+_EMPTY_CONTEXT = "(no deterministic static context available)"
+_TRUNCATION_NOTE = "static context truncated to byte budget"
+_OMISSION_NOTE = "static context omitted: byte budget exceeded"
+_FALLBACK_CONTEXT = "(deterministic static context omitted: byte budget exceeded)"
+_LIST_FIELDS = ("calls", "possible_incoming", "local_def_use")
+
+#: Characters that may legitimately follow a cited line number (``12-14``, ``12, :14``,
+#: ``12 (description)``).  Anything else means the locator was not a plain integer.
+_LINE_CONTINUATION = frozenset(" \t-),;)]}")
 
 
 @dataclass(frozen=True)
@@ -444,8 +455,49 @@ def _possible_incoming(repo_dir: Path, target_name: str,
     return list(refs[:max_refs])
 
 
+def _citation_line(ref: str, file: str, raw_line: str) -> tuple[int | None, str | None]:
+    """Validate a split citation's line locator without ever raising.
+
+    ``split_ref`` intentionally accepts loose locators (``12-14``, ``12, :14``,
+    ``readString() line 40``), so it can return an empty line both for a genuinely line-less
+    citation and for a malformed one.  Keep those cases distinct so the note explains what was
+    actually wrong instead of claiming the line was merely absent.
+    """
+    # The tail after the file portion, when the citation used ``file:tail`` form.
+    head, sep, tail = ref.partition(":")
+    tail_after_file = tail if sep and head.strip() == file else None
+
+    if raw_line:
+        try:
+            line = int(raw_line)
+        except (TypeError, ValueError):
+            return None, "citation line is not an integer"
+        if tail_after_file is not None:
+            rest = tail_after_file.lstrip()
+            match = re.match(r"\d+", rest)
+            if match and match.group(0) == raw_line:
+                following = rest[match.end():match.end() + 1]
+                if following and following not in _LINE_CONTINUATION:
+                    # e.g. ``file.py:1.5`` or ``file.py:12abc``; split_ref only kept the digits.
+                    return None, "citation line is not an integer"
+        return line, None
+
+    if tail_after_file is not None and tail_after_file.strip():
+        stripped = tail_after_file.strip()
+        # A method/expression locator (``CTrie.java:addToTree()``) is a citation with no line,
+        # not a malformed line number.
+        if "(" in stripped or stripped.startswith("#"):
+            return None, "citation has no line number"
+        return None, "citation line is not an integer"
+    return None, "citation has no line number"
+
+
 def analyze_location(repo_dir: Path, ref: str, *, max_incoming: int = 8) -> StaticContext:
-    """Return bounded parse-only context for one file:line citation."""
+    """Return bounded parse-only context for one file:line citation.
+
+    Every failure mode is reported in ``notes`` for this location; nothing here raises.  Callers
+    can therefore keep analyzing the remaining citations independently.
+    """
     file, raw_line = split_ref(ref)
     ctx = StaticContext(location=ref)
     root = repo_dir.resolve()
@@ -458,13 +510,9 @@ def analyze_location(repo_dir: Path, ref: str, *, max_incoming: int = 8) -> Stat
     if language is None:
         ctx.notes.append("unsupported source extension")
         return ctx
-    if not raw_line:
-        ctx.notes.append("citation has no line number")
-        return ctx
-    try:
-        line = int(raw_line)
-    except ValueError:
-        ctx.notes.append("citation line is not an integer")
+    line, line_error = _citation_line(ref, file, raw_line)
+    if line_error is not None:
+        ctx.notes.append(line_error)
         return ctx
     try:
         if path.stat().st_size > _MAX_ANALYZED_FILE_BYTES:
@@ -478,27 +526,38 @@ def analyze_location(repo_dir: Path, ref: str, *, max_incoming: int = 8) -> Stat
     except ImportError:
         ctx.notes.append("tree-sitter parser dependencies are unavailable")
         return ctx
-    except (OSError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - enrichment must remain best-effort
         ctx.notes.append(f"static parse unavailable: {exc.__class__.__name__}")
         return ctx
 
-    rel = path.relative_to(root).as_posix()
-    symbol_node = _enclosing_symbol_node(tree_root, language, line, source)
-    if symbol_node is None:
-        ctx.notes.append("no enclosing function/method found for cited line")
-        return ctx
-    symbol = _symbol_from_node(symbol_node, source, rel)
-    ctx.symbol = symbol
+    try:
+        rel = path.relative_to(root).as_posix()
+        symbol_node = _enclosing_symbol_node(tree_root, language, line, source)
+        if symbol_node is None:
+            ctx.notes.append("no enclosing function/method found for cited line")
+            return ctx
+        symbol = _symbol_from_node(symbol_node, source, rel)
+        ctx.symbol = symbol
 
-    ctx.calls = _calls_within(symbol_node, source, language, rel)
-    ctx.local_def_use = _local_def_use(symbol_node, source, line)
-    if symbol is not None:
+        ctx.calls = _calls_within(symbol_node, source, language, rel)
+        ctx.local_def_use = _local_def_use(symbol_node, source, line)
         ctx.possible_incoming = _possible_incoming(root, symbol.name, max_refs=max_incoming)
+    except Exception as exc:  # noqa: BLE001 - malformed syntax must not abort validation
+        ctx.notes.append(f"static context extraction failed: {exc.__class__.__name__}")
     return ctx
 
 
 def _serialized_static_context(contexts: list[dict[str, Any]], max_bytes: int) -> str:
-    """Serialize context under a hard UTF-8 byte budget, preserving valid JSON when possible."""
+    """Serialize context under a hard UTF-8 byte budget, preserving valid JSON when possible.
+
+    Escalation is strictly ordered and never exceeds ``max_bytes``:
+
+    1. full JSON;
+    2. the same JSON with ``calls``, then ``possible_incoming``, then ``local_def_use``
+       trimmed item-by-item (a truncation note is added);
+    3. a minimal structure containing only ``location`` and an explanatory note;
+    4. a fixed placeholder (or the empty string when even that cannot fit).
+    """
     import json
 
     header = (
@@ -510,45 +569,57 @@ def _serialized_static_context(contexts: list[dict[str, Any]], max_bytes: int) -
     def render(items: list[dict[str, Any]]) -> str:
         return header + json.dumps(items, indent=2)
 
+    def fits(text: str) -> bool:
+        return len(text.encode("utf-8")) <= max_bytes
+
     rendered = render(contexts)
-    if len(rendered.encode("utf-8")) <= max_bytes:
+    if fits(rendered):
         return rendered
 
     trimmed = json.loads(json.dumps(contexts))
     for item in trimmed:
-        item.setdefault("notes", []).append("static context truncated to byte budget")
+        notes = item.setdefault("notes", [])
+        if isinstance(notes, list) and _TRUNCATION_NOTE not in notes:
+            notes.append(_TRUNCATION_NOTE)
 
-    list_fields = ("calls", "possible_incoming", "local_def_use")
-    while True:
-        rendered = render(trimmed)
-        if len(rendered.encode("utf-8")) <= max_bytes:
-            return rendered
-        changed = False
+    def trim_one(field_name: str) -> bool:
+        """Drop one value of *field_name*, preferring the last context, without removing a field."""
         for item in reversed(trimmed):
-            for field_name in list_fields:
-                values = item.get(field_name)
-                if isinstance(values, list) and values:
-                    values.pop()
-                    changed = True
-                    break
-            if changed:
+            values = item.get(field_name)
+            if isinstance(values, list) and values:
+                values.pop()
+                return True
+        return False
+
+    while not fits(render(trimmed)):
+        progressed = False
+        # Trim the least-precise evidence first and only move to the next field once the
+        # higher-priority field has been exhausted everywhere.
+        for field_name in _LIST_FIELDS:
+            if trim_one(field_name):
+                progressed = True
                 break
-        if not changed:
+        if not progressed:
             break
+
+    rendered = render(trimmed)
+    if fits(rendered):
+        return rendered
 
     minimal = [
         {
             "location": str(item.get("location", ""))[:256],
-            "notes": ["static context omitted: byte budget exceeded"],
+            "notes": [_OMISSION_NOTE],
         }
         for item in trimmed
     ]
     rendered = render(minimal)
-    if len(rendered.encode("utf-8")) <= max_bytes:
+    if fits(rendered):
         return rendered
 
-    fallback = "(deterministic static context omitted: byte budget exceeded)"
-    return fallback if len(fallback.encode("utf-8")) <= max_bytes else ""
+    if fits(_FALLBACK_CONTEXT):
+        return _FALLBACK_CONTEXT
+    return ""
 
 
 def build_static_context(
@@ -560,11 +631,13 @@ def build_static_context(
 ) -> str:
     """Format deterministic static context for validation prompts under a hard byte bound.
 
-    Unsupported or malformed locations never break validation and never alter a verdict by
-    themselves; they simply produce an unavailable-context note.
+    Only the first ``max_locations`` citations are analyzed.  Unsupported or malformed
+    locations never break validation and never alter a verdict by themselves; they simply
+    produce an unavailable-context note while the remaining citations are still analyzed.
     """
+    limit = max(0, int(max_locations))
     contexts: list[dict[str, Any]] = []
-    for ref in affected[:max_locations]:
+    for ref in list(affected or [])[:limit]:
         try:
             contexts.append(analyze_location(repo_dir, ref).to_dict())
         except Exception as exc:  # noqa: BLE001 - enrichment must never break validation
@@ -573,5 +646,5 @@ def build_static_context(
                 "notes": [f"static analysis unavailable: {exc.__class__.__name__}"],
             })
     if not contexts:
-        return "(no deterministic static context available)"
+        return _EMPTY_CONTEXT
     return _serialized_static_context(contexts, max_bytes)
