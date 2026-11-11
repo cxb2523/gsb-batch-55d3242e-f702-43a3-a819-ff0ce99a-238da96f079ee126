@@ -538,13 +538,16 @@ function createMediaActionsManager({
 
   /**
    * Choose the subtitle once every download is in. When the plugin manages
-   * subtitles they are ranked, unless the viewer changed the subtitle since the
-   * automatic selection.
+   * subtitles they are ranked with the same rules as at file load
+   * (pickSubtitle), unless the viewer changed the subtitle since the
+   * automatic selection — a finished download never undoes that choice.
    *
-   * A manual download always shows one of the downloads, as the viewer asked
-   * for them: the best-ranked full one, then the best-ranked forced one, when
-   * the plugin manages subtitles. Otherwise, or if none is in a preferred
-   * language, the newest download, as loadTrack used to.
+   * A manual download still shows one of the downloads, as the viewer asked
+   * for them — a full one in the audio's own language included — but the
+   * language rules hold here too: never a full subtitle ranked below the
+   * audio's language, and a signs track only in the audio's language. When
+   * the plugin does not manage subtitles, the newest download is shown, as
+   * loadTrack used to.
    */
   function selectAfterDownloads(generation, paths, manual) {
     if (isStale(generation)) return;
@@ -552,31 +555,45 @@ function createMediaActionsManager({
     const current = selectedTrack(tracks, 'sub');
     const currentId = current ? current.id : null;
 
-    if (!manual && managesSubtitles()) {
-      if (autoSubtitle.generation === generation && currentId !== autoSubtitle.id) {
-        log('Subtitle changed since the automatic selection, keeping it');
-        return;
-      }
-      const preferred = parsePreferredLanguages(preferences.get('preferred_languages'));
-      const id = applySubtitle(tracks, preferred, selectedTrack(tracks, 'audio'));
+    if (!managesSubtitles()) {
+      const downloaded = paths.map((path) => findTrackByPath(tracks, path)).filter(Boolean);
+      const choice = downloaded[downloaded.length - 1] || null;
+      if (choice && choice.id !== currentId) mpv.set('sid', String(choice.id));
+      return;
+    }
+
+    // A subtitle the viewer picked since the automatic selection is theirs,
+    // and a finished download must not switch it back.
+    if (autoSubtitle.generation === generation && currentId !== autoSubtitle.id) {
+      log('Subtitle changed since the automatic selection, keeping it');
+      return;
+    }
+
+    const preferred = parsePreferredLanguages(preferences.get('preferred_languages'));
+    const audio = selectedTrack(tracks, 'audio');
+
+    if (!manual) {
+      const id = applySubtitle(tracks, preferred, audio);
       log(`Subtitle selection after downloads: sid=${id}`);
       return;
     }
 
-    const downloaded = paths.map((path) => findTrackByPath(tracks, path)).filter(Boolean);
-    let choice = downloaded[downloaded.length - 1] || null;
-    if (managesSubtitles()) {
-      const preferred = parsePreferredLanguages(preferences.get('preferred_languages'));
-      const usable = downloaded.filter((track) => !isCommentaryTrack(track));
-      choice =
-        bestRankedTrack(
-          usable.filter((track) => !isForcedSubtitle(track)),
-          preferred
-        ) ||
-        bestRankedTrack(usable.filter(isForcedSubtitle), preferred) ||
-        choice;
+    const downloaded = paths
+      .map((path) => findTrackByPath(tracks, path))
+      .filter(Boolean)
+      .filter((track) => !isCommentaryTrack(track));
+    // The viewer asked for these subtitles, so one in the audio's own
+    // language is shown too; one ranked below the audio's language is not.
+    const decision = chooseSubtitle(downloaded, preferred, audio, true);
+    if (decision.action !== 'select') {
+      log('No downloaded subtitle ranks high enough for the audio, keeping the subtitle as is');
+      return;
     }
-    if (choice && choice.id !== currentId) mpv.set('sid', String(choice.id));
+    if (decision.track.id !== currentId) {
+      mpv.set('sid', String(decision.track.id));
+      autoSubtitle = { generation: fileGeneration, id: decision.track.id };
+    }
+    log(`Manual download selection: sid=${decision.track.id}`);
   }
 
   /**
@@ -875,13 +892,23 @@ function createMediaActionsManager({
   function pickSubtitle(tracks, preferred, audio) {
     const alwaysOn = Boolean(preferences.get('subtitles_always_on'));
     const subtitles = tracks.filter((track) => track.type === 'sub' && !isCommentaryTrack(track));
+    return chooseSubtitle(subtitles, preferred, audio, alwaysOn);
+  }
+
+  /**
+   * pickSubtitle's decision among a given set of subtitles. sameLanguageFull
+   * also allows a full subtitle in the audio's own language (the viewer wants
+   * subtitles whatever the audio), but never one ranked below the audio's
+   * language.
+   */
+  function chooseSubtitle(subtitles, preferred, audio, sameLanguageFull) {
     const full = subtitles.filter((track) => !isForcedSubtitle(track));
     const forced = subtitles.filter(isForcedSubtitle);
 
     // Untagged audio could be in any language, so there is no basis to choose,
     // unless the viewer wants subtitles whatever the audio.
     if (!audio || !isKnownLanguage(audio.lang)) {
-      const track = alwaysOn ? bestRankedTrack(full, preferred) : null;
+      const track = sameLanguageFull ? bestRankedTrack(full, preferred) : null;
       return track ? { action: 'select', track } : KEEP_SUBTITLE;
     }
 
@@ -889,7 +916,7 @@ function createMediaActionsManager({
 
     const shownFull = full.filter((track) => {
       const rank = preferenceRank(preferred, track.lang);
-      return alwaysOn ? rank <= audioRank : rank < audioRank;
+      return sameLanguageFull ? rank <= audioRank : rank < audioRank;
     });
     const bestFull = bestRankedTrack(shownFull, preferred);
     if (bestFull) return { action: 'select', track: bestFull };

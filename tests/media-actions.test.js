@@ -1096,3 +1096,84 @@ test('a downloaded subtitle is shown with always show subtitles on', async () =>
 
   assert.equal(mpv.selected.sid, '2');
 });
+
+test('a downloaded full subtitle is not selected when the audio language ranks higher', async () => {
+  const mpv = mpvWithTracks([
+    { id: 1, type: 'audio', lang: 'pol', title: 'Polski', selected: true },
+  ]);
+  const { manager } = loadMediaActions({
+    mpv,
+    preferences: selectionPreferences('pol,eng'),
+    fetchPlaybackInfo: externalEnglishSubtitle(),
+  });
+
+  manager.updateFromFileUrl(E01);
+  manager.selectPreferredTracks();
+  await manager.downloadAllSubtitles('https://jf', 'e01', 'K');
+
+  // The English subtitle is attached but not shown: the viewer prefers
+  // Polish over English and already has Polish audio.
+  assert.equal(mpv.tracks.at(-1).lang, 'en');
+  assert.equal(mpv.selected.sid, undefined);
+});
+
+test('a manual download does not select a full subtitle ranked below the audio', async () => {
+  const mpv = mpvWithTracks([
+    { id: 1, type: 'audio', lang: 'pol', title: 'Polski', selected: true },
+  ]);
+  const { manager } = loadMediaActions({
+    mpv,
+    preferences: selectionPreferences('pol,eng'),
+    fetchPlaybackInfo: externalEnglishSubtitle(),
+  });
+
+  manager.updateFromFileUrl(E01);
+  manager.selectPreferredTracks();
+  await manager.downloadAllSubtitles('https://jf', 'e01', 'K', { manual: true });
+
+  assert.equal(mpv.selected.sid, undefined);
+});
+
+test('a manual download finished after the viewer switched subtitles keeps that choice', async () => {
+  const mpv = mpvWithTracks([
+    { id: 1, type: 'audio', lang: 'jpn', title: 'Japanese', selected: true },
+    { id: 2, type: 'sub', lang: 'eng', title: 'Signs', forced: true },
+    { id: 3, type: 'sub', lang: 'jpn', title: 'Japanese' },
+  ]);
+  const { manager } = loadMediaActions({
+    mpv,
+    preferences: selectionPreferences(),
+    fetchPlaybackInfo: externalEnglishSubtitle(),
+  });
+
+  manager.updateFromFileUrl(E01);
+  manager.selectPreferredTracks();
+  mpv.set('sid', '3'); // the viewer switches to the Japanese subtitle
+  await manager.downloadAllSubtitles('https://jf', 'e01', 'K', { manual: true });
+
+  assert.equal(mpv.selected.sid, '3');
+});
+
+test('a late download for the previous file adds and selects nothing', async () => {
+  const download = deferred();
+  const mpv = mpvWithTracks([
+    { id: 1, type: 'audio', lang: 'jpn', title: 'Japanese', selected: true },
+  ]);
+  const { manager } = loadMediaActions({
+    mpv,
+    preferences: selectionPreferences(),
+    http: { download: () => download.promise },
+    fetchPlaybackInfo: externalEnglishSubtitle(),
+  });
+
+  manager.updateFromFileUrl(E01);
+  manager.selectPreferredTracks();
+  const pending = manager.downloadAllSubtitles('https://jf', 'e01', 'K');
+  await new Promise((r) => setImmediate(r));
+  manager.updateFromFileUrl(E02);
+  download.resolve();
+  await pending;
+
+  assert.deepEqual(mpv.commands, []);
+  assert.equal(mpv.selected.sid, undefined);
+});
