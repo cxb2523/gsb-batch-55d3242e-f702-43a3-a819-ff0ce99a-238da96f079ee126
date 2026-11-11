@@ -1,0 +1,396 @@
+"""
+Crawler API Configuration
+
+This module provides the CrawlerConfig class for configuring crawler jobs.
+"""
+
+from typing import Optional, List, Dict, Literal, Union
+from ..api_config import BaseApiConfig
+from ..scrape_config import _UNSET, _Unset, _resolve_unblocker
+
+
+class CrawlerConfig(BaseApiConfig):
+    """
+    Configuration for Scrapfly Crawler API
+
+    The Crawler API performs recursive website crawling with advanced
+    configuration, content extraction, and artifact storage.
+
+    Example:
+        ```python
+        from scrapfly import ScrapflyClient, CrawlerConfig
+        client = ScrapflyClient(key='YOUR_API_KEY')
+        config = CrawlerConfig(
+            url='https://example.com',
+            page_limit=100,
+            max_depth=3,
+            content_formats=['markdown', 'html']
+        )
+
+        # Start crawl
+        start_response = client.start_crawl(config)
+        uuid = start_response.uuid
+
+        # Poll status
+        status = client.get_crawl_status(uuid)
+
+        # Get results when complete
+        if status.is_complete:
+            artifact = client.get_crawl_artifact(uuid)
+            pages = artifact.get_pages()
+        ```
+    """
+
+    WEBHOOK_CRAWLER_STARTED = 'crawler_started'
+    WEBHOOK_CRAWLER_URL_VISITED = 'crawler_url_visited'
+    WEBHOOK_CRAWLER_URL_SKIPPED = 'crawler_url_skipped'
+    WEBHOOK_CRAWLER_URL_DISCOVERED = 'crawler_url_discovered'
+    WEBHOOK_CRAWLER_URL_FAILED = 'crawler_url_failed'
+    WEBHOOK_CRAWLER_STOPPED = 'crawler_stopped'
+    WEBHOOK_CRAWLER_CANCELLED = 'crawler_cancelled'
+    WEBHOOK_CRAWLER_FINISHED = 'crawler_finished'
+    WEBHOOK_CRAWLER_SEARCH_READY = 'crawler_search_ready'
+    WEBHOOK_CRAWLER_SEARCH_FAILED = 'crawler_search_failed'
+    WEBHOOK_CRAWLER_UPDATED = 'crawler_updated'
+
+    # Auto-refresh interval bounds. The floor decides the cost: a crawl
+    # refreshing every minute re-scrapes the whole site 1,440 times a day.
+    REFRESH_MIN_INTERVAL = 3600
+    REFRESH_MAX_INTERVAL = 90 * 24 * 3600
+
+    ALL_WEBHOOK_EVENTS = [
+        WEBHOOK_CRAWLER_STARTED,
+        WEBHOOK_CRAWLER_URL_VISITED,
+        WEBHOOK_CRAWLER_URL_SKIPPED,
+        WEBHOOK_CRAWLER_URL_DISCOVERED,
+        WEBHOOK_CRAWLER_URL_FAILED,
+        WEBHOOK_CRAWLER_STOPPED,
+        WEBHOOK_CRAWLER_CANCELLED,
+        WEBHOOK_CRAWLER_FINISHED,
+        WEBHOOK_CRAWLER_SEARCH_READY,
+        WEBHOOK_CRAWLER_SEARCH_FAILED,
+        WEBHOOK_CRAWLER_UPDATED,
+    ]
+
+    def __init__(
+        self,
+        url: Optional[str] = None,
+        # URL source — exactly one of url, url_list, remote_url_list must be set.
+        # url enables discovery (sitemaps/robots/links); url_list and
+        # remote_url_list crawl an explicit set of URLs with discovery off.
+        url_list: Optional[List[str]] = None,
+        remote_url_list: Optional[str] = None,
+        # Crawl limits
+        page_limit: Optional[int] = None,
+        max_depth: Optional[int] = None,
+        max_duration: Optional[int] = None,
+
+        # Path filtering (mutually exclusive)
+        exclude_paths: Optional[List[str]] = None,
+        include_only_paths: Optional[List[str]] = None,
+
+        # Advanced crawl options
+        ignore_base_path_restriction: bool = False,
+        follow_external_links: bool = False,
+        allowed_external_domains: Optional[List[str]] = None,
+        # Subdomain control (NEW — added in 0.8.28 to match the documented public API).
+        # Server-side default for follow_internal_subdomains is True; we leave the
+        # field unset by default so the server applies its own default.
+        follow_internal_subdomains: Optional[bool] = None,
+        allowed_internal_subdomains: Optional[List[str]] = None,
+
+        # Request configuration
+        headers: Optional[Dict[str, str]] = None,
+        delay: Optional[int] = None,
+        user_agent: Optional[str] = None,
+        max_concurrency: Optional[int] = None,
+        rendering_delay: Optional[int] = None,
+
+        # Crawl strategy options
+        use_sitemaps: bool = False,
+        # respect_robots_txt: server default is True. Leave unset (None) so the
+        # server applies its own default rather than forcing False on every request.
+        respect_robots_txt: Optional[bool] = None,
+        ignore_no_follow: bool = False,
+
+        # Cache options
+        cache: bool = False,
+        cache_ttl: Optional[int] = None,
+        cache_clear: bool = False,
+
+        # Content extraction
+        content_formats: Optional[List[Literal['html', 'markdown', 'text', 'clean_html']]] = None,
+        extraction_rules: Optional[Dict] = None,
+
+        # Web scraping features
+        asp: Union[bool, _Unset] = _UNSET,  # deprecated alias of `unblocker`, which is declared last
+        proxy_pool: Optional[str] = None,
+        country: Optional[str] = None,
+
+        # Webhook integration
+        webhook_name: Optional[str] = None,
+        webhook_events: Optional[List[str]] = None,
+
+        # Cost control
+        max_api_credit: Optional[int] = None,
+
+        # New options follow every legacy positional argument. Inserting them
+        # above asp would reinterpret existing bypass/proxy settings as search
+        # and recurring refresh settings.
+        # Search index built during the crawl, queried through
+        # client.crawl_search() / client.crawl_prompt() once READY.
+        search: bool = False,
+
+        # Auto-refresh: re-scrape this crawl's own URLs in place, on a period.
+        # Same crawler_uuid, same artifacts, only changed pages re-indexed.
+        refresh: bool = False,
+        refresh_interval: Optional[int] = None,
+
+        unblocker: Union[bool, _Unset] = _UNSET
+    ):
+        """
+        Initialize a CrawlerConfig
+
+        Args:
+            url: Starting URL for the crawl (required)
+            page_limit: Maximum number of pages to crawl
+            max_depth: Maximum crawl depth from starting URL
+            max_duration: Maximum crawl duration in seconds
+
+            exclude_paths: List of path patterns to exclude (mutually exclusive with include_only_paths)
+            include_only_paths: List of path patterns to include only (mutually exclusive with exclude_paths)
+
+            ignore_base_path_restriction: Allow crawling outside the base path
+            follow_external_links: Follow links to external domains
+            allowed_external_domains: List of external domains allowed when follow_external_links is True
+
+            headers: Custom HTTP headers for requests
+            delay: Delay between requests in milliseconds
+            user_agent: Custom user agent string
+            max_concurrency: Maximum concurrent requests
+            rendering_delay: Delay for JavaScript rendering in milliseconds
+
+            use_sitemaps: Use sitemap.xml to discover URLs
+            respect_robots_txt: Respect robots.txt rules
+            ignore_no_follow: Ignore rel="nofollow" attributes
+
+            cache: Enable caching
+            cache_ttl: Cache time-to-live in seconds
+            cache_clear: Clear cache before crawling
+
+            content_formats: List of content formats to extract ('html', 'markdown', 'text', 'clean_html')
+            extraction_rules: Custom extraction rules
+
+            search: Build a semantic search index while the crawl runs
+
+            refresh: Keep this crawl fresh by re-scraping its own URLs in place
+            refresh_interval: Seconds between refresh runs (3600 to 7776000)
+
+            proxy_pool: Proxy pool for every crawled page: 'basic' (datacenter,
+                Unblocker off), 'unblocker' (residential, Unblocker on),
+                'unblocker_ultra' (residential, Unblocker on, the only pool accepted by
+                targets and protections that have a price of their own) or 'auto'
+                (the API picks the pool from the target's profile). Constants:
+                ScrapeConfig.BASIC, ScrapeConfig.UNBLOCKER, ScrapeConfig.UNBLOCKER_ULTRA,
+                ScrapeConfig.AUTO. The proxy pool sets the Unblocker itself.
+            unblocker: Deprecated: use `proxy_pool` ('unblocker_ultra' for the
+                Unblocker). The migration guide covers requests written before the
+                proxy pools: https://scrapfly.io/new-pricing#legacy-spellings
+            asp: Deprecated alias of `unblocker`. When both are supplied, `asp` wins.
+            country: Target country for geo-located content
+
+            webhook_name: Webhook name for event notifications
+            webhook_events: List of webhook events to trigger
+
+            max_api_credit: Maximum API credits to spend on this crawl
+        """
+        if exclude_paths and include_only_paths:
+            raise ValueError("exclude_paths and include_only_paths are mutually exclusive")
+
+        if refresh_interval is not None and not (self.REFRESH_MIN_INTERVAL <= refresh_interval <= self.REFRESH_MAX_INTERVAL):
+            raise ValueError(
+                f"refresh_interval must be between {self.REFRESH_MIN_INTERVAL} and {self.REFRESH_MAX_INTERVAL} seconds"
+            )
+        if refresh_interval is not None and not refresh:
+            raise ValueError("refresh_interval requires refresh=True")
+
+        sources_set = sum(1 for v in (url, url_list, remote_url_list) if v)
+        if sources_set == 0:
+            raise ValueError("Provide one of: url, url_list, remote_url_list")
+        if sources_set > 1:
+            raise ValueError("Only one of url, url_list, remote_url_list can be set")
+
+        params: Dict = {}
+        if url:
+            params['url'] = url
+        if url_list:
+            params['url_list'] = url_list
+        if remote_url_list:
+            params['remote_url_list'] = remote_url_list
+
+        # Add optional parameters
+        if page_limit is not None:
+            params['page_limit'] = page_limit
+        if max_depth is not None:
+            params['max_depth'] = max_depth
+        if max_duration is not None:
+            params['max_duration'] = max_duration
+
+        # Path filtering
+        if exclude_paths:
+            params['exclude_paths'] = exclude_paths
+        if include_only_paths:
+            params['include_only_paths'] = include_only_paths
+
+        # Advanced options
+        if ignore_base_path_restriction:
+            params['ignore_base_path_restriction'] = True
+        if follow_external_links:
+            params['follow_external_links'] = True
+        if allowed_external_domains:
+            params['allowed_external_domains'] = allowed_external_domains
+        # Subdomain control (NEW). Both fields are tri-state: None means
+        # "unset" (server default applies); explicit True/False / list overrides.
+        if follow_internal_subdomains is not None:
+            params['follow_internal_subdomains'] = follow_internal_subdomains
+        if allowed_internal_subdomains:
+            params['allowed_internal_subdomains'] = allowed_internal_subdomains
+
+        # Request configuration
+        if headers:
+            params['headers'] = headers
+        if delay is not None:
+            params['delay'] = delay
+        if user_agent:
+            params['user_agent'] = user_agent
+        if max_concurrency is not None:
+            params['max_concurrency'] = max_concurrency
+        if rendering_delay is not None:
+            params['rendering_delay'] = rendering_delay
+
+        # Crawl strategy
+        if use_sitemaps:
+            params['use_sitemaps'] = True
+        # Tri-state: None = let server default win (default True). Explicit
+        # True/False overrides.
+        if respect_robots_txt is not None:
+            params['respect_robots_txt'] = respect_robots_txt
+        if ignore_no_follow:
+            params['ignore_no_follow'] = True
+
+        # Cache
+        if cache:
+            params['cache'] = True
+        if cache_ttl is not None:
+            params['cache_ttl'] = cache_ttl
+        if cache_clear:
+            params['cache_clear'] = True
+
+        # Content extraction
+        if content_formats:
+            params['content_formats'] = content_formats
+        if extraction_rules:
+            params['extraction_rules'] = extraction_rules
+
+        # Search index
+        if search:
+            params['search'] = True
+
+        # Auto-refresh. The interval is omitted when unset so the server
+        # default period applies.
+        if refresh:
+            params['refresh'] = True
+        if refresh_interval is not None:
+            params['refresh_interval'] = refresh_interval
+
+        # Web scraping features. Both input names collapse here, and the key
+        # emitted to POST /crawl stays `asp`: published SDK versions are
+        # immutable and upgraded per installation, so emitting `unblocker`
+        # against an API deployment that has not learned it yet would silently
+        # drop a paid feature (crawl succeeds, is billed, returns blocked pages).
+        if _resolve_unblocker(asp, unblocker):
+            params['asp'] = True
+        if proxy_pool:
+            params['proxy_pool'] = proxy_pool
+        if country:
+            params['country'] = country
+
+        # Webhooks
+        if webhook_name:
+            params['webhook_name'] = webhook_name
+
+        if webhook_events:
+            assert all(
+                event in self.ALL_WEBHOOK_EVENTS for event in webhook_events
+            ), f"Invalid webhook events. Valid events are: {self.ALL_WEBHOOK_EVENTS}"
+            
+            params['webhook_events'] = webhook_events
+
+        # Cost control
+        if max_api_credit is not None:
+            params['max_api_credit'] = max_api_credit
+
+        self._params = params
+
+    @property
+    def unblocker(self) -> bool:
+        """Anti-bot bypass toggle, the current name for what used to be `asp`.
+
+        Deprecated: use `proxy_pool` ('unblocker_ultra' for the Unblocker). The
+        migration guide covers requests written before the proxy pools:
+        https://scrapfly.io/new-pricing#legacy-spellings
+
+        Backed by the single `asp` entry of the request body, so reading or
+        writing either name sees the same state. Assigning a falsy value drops
+        the key entirely, which is how "disabled" has always been expressed.
+        """
+
+        return bool(self._params.get('asp', False))
+
+    @unblocker.setter
+    def unblocker(self, value: bool):
+        if value:
+            self._params['asp'] = True
+        else:
+            self._params.pop('asp', None)
+
+    @property
+    def asp(self) -> bool:
+        """Deprecated alias of `unblocker`."""
+
+        return self.unblocker
+
+    @asp.setter
+    def asp(self, value: bool):
+        self.unblocker = value
+
+    def to_api_params(self, key: Optional[str] = None) -> Dict:
+        """
+        Convert config to API parameters
+
+        :param key: API key (optional, can be added by client)
+        :return: Dictionary of API parameters
+        """
+        params = self._params.copy()
+        if key:
+            params['key'] = key
+        return params
+
+    def to_multipart_parts(self) -> Dict:
+        """
+        Split the configuration into the two parts required by the
+        ``POST /crawl`` multipart endpoint:
+
+        - ``config``: a JSON object with every field except ``url_list``
+        - ``urls``: a newline-delimited text payload, one URL per line
+          (only present when an explicit URL list was provided)
+
+        :return: dict with keys ``config`` (dict) and ``urls`` (Optional[str])
+        """
+        body = self._params.copy()
+        urls_blob: Optional[str] = None
+        if 'url_list' in body:
+            urls = body.pop('url_list')
+            if urls:
+                urls_blob = "\n".join(urls)
+        return {'config': body, 'urls': urls_blob}

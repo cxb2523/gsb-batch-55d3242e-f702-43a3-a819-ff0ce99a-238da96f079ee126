@@ -1,0 +1,393 @@
+import hashlib
+import warnings
+from enum import Enum
+from typing import Optional, Union, Dict, List
+from urllib.parse import urlencode
+
+from .api_config import BaseApiConfig
+
+
+class ProxyPool(Enum):
+    DATACENTER = "datacenter"
+    RESIDENTIAL = "residential"
+
+
+class OperatingSystem(Enum):
+    LINUX = "linux"
+    WINDOWS = "windows"
+    MACOS = "macos"
+    ANDROID = "android"
+    IPHONE = "iphone"
+    IPAD = "ipad"
+
+
+class LinkedService(Enum):
+    """
+    Secret managers a Cloud Browser vault can mirror its items from.
+
+    The value is the `linked_service` discriminator on the vault endpoints, and
+    the same string is the `source` of every item the syncer owns.
+
+    ONE_PASSWORD is the only provider the server accepts today. A plain string
+    is still accepted wherever this enum is, so a provider the server registers
+    later is reachable without an SDK release.
+    """
+
+    ONE_PASSWORD = "1password"
+
+
+class BrowserConfig(BaseApiConfig):
+    """Cloud Browser session options, sent as query parameters of the WebSocket URL.
+
+    `proxy_pool` takes the Cloud Browser's own pools: 'datacenter', 'residential' (ProxyPool) or
+    'tor'; a session on `byop_proxy` runs as 'byop'. The Web Scraping API proxy pools ('basic',
+    'unblocker', 'unblocker_ultra', 'auto') do not apply here.
+
+    Deprecated:
+        unblock, unblock_timeout: the Cloud Browser never reads them, so no anti-bot
+            bypass runs on the session. Setting either emits a DeprecationWarning.
+            For an unblocked session, call `ScrapflyClient.cloud_browser_unblock(url)`
+            and connect to the `ws_url` it returns.
+    """
+
+    CLOUD_BROWSER_HOST = 'wss://browser.scrapfly.io'
+
+    def __init__(
+        self,
+        proxy_pool: Optional[Union[str, ProxyPool]] = None,
+        os: Optional[Union[str, OperatingSystem]] = None,
+        session: Optional[str] = None,
+        country: Optional[str] = None,
+        lang: Optional[str] = None,
+        languages: Optional[Union[str, List[str]]] = None,
+        auto_close: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        debug: Optional[bool] = None,
+        extensions: Optional[List[str]] = None,
+        block_images: Optional[bool] = None,
+        block_styles: Optional[bool] = None,
+        block_fonts: Optional[bool] = None,
+        block_media: Optional[bool] = None,
+        screenshot: Optional[bool] = None,
+        resolution: Optional[str] = None,
+        target_url: Optional[str] = None,
+        cache: Optional[bool] = None,
+        blacklist: Optional[bool] = None,
+        unblock: Optional[bool] = None,
+        unblock_timeout: Optional[int] = None,
+        browser_brand: Optional[str] = None,
+        byop_proxy: Optional[str] = None,
+        enable_mcp: Optional[bool] = None,
+        solve_captcha: Optional[bool] = None,
+        vault: Optional[str] = None,
+        vault_key: Optional[str] = None,
+        enable_vnc: Optional[bool] = None,
+        vnc_password: Optional[str] = None,
+        enable_rtc: Optional[bool] = None,
+        rtc_username: Optional[str] = None,
+        rtc_password: Optional[str] = None,
+        hitl_allowed_networks: Optional[Union[str, List[str]]] = None,
+        downloads_stream: Optional[bool] = None,
+    ):
+        if timeout is not None and timeout > 1800:
+            raise ValueError('timeout cannot exceed 1800 seconds (30 minutes)')
+
+        if unblock is not None or unblock_timeout is not None:
+            warnings.warn(
+                "BrowserConfig 'unblock' and 'unblock_timeout' are deprecated: the Cloud Browser "
+                "never reads them, so no anti-bot bypass runs on the session. Use "
+                "ScrapflyClient.cloud_browser_unblock(url) and connect to the ws_url it returns.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        if isinstance(proxy_pool, str):
+            try:
+                proxy_pool = ProxyPool(proxy_pool)
+            except ValueError:
+                pass
+
+        if isinstance(os, str):
+            try:
+                os = OperatingSystem(os)
+            except ValueError:
+                pass
+
+        self.proxy_pool = proxy_pool
+        self.os = os
+        self.session = session
+        self.country = country
+        # Browser UI language — the singular navigator.language base tag
+        # (e.g. "en"). When omitted, the server derives it from `country`.
+        self.lang = lang
+        # Ordered language preference list — drives navigator.languages and
+        # the q-weighted Accept-Language header (e.g. ["fr-FR", "fr", "en-US"]).
+        # Capped server-side at 3 entries; accept a list or a comma-separated
+        # string and normalize to a comma-separated string on the wire (the
+        # same shape `extensions` uses), so the API can split it back.
+        if isinstance(languages, list):
+            languages = ','.join(s.strip() for s in languages if s and s.strip())
+        self.languages = languages or None
+        self.auto_close = auto_close
+        self.timeout = timeout
+        self.debug = debug
+        self.extensions = extensions
+        self.block_images = block_images
+        self.block_styles = block_styles
+        self.block_fonts = block_fonts
+        self.block_media = block_media
+        self.screenshot = screenshot
+        self.resolution = resolution
+        self.target_url = target_url
+        self.cache = cache
+        self.blacklist = blacklist
+        self.unblock = unblock
+        self.unblock_timeout = unblock_timeout
+        self.browser_brand = browser_brand
+        # BYOP (Bring Your Own Proxy): full proxy URL
+        # Format: {protocol}://{user}:{pass}@{host}:{port}
+        # Supported protocols: http, https, socks5, socks5h, socks5+udp, socks5h+udp
+        # The +udp variants enable HTTP/3 (QUIC) via SOCKS5 UDP ASSOCIATE — only
+        # works with proxy providers that implement RFC 1928 UDP ASSOCIATE.
+        # Requires a Custom plan subscription. See:
+        # https://scrapfly.io/docs/cloud-browser-api/byop
+        self.byop_proxy = byop_proxy
+        self.enable_mcp = enable_mcp
+        # SolveCaptcha: arm the Cloud Browser's built-in captcha detector + solver on
+        # the first page attach. Turnstile, DataDome slider, reCAPTCHA,
+        # GeeTest, PerimeterX hold, and puzzle captchas are handled
+        # automatically. Billed per solve; failures cost nothing.
+        # https://scrapfly.io/docs/cloud-browser-api/captcha-solver
+        self.solve_captcha = solve_captcha
+        # Cloud Browser Credential Vault binding. `vault` is the vault NAME
+        # (the human name you gave it at POST /vault — alphanumeric); the
+        # server resolves it to the underlying vault scoped to your api-key's
+        # project and environment. `vault_key` is the base64 32-byte
+        # customer-held key returned (once) by POST /vault or POST
+        # /vault/<id>/rotate. Both are forwarded as query params on the
+        # wss:// URL — the server uses them to decrypt items into the
+        # session's secret broker. Treat `vault_key` as a credential: never
+        # log it, never persist it server-side.
+        self.vault = vault
+        self.vault_key = vault_key
+        self.enable_vnc = enable_vnc
+        self.vnc_password = vnc_password
+        self.enable_rtc = enable_rtc
+        self.rtc_username = rtc_username
+        self.rtc_password = rtc_password
+        if isinstance(hitl_allowed_networks, list):
+            hitl_allowed_networks = ','.join(s.strip() for s in hitl_allowed_networks if s and s.strip())
+        self.hitl_allowed_networks = hitl_allowed_networks or None
+        # Large downloaded files come back from ScrapiumBrowser.getDownloads as IO stream
+        # handles instead of inline base64: read them with CloudBrowserDownloads.
+        # https://scrapfly.io/docs/cloud-browser-api/file-downloads#large-downloads
+        self.downloads_stream = downloads_stream
+
+    @staticmethod
+    def project_salt(api_key: str) -> str:
+        """Return the deterministic project salt for an api_key:
+        sha256(api_key)[:8]. The server returns the same value via the
+        X-Browser-Project-Salt response header on VNC-enabled upgrades, where
+        the salt is also the VNC password prefix (<salt>-<password>).
+        """
+        return hashlib.sha256(api_key.encode('utf-8')).hexdigest()[:8]
+
+    def vnc_client_password(self, api_key: str) -> str:
+        """Return the password a native VNC client must type to attach to a
+        session created with this config: "<project_salt>-<vnc_password>".
+
+        Required by the VNC TCP endpoint (port 5901), which the server salts
+        at allocation. The WebSocket endpoint /run/<run_id>/vnc takes the raw
+        vnc_password instead.
+        """
+        if not self.enable_vnc or not self.vnc_password:
+            raise ValueError('enable_vnc and vnc_password must both be set on this BrowserConfig')
+
+        return f'{self.project_salt(api_key)}-{self.vnc_password}'
+
+    def websocket_url(self, api_key: str, host: Optional[str] = None) -> str:
+        params = {'api_key': api_key}
+
+        if self.proxy_pool is not None:
+            params['proxy_pool'] = self.proxy_pool.value if isinstance(self.proxy_pool, ProxyPool) else self.proxy_pool
+
+        if self.os is not None:
+            params['os'] = self.os.value if isinstance(self.os, OperatingSystem) else self.os
+
+        if self.session is not None:
+            params['session'] = self.session
+
+        if self.country is not None:
+            params['country'] = self.country
+
+        if self.lang is not None:
+            params['lang'] = self.lang
+
+        if self.languages is not None:
+            params['languages'] = self.languages
+
+        if self.auto_close is not None:
+            params['auto_close'] = self._bool_to_http(self.auto_close)
+
+        if self.timeout is not None:
+            params['timeout'] = str(self.timeout)
+
+        if self.debug is not None:
+            params['debug'] = self._bool_to_http(self.debug)
+
+        if self.extensions:
+            params['extensions'] = ','.join(self.extensions)
+
+        if self.block_images is not None:
+            params['block_images'] = self._bool_to_http(self.block_images)
+
+        if self.block_styles is not None:
+            params['block_styles'] = self._bool_to_http(self.block_styles)
+
+        if self.block_fonts is not None:
+            params['block_fonts'] = self._bool_to_http(self.block_fonts)
+
+        if self.block_media is not None:
+            params['block_media'] = self._bool_to_http(self.block_media)
+
+        if self.screenshot is not None:
+            params['screenshot'] = self._bool_to_http(self.screenshot)
+
+        if self.resolution is not None:
+            params['resolution'] = self.resolution
+
+        if self.target_url is not None:
+            params['target_url'] = self.target_url
+
+        if self.cache is not None:
+            params['cache'] = self._bool_to_http(self.cache)
+
+        if self.blacklist is not None:
+            params['blacklist'] = self._bool_to_http(self.blacklist)
+
+        # Deprecated and unread by the Cloud Browser; still forwarded so the URL a
+        # caller already builds stays byte-identical.
+        if self.unblock is not None:
+            params['unblock'] = self._bool_to_http(self.unblock)
+
+        if self.unblock_timeout is not None:
+            params['unblock_timeout'] = str(self.unblock_timeout)
+
+        if self.browser_brand is not None:
+            params['browser_brand'] = self.browser_brand
+
+        if self.byop_proxy is not None:
+            params['byop_proxy'] = self.byop_proxy
+
+        if self.enable_mcp is not None:
+            params['enable_mcp'] = self._bool_to_http(self.enable_mcp)
+
+        if self.solve_captcha is not None:
+            params['solve_captcha'] = self._bool_to_http(self.solve_captcha)
+
+        if self.vault is not None:
+            params['vault'] = self.vault
+
+        if self.vault_key is not None:
+            params['vault_key'] = self.vault_key
+
+        if self.enable_vnc is not None:
+            params['enable_vnc'] = self._bool_to_http(self.enable_vnc)
+
+        if self.vnc_password is not None:
+            params['vnc_password'] = self.vnc_password
+
+        if self.enable_rtc is not None:
+            params['enable_rtc'] = self._bool_to_http(self.enable_rtc)
+
+        if self.rtc_username is not None:
+            params['rtc_username'] = self.rtc_username
+
+        if self.rtc_password is not None:
+            params['rtc_password'] = self.rtc_password
+
+        if self.hitl_allowed_networks is not None:
+            params['hitl_allowed_networks'] = self.hitl_allowed_networks
+
+        if self.downloads_stream is not None:
+            params['downloads_stream'] = self._bool_to_http(self.downloads_stream)
+
+        base_host = host or self.CLOUD_BROWSER_HOST
+        return base_host + '?' + urlencode(params)
+
+    def to_dict(self) -> Dict:
+        return {
+            'proxy_pool': self.proxy_pool.value if isinstance(self.proxy_pool, ProxyPool) else self.proxy_pool,
+            'os': self.os.value if isinstance(self.os, OperatingSystem) else self.os,
+            'session': self.session,
+            'country': self.country,
+            'lang': self.lang,
+            'languages': self.languages,
+            'auto_close': self.auto_close,
+            'timeout': self.timeout,
+            'debug': self.debug,
+            'extensions': self.extensions,
+            'block_images': self.block_images,
+            'block_styles': self.block_styles,
+            'block_fonts': self.block_fonts,
+            'block_media': self.block_media,
+            'screenshot': self.screenshot,
+            'resolution': self.resolution,
+            'target_url': self.target_url,
+            'cache': self.cache,
+            'blacklist': self.blacklist,
+            'unblock': self.unblock,
+            'unblock_timeout': self.unblock_timeout,
+            'browser_brand': self.browser_brand,
+            'byop_proxy': self.byop_proxy,
+            'enable_mcp': self.enable_mcp,
+            'solve_captcha': self.solve_captcha,
+            'vault': self.vault,
+            'vault_key': self.vault_key,
+            'enable_vnc': self.enable_vnc,
+            'vnc_password': self.vnc_password,
+            'enable_rtc': self.enable_rtc,
+            'rtc_username': self.rtc_username,
+            'rtc_password': self.rtc_password,
+            'hitl_allowed_networks': self.hitl_allowed_networks,
+            'downloads_stream': self.downloads_stream,
+        }
+
+    @staticmethod
+    def from_dict(browser_config_dict: Dict) -> 'BrowserConfig':
+        return BrowserConfig(
+            proxy_pool=browser_config_dict.get('proxy_pool', None),
+            os=browser_config_dict.get('os', None),
+            session=browser_config_dict.get('session', None),
+            country=browser_config_dict.get('country', None),
+            lang=browser_config_dict.get('lang', None),
+            languages=browser_config_dict.get('languages', None),
+            auto_close=browser_config_dict.get('auto_close', None),
+            timeout=browser_config_dict.get('timeout', None),
+            debug=browser_config_dict.get('debug', None),
+            extensions=browser_config_dict.get('extensions', None),
+            block_images=browser_config_dict.get('block_images', None),
+            block_styles=browser_config_dict.get('block_styles', None),
+            block_fonts=browser_config_dict.get('block_fonts', None),
+            block_media=browser_config_dict.get('block_media', None),
+            screenshot=browser_config_dict.get('screenshot', None),
+            resolution=browser_config_dict.get('resolution', None),
+            target_url=browser_config_dict.get('target_url', None),
+            cache=browser_config_dict.get('cache', None),
+            blacklist=browser_config_dict.get('blacklist', None),
+            unblock=browser_config_dict.get('unblock', None),
+            unblock_timeout=browser_config_dict.get('unblock_timeout', None),
+            browser_brand=browser_config_dict.get('browser_brand', None),
+            byop_proxy=browser_config_dict.get('byop_proxy', None),
+            enable_mcp=browser_config_dict.get('enable_mcp', None),
+            solve_captcha=browser_config_dict.get('solve_captcha', None),
+            vault=browser_config_dict.get('vault', None),
+            vault_key=browser_config_dict.get('vault_key', None),
+            enable_vnc=browser_config_dict.get('enable_vnc', None),
+            vnc_password=browser_config_dict.get('vnc_password', None),
+            enable_rtc=browser_config_dict.get('enable_rtc', None),
+            rtc_username=browser_config_dict.get('rtc_username', None),
+            rtc_password=browser_config_dict.get('rtc_password', None),
+            hitl_allowed_networks=browser_config_dict.get('hitl_allowed_networks', None),
+            downloads_stream=browser_config_dict.get('downloads_stream', None),
+        )

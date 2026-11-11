@@ -1,0 +1,11 @@
+build
+dist
+scrapfly_sdk.egg-info
+.pypirc
+*.pyc
+venv
+examples/scrapy/demo/images
+examples/scrapy/demo/*.csv
+!examples/scrapy/demo/images/.gitkeep
+/tests/crawler/*.gz
+.env

@@ -1,0 +1,730 @@
+import base64
+import json
+import logging
+from enum import Enum
+from urllib.parse import urlencode
+from base64 import urlsafe_b64encode
+from typing import Literal, Optional, List, Dict, Iterable, Union, Set
+from requests.structures import CaseInsensitiveDict
+
+from .api_config import BaseApiConfig
+
+
+class _Unset:
+    """Sentinel meaning "the caller did not supply this parameter".
+
+    `asp` and `unblocker` are two names for one feature, so "not supplied" must
+    be distinguishable from an explicit `False`: otherwise `unblocker=False`
+    could not turn off a feature that `asp` defaults on, and the precedence
+    between the two names would have to OR them. Falsy on purpose, so a leaked
+    sentinel disables the feature instead of enabling it.
+    """
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return '<unset>'
+
+
+_UNSET = _Unset()
+
+
+def _resolve_unblocker(asp, unblocker) -> bool:
+    """Collapse the `asp` / `unblocker` pair into the single stored value.
+
+    `unblocker` is the customer-facing name; `asp` is its deprecated alias. An
+    explicitly supplied `asp` always wins, `unblocker` applies only when `asp`
+    was not supplied. Never OR them: an explicit `False` on either name must be
+    able to turn the feature off.
+
+    `None` counts as NOT supplied, alongside the `_UNSET` sentinel. Two reasons,
+    and they agree:
+
+      - The API says so. Its alias resolution and both of its
+        scrape parsers treat an absent key, a JSON `null` and `""` as omitted,
+        so `{"asp": null, "unblocker": true}` turns the feature ON server-side.
+        An SDK that resolved it to OFF would build a request the API would have
+        answered differently.
+      - Forwarding stays safe. `ScrapeConfig(**{**opts, 'asp': opts.get('asp')})`
+        is how callers thread an optional through, and `.get()` yields `None`
+        for an absent key. Honouring that `None` as a supplied value would let a
+        forwarded default silently veto an explicit `unblocker=True` — the
+        scrape then runs, is billed, and comes back blocked.
+
+    `_UNSET` remains the sentinel the parameter defaults to, because it is the
+    only value that is falsy AND cannot be produced by a caller; `None` is
+    merely also accepted as "not supplied".
+    """
+
+    if asp is not _UNSET and asp is not None:
+        return asp
+
+    if unblocker is not _UNSET and unblocker is not None:
+        return unblocker
+
+    return False
+
+
+class ScreenshotFlag(Enum):
+    """
+    Attributes:
+        LOAD_IMAGES: Enable image rendering with the request, add extra usage for the bandwidth consumed.
+        DARK_MODE: Enable dark mode display.
+        BLOCK_BANNERS: Block cookies banners and overlay that cover the screen.
+        HIGH_QUALITY: No compression on the output image.
+        PRINT_MEDIA_FORMAT: Render the page in the print mode.
+    """
+
+    LOAD_IMAGES = "load_images"
+    DARK_MODE = "dark_mode"
+    BLOCK_BANNERS = "block_banners"
+    HIGH_QUALITY = "high_quality"
+    PRINT_MEDIA_FORMAT = "print_media_format"
+
+
+class Format(Enum):
+    """
+    Attributes:
+        JSON: JSON format.
+        TEXT: Text format.
+        MARKDOWN: Markdown format.
+        CLEAN_HTML: Clean HTML format.
+    """
+
+    JSON = "json"
+    TEXT = "text"
+    MARKDOWN = "markdown"
+    CLEAN_HTML = "clean_html"
+
+
+class FormatOption(Enum):
+    """
+    Attributes:
+        NO_IMAGES: exlude images from `markdown` format
+        NO_LINKS: exlude links from `markdown` format
+    """
+
+    NO_IMAGES = "no_images"
+    NO_LINKS = "no_links"
+    ONLY_CONTENT = "only_content"
+
+
+
+class ScrapeConfigError(Exception):
+    pass
+
+
+class ScrapeConfig(BaseApiConfig):
+
+    # Proxy pools, sent as `proxy_pool`. Each sets both the proxy network and the
+    # Unblocker. Targets and protections that have a price of their own accept
+    # UNBLOCKER_ULTRA (or AUTO) only and refuse BASIC and UNBLOCKER with
+    # ERR::PROXY::UNBLOCKER_ULTRA_REQUIRED. AUTO lets the API pick the pool before the
+    # request, from the target's profile: the Unblocker on datacenter proxies, or the
+    # pool the target needs, priced as the pool it runs on.
+    BASIC = 'basic'
+    UNBLOCKER = 'unblocker'
+    UNBLOCKER_ULTRA = 'unblocker_ultra'
+    AUTO = 'auto'
+
+    # The Tor network, the only pool that reaches .onion hidden services.
+    PUBLIC_TOR_POOL = 'public_tor_pool'
+
+    # Pool names written before the proxy pools, still accepted. The migration guide
+    # covers them: https://scrapfly.io/new-pricing#legacy-spellings
+    PUBLIC_DATACENTER_POOL = 'public_datacenter_pool'
+    PUBLIC_RESIDENTIAL_POOL = 'public_residential_pool'
+
+    url: str
+    retry: bool = True
+    method: str = 'GET'
+    country: Optional[str] = None
+    render_js: bool = False
+    cache: bool = False
+    cache_clear:bool = False
+    ssl:bool = False
+    dns:bool = False
+    asp:bool = False  # deprecated alias of `unblocker`
+    # NOTE: `unblocker` is deliberately absent from this block. It is a
+    # property defined below; a class attribute or annotation here would
+    # shadow the descriptor and break `cfg.unblocker = True`.
+    debug: bool = False
+    raise_on_upstream_error:bool = True
+    cache_ttl:Optional[int] = None
+    proxy_pool:Optional[str] = None
+    session: Optional[str] = None
+    tags: Optional[List[str]] = None
+    format: Optional[Format] = None, # raw(unchanged)
+    format_options: Optional[List[FormatOption]] 
+    extraction_template: Optional[str] = None  # a saved template name
+    extraction_ephemeral_template: Optional[Dict]  # ephemeraly declared json template
+    extraction_prompt: Optional[str] = None
+    extraction_model: Optional[str] = None    
+    correlation_id: Optional[str] = None
+    cookies: Optional[CaseInsensitiveDict] = None
+    body: Optional[str] = None
+    data: Optional[Dict] = None
+    headers: Optional[CaseInsensitiveDict] = None
+    js: str = None
+    rendering_wait: int = None
+    rendering_stage: Literal["complete", "domcontentloaded"] = "complete"
+    wait_for_selector: Optional[str] = None
+    session_sticky_proxy:Optional[bool] = None
+    screenshots:Optional[Dict]=None
+    screenshot_flags: Optional[List[ScreenshotFlag]] = None,
+    webhook:Optional[str]=None
+    timeout:Optional[int]=None # in milliseconds
+    js_scenario: Dict = None
+    extract: Dict = None
+    lang:Optional[List[str]] = None
+    os:Optional[str] = None
+    auto_scroll:Optional[bool] = None
+    cost_budget:Optional[int] = None
+    browser_brand:Optional[str] = None
+    geolocation:Optional[str] = None
+    proxified_response:Optional[bool] = None
+
+    def __init__(
+        self,
+        url: str,
+        retry: bool = True,
+        method: str = 'GET',
+        country: Optional[str] = None,
+        render_js: bool = False,
+        cache: bool = False,
+        cache_clear:bool = False,
+        ssl:bool = False,
+        dns:bool = False,
+        asp:Union[bool, _Unset] = _UNSET,  # deprecated alias of `unblocker`, which is declared last
+        debug: bool = False,
+        raise_on_upstream_error:bool = True,
+        cache_ttl:Optional[int] = None,
+        proxy_pool:Optional[str] = None,
+        session: Optional[str] = None,
+        tags: Optional[Union[List[str], Set[str]]] = None,
+        format: Optional[Format] = None, # raw(unchanged)
+        format_options: Optional[List[FormatOption]] = None, # raw(unchanged)
+        extraction_template: Optional[str] = None,  # a saved template name
+        extraction_ephemeral_template: Optional[Dict] = None,  # ephemeraly declared json template
+        extraction_prompt: Optional[str] = None,
+        extraction_model: Optional[str] = None,        
+        correlation_id: Optional[str] = None,
+        cookies: Optional[CaseInsensitiveDict] = None,
+        body: Optional[str] = None,
+        data: Optional[Dict] = None,
+        headers: Optional[Union[CaseInsensitiveDict, Dict[str, str]]] = None,
+        js: str = None,
+        rendering_wait: int = None,
+        rendering_stage: Literal["complete", "domcontentloaded"] = "complete",
+        wait_for_selector: Optional[str] = None,
+        screenshots:Optional[Dict]=None,
+        screenshot_flags: Optional[List[ScreenshotFlag]] = None,
+        session_sticky_proxy:Optional[bool] = None,
+        webhook:Optional[str] = None,
+        timeout:Optional[int] = None, # in milliseconds
+        js_scenario:Optional[List] = None,
+        extract:Optional[Dict] = None,
+        os:Optional[str] = None,
+        lang:Optional[List[str]] = None,
+        auto_scroll:Optional[bool] = None,
+        cost_budget:Optional[int] = None,
+        browser_brand:Optional[str] = None,
+        geolocation:Optional[str] = None,
+        proxified_response:Optional[bool] = None,
+        # Appended at the very END of the signature on purpose: this parameter
+        # list is positional-capable, so inserting `unblocker` next to its
+        # alias `asp` would silently shift every positional argument in
+        # existing customer code.
+        unblocker:Union[bool, _Unset] = _UNSET
+    ):
+        assert(type(url) is str)
+
+        if isinstance(tags, List):
+            tags = set(tags)
+
+        cookies = cookies or {}
+        headers = headers or {}
+
+        self.cookies = CaseInsensitiveDict(cookies)
+        self.headers = CaseInsensitiveDict(headers)
+        self.url = url
+        self.retry = retry
+        self.method = method
+        self.country = country
+        self.session_sticky_proxy = session_sticky_proxy
+        self.render_js = render_js
+        self.cache = cache
+        self.cache_clear = cache_clear
+        # Both names normalize into the single stored attribute `self.asp`,
+        # which is also the key emitted on the wire.
+        self.asp = _resolve_unblocker(asp, unblocker)
+        self.webhook = webhook
+        self.session = session
+        self.debug = debug
+        self.cache_ttl = cache_ttl
+        self.proxy_pool = proxy_pool
+        self.tags = tags or set()
+        self.format = format
+        self.format_options = format_options
+        self.extraction_template = extraction_template
+        self.extraction_ephemeral_template = extraction_ephemeral_template
+        self.extraction_prompt = extraction_prompt
+        self.extraction_model = extraction_model        
+        self.correlation_id = correlation_id
+        self.wait_for_selector = wait_for_selector
+        self.body = body
+        self.data = data
+        self.js = js
+        self.rendering_wait = rendering_wait
+        self.rendering_stage = rendering_stage
+        self.raise_on_upstream_error = raise_on_upstream_error
+        self.screenshots = screenshots
+        self.screenshot_flags = screenshot_flags
+        self.key = None
+        self.dns = dns
+        self.ssl = ssl
+        self.js_scenario = js_scenario
+        self.timeout = timeout
+        self.extract = extract
+        self.lang = lang
+        self.os = os
+        self.auto_scroll = auto_scroll
+        self.cost_budget = cost_budget
+        self.browser_brand = browser_brand
+        self.geolocation = geolocation
+        self.proxified_response = proxified_response
+
+        if cookies:
+            _cookies = []
+
+            for name, value in cookies.items():
+                _cookies.append(name + '=' + value)
+
+            if 'cookie' in self.headers:
+                if self.headers['cookie'][-1] != ';':
+                    self.headers['cookie'] += ';'
+            else:
+                self.headers['cookie'] = ''
+
+            self.headers['cookie'] += '; '.join(_cookies)
+
+        if self.body and self.data:
+            raise ScrapeConfigError('You cannot pass both parameters body and data. You must choose')
+
+        if method in ['POST', 'PUT', 'PATCH']:
+            if self.body is None and self.data is not None:
+                if 'content-type' not in self.headers:
+                    self.headers['content-type'] = 'application/x-www-form-urlencoded'
+                    self.body = urlencode(data)
+                else:
+                    if self.headers['content-type'].find('application/json') != -1:
+                        self.body = json.dumps(data)
+                    elif self.headers['content-type'].find('application/x-www-form-urlencoded') != -1:
+                        self.body = urlencode(data)
+                    else:
+                        raise ScrapeConfigError('Content-Type "%s" not supported, use body parameter to pass pre encoded body according to your content type' % self.headers['content-type'])
+            elif self.body is None and self.data is None:
+                self.headers['content-type'] = 'text/plain'
+
+    @property
+    def unblocker(self) -> bool:
+        """Anti-bot bypass toggle, the current name for what used to be `asp`.
+
+        Deprecated: use `proxy_pool` (`ScrapeConfig.UNBLOCKER_ULTRA` for the
+        Unblocker). The migration guide covers requests written before the proxy
+        pools: https://scrapfly.io/new-pricing#legacy-spellings
+
+        Deliberately a property rather than a second stored attribute: it stays
+        out of `__dict__`, so serializers that iterate the instance dict do not
+        sprout a duplicate key, while `config.unblocker = True` after
+        construction still works.
+        """
+
+        return self.asp
+
+    @unblocker.setter
+    def unblocker(self, value: bool):
+        self.asp = value
+
+    def to_api_params(self, key:str) -> Dict:
+        params = {
+            'key': self.key or key,
+            'url': self.url
+        }
+
+        if self.country is not None:
+            params['country'] = self.country
+
+        for name, value in self.headers.items():
+            params['headers[%s]' % name] = value
+
+        if self.webhook is not None:
+            params['webhook_name'] = self.webhook
+
+        if self.timeout is not None:
+            params['timeout'] = self.timeout
+
+        if self.extract is not None:
+            params['extract'] = base64.urlsafe_b64encode(json.dumps(self.extract).encode('utf-8')).decode('utf-8')
+
+        if self.cost_budget is not None:
+            params['cost_budget'] = self.cost_budget
+
+        if self.proxified_response is not None:
+            params['proxified_response'] = self._bool_to_http(self.proxified_response)
+
+        if self.render_js is True:
+            params['render_js'] = self._bool_to_http(self.render_js)
+
+            if self.wait_for_selector is not None:
+                params['wait_for_selector'] = self.wait_for_selector
+
+            if self.js:
+                params['js'] = base64.urlsafe_b64encode(self.js.encode('utf-8')).decode('utf-8')
+
+            if self.js_scenario:
+                params['js_scenario'] = base64.urlsafe_b64encode(json.dumps(self.js_scenario).encode('utf-8')).decode('utf-8')
+
+            if self.rendering_wait:
+                params['rendering_wait'] = self.rendering_wait
+            
+            if self.rendering_stage:
+                params['rendering_stage'] = self.rendering_stage
+
+            if self.screenshots is not None:
+                for name, element in self.screenshots.items():
+                    params['screenshots[%s]' % name] = element
+
+            if self.screenshot_flags is not None:
+                self.screenshot_flags = [ScreenshotFlag(flag) for flag in self.screenshot_flags]
+                params["screenshot_flags"] = ",".join(flag.value for flag in self.screenshot_flags)
+            else:
+                if self.screenshot_flags is not None:
+                    logging.warning('Params "screenshot_flags" is ignored. Works only if screenshots is enabled')
+
+            if self.auto_scroll is True:
+                params['auto_scroll'] = self._bool_to_http(self.auto_scroll)
+        else:
+            if self.wait_for_selector is not None:
+                logging.warning('Params "wait_for_selector" is ignored. Works only if render_js is enabled')
+
+            if self.screenshots:
+                logging.warning('Params "screenshots" is ignored. Works only if render_js is enabled')
+
+            if self.js_scenario:
+                logging.warning('Params "js_scenario" is ignored. Works only if render_js is enabled')
+
+            if self.js:
+                logging.warning('Params "js" is ignored. Works only if render_js is enabled')
+
+            if self.rendering_wait:
+                logging.warning('Params "rendering_wait" is ignored. Works only if render_js is enabled')
+
+        # The emitted key stays `asp`. Published SDK versions are immutable and
+        # upgraded per installation, so emitting `unblocker` against an API
+        # deployment that has not learned it yet would silently drop a paid
+        # feature: the scrape succeeds, is billed, and returns a blocked page.
+        if self.asp is True:
+            params['asp'] = self._bool_to_http(self.asp)
+
+        if self.retry is False:
+            params['retry'] = self._bool_to_http(self.retry)
+
+        if self.cache is True:
+            params['cache'] = self._bool_to_http(self.cache)
+
+            if self.cache_clear is True:
+                params['cache_clear'] = self._bool_to_http(self.cache_clear)
+
+            if self.cache_ttl is not None:
+                params['cache_ttl'] = self.cache_ttl
+        else:
+            if self.cache_clear is True:
+                logging.warning('Params "cache_clear" is ignored. Works only if cache is enabled')
+
+            if self.cache_ttl is not None:
+                logging.warning('Params "cache_ttl" is ignored. Works only if cache is enabled')
+
+        if self.dns is True:
+            params['dns'] = self._bool_to_http(self.dns)
+
+        if self.ssl is True:
+            params['ssl'] = self._bool_to_http(self.ssl)
+
+        if self.tags:
+            params['tags'] = ','.join(self.tags)
+
+        if self.format:
+            params['format'] = Format(self.format).value
+            if self.format_options:
+                params['format'] += ':' + ','.join(FormatOption(option).value for option in self.format_options)
+
+        if self.extraction_template and self.extraction_ephemeral_template:
+            raise ScrapeConfigError('You cannot pass both parameters extraction_template and extraction_ephemeral_template. You must choose')
+
+        if self.extraction_template:
+            params['extraction_template'] = 'persistent:' + self.extraction_template
+
+        if self.extraction_ephemeral_template:
+            self.extraction_ephemeral_template = json.dumps(self.extraction_ephemeral_template)
+            params['extraction_template'] = 'ephemeral:' + urlsafe_b64encode(self.extraction_ephemeral_template.encode('utf-8')).decode('utf-8')
+
+        if self.extraction_prompt:
+            params['extraction_prompt'] = self.extraction_prompt
+
+        if self.extraction_model:
+            params['extraction_model'] = self.extraction_model
+
+        if self.correlation_id:
+            params['correlation_id'] = self.correlation_id
+
+        if self.session:
+            params['session'] = self.session
+
+            # None leaves stickiness to the API, which defaults it to true
+            # when a session is set.
+            if self.session_sticky_proxy is not None:
+                params['session_sticky_proxy'] = self._bool_to_http(self.session_sticky_proxy)
+        else:
+            if self.session_sticky_proxy is not None:
+                logging.warning('Params "session_sticky_proxy" is ignored. Works only if session is enabled')
+
+        if self.debug is True:
+            params['debug'] = self._bool_to_http(self.debug)
+
+        if self.proxy_pool is not None:
+            params['proxy_pool'] = self.proxy_pool
+
+        if self.lang is not None:
+            params['lang'] = ','.join(self.lang)
+
+        if self.os is not None:
+            params['os'] = self.os
+
+        if self.browser_brand is not None:
+            params['browser_brand'] = self.browser_brand
+        if self.geolocation is not None:
+            params['geolocation'] = self.geolocation
+
+        return params
+
+    @staticmethod
+    def from_exported_config(config:str) -> 'ScrapeConfig':
+        try:
+            from msgpack import loads as msgpack_loads
+        except ImportError as e:
+            print('You must install msgpack package - run: pip install "scrapfly-sdk[speedups]" or pip install msgpack')
+            raise
+
+        data = msgpack_loads(base64.b64decode(config))
+
+        headers = {}
+
+        for name, value in data['headers'].items():
+            if isinstance(value, Iterable):
+                headers[name] = '; '.join(value)
+            else:
+                headers[name] = value
+
+        # The export carries the pool the order ran on, never the `proxy_pool` word the
+        # customer sent; `unblocker_tier` tells it. none is `basic`; normal is `unblocker`,
+        # or `basic` on a project that forces the Unblocker, still on datacenter. ultra,
+        # or no unblocker_tier (an older export), is `unblocker_ultra` or a legacy
+        # request, which the pool and asp as exported replay unchanged.
+        unblocker_tier = data.get('unblocker_tier')
+
+        if unblocker_tier == 'none' or (unblocker_tier == 'normal' and data['proxy_pool'] == ScrapeConfig.PUBLIC_DATACENTER_POOL):
+            proxy_pool_word = ScrapeConfig.BASIC
+        elif unblocker_tier == 'normal':
+            proxy_pool_word = ScrapeConfig.UNBLOCKER
+        else:
+            proxy_pool_word = None
+
+        return ScrapeConfig(
+            url=data['url'],
+            retry=data['retry'],
+            headers=headers,
+            session=data['session'],
+            session_sticky_proxy=data['session_sticky_proxy'],
+            cache=data['cache'],
+            cache_ttl=data['cache_ttl'],
+            cache_clear=data['cache_clear'],
+            render_js=data['render_js'],
+            method=data['method'],
+            # .get(), not a subscript: an export produced under either name
+            # must load, and neither key is guaranteed present.
+            asp=_UNSET if proxy_pool_word else data.get('asp', _UNSET),
+            unblocker=_UNSET if proxy_pool_word else data.get('unblocker', _UNSET),
+            body=data['body'],
+            ssl=data['ssl'],
+            dns=data['dns'],
+            country=data['country'],
+            debug=data['debug'],
+            correlation_id=data['correlation_id'],
+            tags=data['tags'],
+            format=data['format'],
+            js=data['js'],
+            rendering_wait=data['rendering_wait'],
+            screenshots=data['screenshots'] or {},
+            screenshot_flags=data['screenshot_flags'],
+            proxy_pool=proxy_pool_word or data['proxy_pool'],
+            auto_scroll=data['auto_scroll'],
+            cost_budget=data['cost_budget']
+        )
+
+    def to_dict(self) -> Dict:
+        """
+        Export the ScrapeConfig instance to a plain dictionary. 
+        Useful for JSON-serialization or other external storage.
+        """
+        
+        return {
+            'url': self.url,
+            'retry': self.retry,
+            'method': self.method,
+            'country': self.country,
+            'render_js': self.render_js,
+            'cache': self.cache,
+            'cache_clear': self.cache_clear,
+            'ssl': self.ssl,
+            'dns': self.dns,
+            'asp': self.asp,
+            'debug': self.debug,
+            'raise_on_upstream_error': self.raise_on_upstream_error,
+            'cache_ttl': self.cache_ttl,
+            'proxy_pool': self.proxy_pool,
+            'session': self.session,
+            'tags': list(self.tags),
+            'format': Format(self.format).value if self.format else None,
+            'format_options': [FormatOption(option).value for option in self.format_options] if self.format_options else None,
+            'extraction_template': self.extraction_template,
+            'extraction_ephemeral_template': self.extraction_ephemeral_template,
+            'extraction_prompt': self.extraction_prompt,
+            'extraction_model': self.extraction_model,
+            'correlation_id': self.correlation_id,
+            'cookies': CaseInsensitiveDict(self.cookies),
+            'body': self.body,
+            'data': None if self.body else self.data,
+            'headers': CaseInsensitiveDict(self.headers),
+            'js': self.js,
+            'rendering_wait': self.rendering_wait,
+            'wait_for_selector': self.wait_for_selector,
+            'session_sticky_proxy': self.session_sticky_proxy,
+            'screenshots': self.screenshots,
+            'screenshot_flags': [ScreenshotFlag(flag).value for flag in self.screenshot_flags] if self.screenshot_flags else None,
+            'webhook': self.webhook,
+            'timeout': self.timeout,
+            'js_scenario': self.js_scenario,
+            'extract': self.extract,
+            'lang': self.lang,
+            'os': self.os,
+            'auto_scroll': self.auto_scroll,
+            'cost_budget': self.cost_budget,
+            'browser_brand': self.browser_brand,
+        }
+
+    @staticmethod
+    def from_dict(scrape_config_dict: Dict) -> 'ScrapeConfig':
+        """Create a ScrapeConfig instance from a dictionary."""
+        url = scrape_config_dict.get('url', None)
+        retry = scrape_config_dict.get('retry', False)
+        method = scrape_config_dict.get('method', 'GET')
+        country = scrape_config_dict.get('country', None)
+        render_js = scrape_config_dict.get('render_js', False)
+        cache = scrape_config_dict.get('cache', False)
+        cache_clear = scrape_config_dict.get('cache_clear', False)
+        ssl = scrape_config_dict.get('ssl', False)
+        dns = scrape_config_dict.get('dns', False)
+        # Sentinel defaults, not False: an explicit False under either key must
+        # stay distinguishable from an absent key so precedence works.
+        asp = scrape_config_dict.get('asp', _UNSET)
+        unblocker = scrape_config_dict.get('unblocker', _UNSET)
+        debug = scrape_config_dict.get('debug', False)
+        raise_on_upstream_error = scrape_config_dict.get('raise_on_upstream_error', True)
+        cache_ttl = scrape_config_dict.get('cache_ttl', None)
+        proxy_pool = scrape_config_dict.get('proxy_pool', None)
+        session = scrape_config_dict.get('session', None)
+        tags = scrape_config_dict.get('tags', [])
+
+        format = scrape_config_dict.get('format', None)
+        format = Format(format) if format else None
+
+        format_options = scrape_config_dict.get('format_options', None)
+        format_options = [FormatOption(option) for option in format_options] if format_options else None
+
+        extraction_template = scrape_config_dict.get('extraction_template', None)
+        extraction_ephemeral_template = scrape_config_dict.get('extraction_ephemeral_template', None)
+        extraction_prompt = scrape_config_dict.get('extraction_prompt', None)
+        extraction_model = scrape_config_dict.get('extraction_model', None)
+        correlation_id = scrape_config_dict.get('correlation_id', None)
+        cookies = scrape_config_dict.get('cookies', {})
+        body = scrape_config_dict.get('body', None)
+        data = scrape_config_dict.get('data', None)
+        headers = scrape_config_dict.get('headers', {})
+        js = scrape_config_dict.get('js', None)
+        rendering_wait = scrape_config_dict.get('rendering_wait', None)
+        wait_for_selector = scrape_config_dict.get('wait_for_selector', None)
+        screenshots = scrape_config_dict.get('screenshots', [])
+        
+        screenshot_flags = scrape_config_dict.get('screenshot_flags', [])
+        screenshot_flags = [ScreenshotFlag(flag) for flag in screenshot_flags] if screenshot_flags else None
+
+        session_sticky_proxy = scrape_config_dict.get('session_sticky_proxy', None)
+        webhook = scrape_config_dict.get('webhook', None)
+        timeout = scrape_config_dict.get('timeout', None)
+        js_scenario = scrape_config_dict.get('js_scenario', None)
+        extract = scrape_config_dict.get('extract', None)
+        os = scrape_config_dict.get('os', None)
+        lang = scrape_config_dict.get('lang', None)
+        auto_scroll = scrape_config_dict.get('auto_scroll', None)
+        cost_budget = scrape_config_dict.get('cost_budget', None)
+        browser_brand = scrape_config_dict.get('browser_brand', None)
+
+        return ScrapeConfig(
+            url=url,
+            retry=retry,
+            method=method,
+            country=country,
+            render_js=render_js,
+            cache=cache,
+            cache_clear=cache_clear,
+            ssl=ssl,
+            dns=dns,
+            asp=asp,
+            debug=debug,
+            raise_on_upstream_error=raise_on_upstream_error,
+            cache_ttl=cache_ttl,
+            proxy_pool=proxy_pool,
+            session=session,
+            tags=tags,
+            format=format,
+            format_options=format_options,
+            extraction_template=extraction_template,
+            extraction_ephemeral_template=extraction_ephemeral_template,
+            extraction_prompt=extraction_prompt,
+            extraction_model=extraction_model,
+            correlation_id=correlation_id,
+            cookies=cookies,
+            body=body,
+            data=data,
+            headers=headers,
+            js=js,
+            rendering_wait=rendering_wait,
+            wait_for_selector=wait_for_selector,
+            screenshots=screenshots,
+            screenshot_flags=screenshot_flags,
+            session_sticky_proxy=session_sticky_proxy,
+            webhook=webhook,
+            timeout=timeout,
+            js_scenario=js_scenario,
+            extract=extract,
+            os=os,
+            lang=lang,
+            auto_scroll=auto_scroll,
+            cost_budget=cost_budget,
+            browser_brand=browser_brand,
+            unblocker=unblocker,
+        )
