@@ -1,0 +1,228 @@
+/* Fractured Word Hover: styles for the effect. mountFracturedWordHover() adds the .fractured-word-hover class to your element; give that element a size. */
+.fractured-word-hover {
+  --accent: var(--fx-accent);
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-ink-3: #9a9993;
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --ink-3: var(--fx-ink-3);
+  --r-lg: 24px;
+}
+.fractured-word-hover {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 15px/1.5 var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.fractured-word-hover,
+.fractured-word-hover *,
+.fractured-word-hover *::before,
+.fractured-word-hover *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.fractured-word-hover::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.fx-stage {
+  --fx-amt: 1;
+  --fx-open: 0.46s;
+  --fx-shut: 0.3s;
+  --fx-open-ease: cubic-bezier(0.28, 2, 0.36, 1);
+  --fx-shut-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.fx-link {
+  --fx-color: var(--ink);
+  color: var(--fx-color);
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+.fx-word {
+  position: relative;
+  display: inline-block;
+  white-space: nowrap;
+  color: var(--fx-color);
+  transition: color 0s linear var(--fx-shut);
+}
+.fx-word::before,
+.fx-word::after {
+  content: attr(data-word);
+  position: absolute;
+  inset: 0;
+  white-space: nowrap;
+  color: var(--fx-color);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform;
+  transition:
+    transform var(--fx-shut) var(--fx-shut-ease),
+    opacity 0s linear var(--fx-shut);
+}
+.fx-word::before {
+  --fx-dx: -0.03em;
+  --fx-dy: -0.07em;
+  --fx-turn: -1deg;
+  transform-origin: 25% 35%;
+  clip-path: polygon(-30% -30%, 130% -30%, 130% 44%, 78% 52%, 54% 41%, 41% 63%, 20% 50%, -30% 60%);
+}
+.fx-word::after {
+  --fx-dx: 0.03em;
+  --fx-dy: 0.07em;
+  --fx-turn: 0.7deg;
+  transform-origin: 75% 65%;
+  clip-path: polygon(-30% 60%, 20% 50%, 41% 63%, 54% 41%, 78% 52%, 130% 44%, 130% 130%, -30% 130%);
+}
+.fx-link.is-hover .fx-word {
+  color: transparent;
+  transition: none;
+}
+.fx-link.is-hover .fx-word::before,
+.fx-link.is-hover .fx-word::after {
+  opacity: 1;
+  transition:
+    transform var(--fx-open) var(--fx-open-ease),
+    opacity 0s;
+  transform: translate(calc(var(--fx-dx) * var(--fx-amt)), calc(var(--fx-dy) * var(--fx-amt)))
+    rotate(calc(var(--fx-turn) * var(--fx-amt)));
+}
+.fx-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+  border-radius: 4px;
+}
+.fx-stage[data-reduced="true"] .fx-word {
+  color: var(--fx-color) !important;
+}
+.fx-stage[data-reduced="true"] .fx-word::before,
+.fx-stage[data-reduced="true"] .fx-word::after {
+  display: none;
+}
+.fx-page.ck-panel {
+  position: absolute;
+  left: var(--fx-x, 50%);
+  top: var(--fx-y, 50%);
+  width: var(--fx-w, 720px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+}
+.fx-bar,
+.fx-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px;
+  flex-wrap: wrap;
+}
+.fx-bar {
+  border-bottom: 1px solid var(--hair);
+}
+.fx-foot {
+  border-top: 1px solid var(--hair);
+}
+.fx-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.fx-nav,
+.fx-social {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.fx-hero {
+  padding: calc(var(--fx-w, 720px) * 0.085) 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fx-cta {
+  align-self: flex-start;
+  font: 500 calc(var(--fx-w, 720px) * 0.088)/1.05 var(--font);
+  letter-spacing: -0.03em;
+}
+.fx-social .fx-link {
+  font: 400 18px/24px var(--font);
+}
+.fx-nav .fx-link {
+  font: 400 14px/20px var(--font);
+}
+.fx-mini.ck-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 28px 28px 24px;
+}
+.fx-mini .fx-big {
+  font: 500 44px/1.05 var(--font);
+  letter-spacing: -0.03em;
+}
+.fx-mini .fx-row {
+  display: flex;
+  gap: 22px;
+}
+.fx-mini .fx-row .fx-link {
+  font: 400 14px/20px var(--font);
+}
+.fx-line {
+  position: absolute;
+  left: var(--fx-x, 0);
+  top: var(--fx-y, 0);
+  font: 500 var(--fx-size, 100px)/1.05 var(--font);
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+.fx-stage .cr-hint {
+  left: 50%;
+  right: auto;
+  translate: -50% 0;
+  width: max-content;
+  max-width: 84%;
+  bottom: 4%;
+  color: var(--ink-3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fx-word {
+    color: var(--fx-color) !important;
+  }
+  .fx-word::before,
+  .fx-word::after {
+    display: none;
+  }
+}

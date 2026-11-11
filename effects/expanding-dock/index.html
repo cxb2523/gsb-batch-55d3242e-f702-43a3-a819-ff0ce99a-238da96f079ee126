@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Elastic Menu</title>
+    <link rel="stylesheet" href="effect.css" />
+    <style>
+      /* Host styling: replace the layout, colours and shapes here. */
+      body {
+        margin: 0;
+        padding: 24px;
+        color: #202124;
+        background: #f5f5f3;
+        font:
+          16px/1.6 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 900px;
+        margin: auto;
+      }
+      #component {
+        padding-block: 32px 140px;
+        --dock-ink: #202124;
+        --dock-paper: #fff;
+        --dock-accent: #4559ff;
+        --dock-radius: 10px;
+        --dock-options-radius: 16px;
+        --dock-option-radius: 24px;
+      }
+      .projects {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 20px;
+      }
+      .project {
+        padding: 24px;
+        border: 1px solid #d3d3d0;
+        border-radius: 12px;
+      }
+      .project[hidden] {
+        display: none;
+      }
+      .project:target {
+        outline: 2px solid #4559ff;
+        outline-offset: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Elastic Menu</h1>
+      <p>Open Menu to visit a section. Open Design to choose a palette or type style.</p>
+      <div id="component"></div>
+      <!-- Your content and real destinations. The dock only renders the action controls. -->
+      <div class="projects">
+        <section class="project" id="work" data-category="design">
+          <h2>Work</h2>
+          <p>Your work goes here.</p>
+        </section>
+        <section class="project" id="about" data-category="studio">
+          <h2>About</h2>
+          <p>Your story goes here.</p>
+        </section>
+        <section class="project" id="contact" data-category="studio">
+          <h2>Contact</h2>
+          <p>Your contact details go here.</p>
+        </section>
+      </div>
+    </main>
+    <script src="effect.js"></script>
+    <script>
+      // Edit groups, labels, links and options without changing the animation implementation.
+      const motionOptions = /* EA_OPTIONS_START */ { duration: 0.6, stagger: 0.3 }; /* EA_OPTIONS_END */
+      const component = document.querySelector("#component");
+      const dock = mountExpandingDock(document.querySelector("#component"), {
+        placement: "inline",
+        motion: "auto",
+        ...motionOptions,
+        groups: [
+          {
+            id: "navigation",
+            label: "Menu",
+            items: [
+              { id: "work", label: "Work", href: "#work" },
+              { id: "about", label: "About", href: "#about" },
+              { id: "contact", label: "Contact", href: "#contact" },
+            ],
+          },
+          {
+            id: "design",
+            label: "Design",
+            tone: "light",
+            closeOnActivate: false,
+            items: [
+              {
+                id: "palette",
+                label: "Palette",
+                options: [
+                  { id: "ink", label: "Ink" },
+                  { id: "blue", label: "Blue" },
+                ],
+              },
+              {
+                id: "type",
+                label: "Type",
+                options: [
+                  { id: "sans", label: "Sans" },
+                  { id: "serif", label: "Serif" },
+                ],
+              },
+            ],
+          },
+        ],
+        onAction({ id }) {
+          dock.setActive(id);
+        },
+        onValueChange({ values }) {
+          component.style.setProperty("--dock-ink", values.palette === "blue" ? "#4559ff" : "#202124");
+          component.style.fontFamily = values.type === "serif" ? "Georgia,serif" : "system-ui,sans-serif";
+          dock.refresh();
+        },
+      });
+      // Layout: placement can be inline, container (inside a positioned host), or fixed.
+      // Shape: --dock-radius:0px gives square corners; 999px gives pills.
+      // Size: --dock-unit:44px sets the button height; --dock-gap sets group spacing.
+      // Motion: updateOptions({duration:.6,stagger:.3}); CSS edits: refresh().
+      // State: open('navigation'), close(), toggle('design'), setValues({palette:'blue'}).
+      // onValueChange applies your own design settings; onOpenChange reports open/closed state.
+      // setActive('work') marks a link; getState() reads state; destroy() releases the instance.
+      // effect.js includes GSAP 3.12.5 with its license notice and reuses an existing window.gsap.
+    </script>
+  </body>
+</html>

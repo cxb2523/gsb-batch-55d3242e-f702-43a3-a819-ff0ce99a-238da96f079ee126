@@ -1,0 +1,1289 @@
+{
+  "schemaVersion": 1,
+  "categories": [
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "nameZh": "光标"
+    },
+    {
+      "id": "hover",
+      "name": "Hover",
+      "nameZh": "悬停"
+    },
+    {
+      "id": "text",
+      "name": "Text",
+      "nameZh": "文字"
+    },
+    {
+      "id": "nav",
+      "name": "Menus",
+      "nameZh": "菜单"
+    },
+    {
+      "id": "scroll",
+      "name": "Scroll",
+      "nameZh": "滚动"
+    },
+    {
+      "id": "hero",
+      "name": "Hero",
+      "nameZh": "首屏"
+    },
+    {
+      "id": "trans",
+      "name": "Transitions",
+      "nameZh": "转场"
+    },
+    {
+      "id": "gallery",
+      "name": "Galleries",
+      "nameZh": "画廊"
+    },
+    {
+      "id": "other",
+      "name": "Other",
+      "nameZh": "其他"
+    }
+  ],
+  "effects": [
+    {
+      "slug": "annotated-menu",
+      "name": "Annotated Menu",
+      "description": "Hover a menu item and it gets struck through and rewritten by hand, like a marked-up proof.",
+      "nameZh": "批注菜单",
+      "descriptionZh": "悬停在菜单项上，它会被划掉、再手写改一遍，像改过的校样。",
+      "categories": [
+        "nav"
+      ],
+      "directory": "effects/annotated-menu",
+      "preview": "https://effectatlas.com/effects/annotated-menu",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountAnnotatedMenu"
+      },
+      "dependencies": [],
+      "files": [
+        "Caveat.LICENSE.txt",
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "card-fan-intro",
+      "name": "Card Fan Intro",
+      "description": "Cards fan out, fold away, and hand over to the hero.",
+      "nameZh": "扇形卡片开场",
+      "descriptionZh": "卡片扇形散开、再收起来，然后交给首屏。",
+      "categories": [
+        "hero"
+      ],
+      "directory": "effects/card-fan-intro",
+      "preview": "https://effectatlas.com/effects/card-fan-intro",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountCardFanIntro"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "crop-line-page-transition",
+      "name": "Crop-Line Page Transition",
+      "description": "Four lines close the page to a cross, then keep going and open the next one.",
+      "nameZh": "裁切线转场",
+      "descriptionZh": "四条线把页面收成一个十字，接着继续走，打开下一页。",
+      "categories": [
+        "trans"
+      ],
+      "directory": "effects/crop-line-page-transition",
+      "preview": "https://effectatlas.com/effects/crop-line-page-transition",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountCropLinePageTransition"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "crosshair-image-reveal",
+      "name": "Crosshair Image Reveal",
+      "description": "An image that unfolds from a draggable crosshair.",
+      "nameZh": "十字线揭图",
+      "descriptionZh": "图片从一个可以拖动的十字线处展开。",
+      "categories": [
+        "scroll"
+      ],
+      "directory": "effects/crosshair-image-reveal",
+      "preview": "https://effectatlas.com/effects/crosshair-image-reveal",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountCrosshairImageReveal"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "curtain-menu",
+      "name": "Curtain Menu",
+      "description": "A fullscreen menu with large type and live previews.",
+      "nameZh": "幕布菜单",
+      "descriptionZh": "全屏菜单，大字，带实时预览。",
+      "categories": [
+        "nav",
+        "hover"
+      ],
+      "directory": "effects/curtain-menu",
+      "preview": "https://effectatlas.com/effects/curtain-menu",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountCurtainMenu"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "curved-gallery",
+      "name": "Curved Gallery",
+      "description": "A drag-to-spin gallery curved like a wall.",
+      "nameZh": "弧面画廊",
+      "descriptionZh": "弯成一面弧墙的画廊，拖一下就转起来。",
+      "categories": [
+        "gallery"
+      ],
+      "directory": "effects/curved-gallery",
+      "preview": "https://effectatlas.com/effects/curved-gallery",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountCurvedGallery"
+      },
+      "dependencies": [
+        "three.min.js"
+      ],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html",
+        "three.LICENSE.txt",
+        "three.min.js"
+      ]
+    },
+    {
+      "slug": "cut-line-preloader",
+      "name": "Cut-Line Preloader",
+      "description": "A counter rolls to 100 while scissors cut the page open.",
+      "nameZh": "剪线入场",
+      "descriptionZh": "数字滚到 100，同时一把剪刀把页面剪开。",
+      "categories": [
+        "trans"
+      ],
+      "directory": "effects/cut-line-preloader",
+      "preview": "https://effectatlas.com/effects/cut-line-preloader",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountCutLinePreloader"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "disc-carousel",
+      "name": "Disc Carousel",
+      "description": "A tilted row of discs that turns one at a time.",
+      "nameZh": "圆盘轮播",
+      "descriptionZh": "一排斜放的圆盘，一次转过一张。",
+      "categories": [
+        "gallery"
+      ],
+      "directory": "effects/disc-carousel",
+      "preview": "https://effectatlas.com/effects/disc-carousel",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountDiscCarousel"
+      },
+      "dependencies": [
+        "three.min.js"
+      ],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html",
+        "three.LICENSE.txt",
+        "three.min.js"
+      ]
+    },
+    {
+      "slug": "dock-menu-dropdown",
+      "name": "Dock Menu Dropdown",
+      "description": "A compact nav that grows into a scrollable index.",
+      "nameZh": "停靠下拉菜单",
+      "descriptionZh": "一条小导航，展开后变成可以滚动的目录。",
+      "categories": [
+        "nav"
+      ],
+      "directory": "effects/dock-menu-dropdown",
+      "preview": "https://effectatlas.com/effects/dock-menu-dropdown",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountDockMenuDropdown"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "edge-refraction-dispersion",
+      "name": "Edge Refraction Dispersion",
+      "description": "Bends and separates colors along the edges of an existing content viewport.",
+      "nameZh": "边缘折射色散",
+      "descriptionZh": "在现有内容视口的边缘形成折射和色散，可叠加到滚动区域或轮播上。",
+      "categories": [
+        "gallery",
+        "scroll"
+      ],
+      "directory": "effects/edge-refraction-dispersion",
+      "preview": "https://effectatlas.com/effects/edge-refraction-dispersion",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountEdgeRefractionDispersion"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "expanding-dock",
+      "name": "Elastic Menu",
+      "description": "Open Menu or Design to reveal the actions. Try a palette or a type style.",
+      "nameZh": "弹性展开菜单",
+      "descriptionZh": "点开操作栏，展开导航或设计选项；再次点击收回。",
+      "categories": [
+        "nav"
+      ],
+      "directory": "effects/expanding-dock",
+      "preview": "https://effectatlas.com/effects/expanding-dock",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountExpandingDock"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "exploration-gallery",
+      "name": "Wave Gallery",
+      "description": "Drag or scroll to explore. Select an item to keep it marked.",
+      "nameZh": "波浪画廊",
+      "descriptionZh": "拖动或滚动浏览，点击一项可保留选择。",
+      "categories": [
+        "gallery",
+        "scroll"
+      ],
+      "directory": "effects/exploration-gallery",
+      "preview": "https://effectatlas.com/effects/exploration-gallery",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountExplorationGallery"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "film-jitter-hover",
+      "name": "Film Jitter Button",
+      "description": "A button that shakes like old film on hover.",
+      "nameZh": "胶片抖动按钮",
+      "descriptionZh": "鼠标放上去，按钮会像老胶片那样抖起来。",
+      "categories": [
+        "hover"
+      ],
+      "directory": "effects/film-jitter-hover",
+      "preview": "https://effectatlas.com/effects/film-jitter-hover",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountFilmJitterButton"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "fluid-mask-hero",
+      "name": "Fluid Mask Hero",
+      "description": "A soft circular lens that reveals an inverted hero beneath.",
+      "nameZh": "遮罩首屏",
+      "descriptionZh": "一个边缘柔和的圆形镜头，透出下面一层反色的首屏。",
+      "categories": [
+        "hero",
+        "cursor"
+      ],
+      "directory": "effects/fluid-mask-hero",
+      "preview": "https://effectatlas.com/effects/fluid-mask-hero",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountFluidMaskHero"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "focus-cascade",
+      "name": "Stacked Card Carousel",
+      "description": "Move through the stack. Focus a card, then select it.",
+      "nameZh": "叠卡轮播",
+      "descriptionZh": "拖动或点击两侧卡片切换，再点击当前卡片确认选择。",
+      "categories": [
+        "gallery"
+      ],
+      "directory": "effects/focus-cascade",
+      "preview": "https://effectatlas.com/effects/focus-cascade",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountFocusCascade"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "fractured-word-hover",
+      "name": "Fractured Word Hover",
+      "description": "Links that crack along a jagged line when you point at them.",
+      "nameZh": "裂字悬停",
+      "descriptionZh": "指向链接时，文字会沿一道锯齿线裂开。",
+      "categories": [
+        "hover",
+        "text"
+      ],
+      "directory": "effects/fractured-word-hover",
+      "preview": "https://effectatlas.com/effects/fractured-word-hover",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountFracturedWordHover"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "fullscreen-chapter-reveal",
+      "name": "Fullscreen Chapter Reveal",
+      "description": "Fullscreen scenes that crop open over one another.",
+      "nameZh": "全屏章节揭开",
+      "descriptionZh": "一屏屏全屏画面，一个接一个裁开，盖在前一个上面。",
+      "categories": [
+        "scroll"
+      ],
+      "directory": "effects/fullscreen-chapter-reveal",
+      "preview": "https://effectatlas.com/effects/fullscreen-chapter-reveal",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountFullscreenChapterReveal"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "hairline-burger",
+      "name": "Hairline Burger",
+      "description": "A two-line menu button that folds into a cross.",
+      "nameZh": "细线菜单按钮",
+      "descriptionZh": "两条线组成的菜单按钮，会折成一个叉。",
+      "categories": [
+        "nav",
+        "hover"
+      ],
+      "directory": "effects/hairline-burger",
+      "preview": "https://effectatlas.com/effects/hairline-burger",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountHairlineBurger"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "hanging-card-carousel",
+      "name": "Hanging Card Carousel",
+      "description": "A row of hanging cards that swing when flung.",
+      "nameZh": "悬挂卡片轮播",
+      "descriptionZh": "一排挂着的卡片，甩一下就晃起来。",
+      "categories": [
+        "gallery"
+      ],
+      "directory": "effects/hanging-card-carousel",
+      "preview": "https://effectatlas.com/effects/hanging-card-carousel",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountHangingCardCarousel"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "hold-to-burst",
+      "name": "Hold to Burst",
+      "description": "Hold to charge a shape until it bursts apart.",
+      "nameZh": "长按迸发",
+      "descriptionZh": "按住给图形蓄力，直到它炸开。",
+      "categories": [
+        "other"
+      ],
+      "directory": "effects/hold-to-burst",
+      "preview": "https://effectatlas.com/effects/hold-to-burst",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountHoldToBurst"
+      },
+      "dependencies": [
+        "three.min.js"
+      ],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html",
+        "three.LICENSE.txt",
+        "three.min.js"
+      ]
+    },
+    {
+      "slug": "horizontal-wheel-strip",
+      "name": "Horizontal Wheel Strip",
+      "description": "A horizontal strip that glides with inertia.",
+      "nameZh": "横向滚轮长条",
+      "descriptionZh": "一条横向长条，滑动时带着惯性。",
+      "categories": [
+        "gallery",
+        "scroll"
+      ],
+      "directory": "effects/horizontal-wheel-strip",
+      "preview": "https://effectatlas.com/effects/horizontal-wheel-strip",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountHorizontalWheelStrip"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "inertia-drag",
+      "name": "Inertia Drag",
+      "description": "Tiles you can toss that glide, tilt, and settle.",
+      "nameZh": "惯性拖拽",
+      "descriptionZh": "可以甩出去的方块，会滑行、倾斜，然后停稳。",
+      "categories": [
+        "gallery"
+      ],
+      "directory": "effects/inertia-drag",
+      "preview": "https://effectatlas.com/effects/inertia-drag",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountInertiaDrag"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "line-by-line-handoff",
+      "name": "Line-by-Line Handoff",
+      "description": "Pages that swap line by line while the logo stays.",
+      "nameZh": "逐行过渡入场",
+      "descriptionZh": "logo 不动，页面一行一行地换。",
+      "categories": [
+        "trans"
+      ],
+      "directory": "effects/line-by-line-handoff",
+      "preview": "https://effectatlas.com/effects/line-by-line-handoff",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountLineByLineHandoff"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "link-hover-set",
+      "name": "Link Hover Set",
+      "description": "Two link hovers for real pages: a double underline that chases itself, and letters that roll with an arrow that swaps out. Hover any link.",
+      "nameZh": "链接悬停合集",
+      "descriptionZh": "两种能直接用在页面上的链接悬停：一种是两条下划线前后追着跑，一种是字母滚动、箭头换一个新的。随便悬停一个链接试试。",
+      "categories": [
+        "hover"
+      ],
+      "directory": "effects/link-hover-set",
+      "preview": "https://effectatlas.com/effects/link-hover-set",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountLinkHoverSet"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "local-clock-pill",
+      "name": "Local Clock Pill",
+      "description": "A local-time pill that rolls over to a contact link.",
+      "nameZh": "本地时钟胶囊",
+      "descriptionZh": "显示本地时间的胶囊，悬停时翻成联系链接。",
+      "categories": [
+        "nav"
+      ],
+      "directory": "effects/local-clock-pill",
+      "preview": "https://effectatlas.com/effects/local-clock-pill",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountLocalClockPill"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "magnetic-symbol-field",
+      "name": "Magnetic Symbol Field",
+      "description": "A grid of symbols that scatters away from your cursor.",
+      "nameZh": "磁力符号阵",
+      "descriptionZh": "排成网格的一片符号，光标靠近就被推开。",
+      "categories": [
+        "cursor"
+      ],
+      "directory": "effects/magnetic-symbol-field",
+      "preview": "https://effectatlas.com/effects/magnetic-symbol-field",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountMagneticSymbolField"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "mask-decode-reveal",
+      "name": "Mask Decode Reveal",
+      "description": "Ink bars sweep across headlines while labels decode.",
+      "nameZh": "遮罩乱码",
+      "descriptionZh": "墨色色条扫过标题，旁边的标签同时从乱码里解出来。",
+      "categories": [
+        "text",
+        "scroll"
+      ],
+      "directory": "effects/mask-decode-reveal",
+      "preview": "https://effectatlas.com/effects/mask-decode-reveal",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountMaskDecodeReveal"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "masked-word-flip",
+      "name": "Masked Word Flip",
+      "description": "Word pairs that flip up through narrow masks.",
+      "nameZh": "遮罩翻词",
+      "descriptionZh": "一组组词透过窄窄的遮罩往上翻。",
+      "categories": [
+        "text"
+      ],
+      "directory": "effects/masked-word-flip",
+      "preview": "https://effectatlas.com/effects/masked-word-flip",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountMaskedWordFlip"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "noise-dissolve-reveal",
+      "name": "Noise Dissolve Reveal",
+      "description": "A living, noisy edge that dissolves one layer into another.",
+      "nameZh": "噪声溶解揭开",
+      "descriptionZh": "一条一直在动的噪声边缘，把一层画面溶成另一层。",
+      "categories": [
+        "scroll"
+      ],
+      "directory": "effects/noise-dissolve-reveal",
+      "preview": "https://effectatlas.com/effects/noise-dissolve-reveal",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountNoiseDissolveReveal"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "orbit-cursor",
+      "name": "Orbit Cursor",
+      "description": "A dial whose dot follows your cursor around the ring.",
+      "nameZh": "环绕光标",
+      "descriptionZh": "一个表盘，上面的圆点会沿着圆环跟着光标转。",
+      "categories": [
+        "cursor"
+      ],
+      "directory": "effects/orbit-cursor",
+      "preview": "https://effectatlas.com/effects/orbit-cursor",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountOrbitCursor"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "pixel-wipe-button",
+      "name": "Pixel Wipe Button",
+      "description": "A button hover that fills in square by square, frame by frame. On the way out it never rewinds: the old colour sweeps back in from the left. Hover any button.",
+      "nameZh": "像素擦除按钮",
+      "descriptionZh": "悬停时按钮一格一格、一帧一帧地填满。移开时不倒放，而是原来的颜色从左边重新扫回来。随便悬停一个按钮试试。",
+      "categories": [
+        "hover",
+        "nav"
+      ],
+      "directory": "effects/pixel-wipe-button",
+      "preview": "https://effectatlas.com/effects/pixel-wipe-button",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountPixelWipeButton"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "poster-masthead-collapse",
+      "name": "Poster Masthead Collapse",
+      "description": "A hairline unfolds into a poster, then folds into a logo.",
+      "nameZh": "海报刊头收拢",
+      "descriptionZh": "一根细线展开成海报，再收成一个 logo。",
+      "categories": [
+        "hero",
+        "text"
+      ],
+      "directory": "effects/poster-masthead-collapse",
+      "preview": "https://effectatlas.com/effects/poster-masthead-collapse",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountPosterMastheadCollapse"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "prismatic-fluid-headline",
+      "name": "Prismatic Fluid Headline",
+      "description": "Sweep across an outlined headline and liquid colour swirls inside the letters, then fades.",
+      "nameZh": "彩色流体遮罩",
+      "descriptionZh": "在空心大标题上划过，字母里会卷起流动的彩色，然后慢慢褪掉。",
+      "categories": [
+        "text",
+        "cursor",
+        "hero"
+      ],
+      "directory": "effects/prismatic-fluid-headline",
+      "preview": "https://effectatlas.com/effects/prismatic-fluid-headline",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountPrismaticFluidHeadline"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "reading-word-highlight",
+      "name": "Word-by-Word Reading Highlight",
+      "description": "Reveals text and sweeps highlights through an existing article as you scroll.",
+      "nameZh": "逐词阅读点亮",
+      "descriptionZh": "随滚动逐词点亮现有文章，并为标记的关键词铺开底纹。",
+      "categories": [
+        "text",
+        "scroll"
+      ],
+      "directory": "effects/reading-word-highlight",
+      "preview": "https://effectatlas.com/effects/reading-word-highlight",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountReadingWordHighlight"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "redrawn-arrow-hover",
+      "name": "Redrawn Arrow",
+      "description": "Hover an arrow: the old one slides off and erases, a new one draws itself in.",
+      "nameZh": "重画箭头",
+      "descriptionZh": "悬停在箭头上：旧箭头滑走、擦掉，新箭头自己画出来。",
+      "categories": [
+        "hover"
+      ],
+      "directory": "effects/redrawn-arrow-hover",
+      "preview": "https://effectatlas.com/effects/redrawn-arrow-hover",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountRedrawnArrow"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "rotating-tab-accordion",
+      "name": "Rotating Tab Accordion",
+      "description": "A service directory with vertical tab labels that opens on hover, click or keyboard input.",
+      "nameZh": "旋转标签手风琴",
+      "descriptionZh": "带竖排标签的服务目录，支持悬停、点击和键盘展开，小屏幕改为纵向排列。",
+      "categories": [
+        "nav",
+        "hover"
+      ],
+      "directory": "effects/rotating-tab-accordion",
+      "preview": "https://effectatlas.com/effects/rotating-tab-accordion",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountRotatingTabAccordion"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "scribble-ring",
+      "name": "Scribble Ring",
+      "description": "A hand-drawn ring that circles whatever you hover.",
+      "nameZh": "手绘圈",
+      "descriptionZh": "悬停到哪儿，就有一圈手绘线把它圈起来。",
+      "categories": [
+        "hover"
+      ],
+      "directory": "effects/scribble-ring",
+      "preview": "https://effectatlas.com/effects/scribble-ring",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountScribbleRing"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "scroll-card-deal",
+      "name": "Scroll Card Deal",
+      "description": "A face-down pile that deals out into a row and flips card by card as you scroll.",
+      "nameZh": "滚动发牌",
+      "descriptionZh": "一叠扣着的牌，随滚动发成一排，再一张张翻过来。",
+      "categories": [
+        "scroll",
+        "gallery"
+      ],
+      "directory": "effects/scroll-card-deal",
+      "preview": "https://effectatlas.com/effects/scroll-card-deal",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountScrollCardDeal"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "scroll-card-stack",
+      "name": "Scroll Card Stack",
+      "description": "Cards that slide up and stack as you scroll.",
+      "nameZh": "滚动卡片堆叠",
+      "descriptionZh": "随着滚动，卡片往上滑，一张张叠起来。",
+      "categories": [
+        "scroll",
+        "gallery"
+      ],
+      "directory": "effects/scroll-card-stack",
+      "preview": "https://effectatlas.com/effects/scroll-card-stack",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountScrollCardStack"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "scroll-minimap",
+      "name": "Scroll Minimap",
+      "description": "A little map of the whole page, with a frame showing where you are. Scroll, or click a block to jump.",
+      "nameZh": "滚动小地图",
+      "descriptionZh": "整个页面的小地图，用一个框标出你现在看到哪儿。滚动，或者点一块直接跳过去。",
+      "categories": [
+        "nav",
+        "scroll"
+      ],
+      "directory": "effects/scroll-minimap",
+      "preview": "https://effectatlas.com/effects/scroll-minimap",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountScrollMinimap"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "scroll-speed-scramble",
+      "name": "Scroll Speed Scramble",
+      "description": "A headline that scrambles into letters the faster you scroll.",
+      "nameZh": "滚速乱码",
+      "descriptionZh": "一行标题，滚得越快，字母乱得越厉害。",
+      "categories": [
+        "text",
+        "scroll"
+      ],
+      "directory": "effects/scroll-speed-scramble",
+      "preview": "https://effectatlas.com/effects/scroll-speed-scramble",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountScrollSpeedScramble"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "scroll-story",
+      "name": "Bouncing Text Entrance",
+      "description": "Letters animate in when scrolled into view, then stay for you to read.",
+      "nameZh": "弹跳文字入场",
+      "descriptionZh": "滚动触发文字入场，停止滚动也会播完，随后保持清晰可读。",
+      "categories": [
+        "text",
+        "scroll",
+        "hero"
+      ],
+      "directory": "effects/scroll-story",
+      "preview": "https://effectatlas.com/effects/scroll-story",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountScrollStory"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "scroll-warp-zoom",
+      "name": "Scroll Warp Zoom",
+      "description": "Scroll and the small card swells from its centre into a big one, colour flooding back in.",
+      "nameZh": "滚动扭曲放大",
+      "descriptionZh": "一滚动，小卡片从中间撑起、放大成大卡片，颜色也跟着回来。",
+      "categories": [
+        "scroll",
+        "gallery",
+        "trans"
+      ],
+      "directory": "effects/scroll-warp-zoom",
+      "preview": "https://effectatlas.com/effects/scroll-warp-zoom",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountScrollWarpZoom"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "shared-element-transition",
+      "name": "Shared Element Transition",
+      "description": "A thumbnail that grows into a full detail view and back.",
+      "nameZh": "共享元素转场",
+      "descriptionZh": "缩略图放大成完整的详情页，也能再缩回去。",
+      "categories": [
+        "trans"
+      ],
+      "directory": "effects/shared-element-transition",
+      "preview": "https://effectatlas.com/effects/shared-element-transition",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountSharedElementTransition"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "smear-in-grid",
+      "name": "Smear-In Grid",
+      "description": "Images that stretch in from blurred bands, out of order.",
+      "nameZh": "模糊横带入场",
+      "descriptionZh": "图片从模糊的横带里撑开入场，顺序是打乱的。",
+      "categories": [
+        "scroll"
+      ],
+      "directory": "effects/smear-in-grid",
+      "preview": "https://effectatlas.com/effects/smear-in-grid",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountSmearInGrid"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "smear-trail-preloader",
+      "name": "Smear-Trail Preloader",
+      "description": "Lines of text whip in dragging a trail of their own letters, then the cover lifts.",
+      "nameZh": "拖影入场",
+      "descriptionZh": "一行行文字甩进来，身后拖着自己字母的残影，最后盖板掀起来。",
+      "categories": [
+        "trans",
+        "hero",
+        "text"
+      ],
+      "directory": "effects/smear-trail-preloader",
+      "preview": "https://effectatlas.com/effects/smear-trail-preloader",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountSmearTrailPreloader"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "stacked-frame-index",
+      "name": "Stacked Frame Index",
+      "description": "An index whose thumbnails flip through frames on hover.",
+      "nameZh": "叠帧索引",
+      "descriptionZh": "一份索引列表，悬停时缩略图会一帧帧翻过去。",
+      "categories": [
+        "hover"
+      ],
+      "directory": "effects/stacked-frame-index",
+      "preview": "https://effectatlas.com/effects/stacked-frame-index",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountStackedFrameIndex"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "tear-off-pricing-ticket",
+      "name": "Tear-Off Pricing Ticket",
+      "description": "Scroll to bring the price tickets up and flip them over, then hover one to tear off its stub.",
+      "nameZh": "撕票卡片",
+      "descriptionZh": "滚动让价格票升上来、翻到正面，再悬停在一张上，把票根撕下来。",
+      "categories": [
+        "hover"
+      ],
+      "directory": "effects/tear-off-pricing-ticket",
+      "preview": "https://effectatlas.com/effects/tear-off-pricing-ticket",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountTearOffPricingTicket"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "torn-cursor-ink",
+      "name": "Torn Cursor Ink",
+      "description": "A cursor that tears ragged holes through the page.",
+      "nameZh": "撕裂光标",
+      "descriptionZh": "光标划过的地方，页面被撕出一个个毛边破洞。",
+      "categories": [
+        "cursor"
+      ],
+      "directory": "effects/torn-cursor-ink",
+      "preview": "https://effectatlas.com/effects/torn-cursor-ink",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountTornCursorInk"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    },
+    {
+      "slug": "torn-sheet-transition",
+      "name": "Torn Sheet Transition",
+      "description": "A torn ink sheet that covers and reveals each page.",
+      "nameZh": "撕纸转场",
+      "descriptionZh": "一张撕边的墨色纸，把每一页盖上再揭开。",
+      "categories": [
+        "trans"
+      ],
+      "directory": "effects/torn-sheet-transition",
+      "preview": "https://effectatlas.com/effects/torn-sheet-transition",
+      "entry": {
+        "demo": "index.html",
+        "script": "effect.js",
+        "styles": "effect.css",
+        "mount": "mountTornSheetTransition"
+      },
+      "dependencies": [],
+      "files": [
+        "effect.css",
+        "effect.js",
+        "index.html"
+      ]
+    }
+  ]
+}

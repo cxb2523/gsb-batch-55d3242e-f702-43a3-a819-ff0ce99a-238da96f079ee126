@@ -1,0 +1,28 @@
+.er-viewport > .er-band {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+}
+.er-viewport > .er-left {
+  left: 0;
+}
+.er-viewport > .er-right {
+  right: 0;
+}
+.er-viewport > .er-top {
+  top: 0;
+}
+.er-viewport > .er-bottom {
+  bottom: 0;
+}
+.er-viewport > .er-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.er-viewport .er-optical-surface {
+  position: absolute;
+  inset: 0;
+}

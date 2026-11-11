@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Studio services</title>
+    <link rel="stylesheet" href="effect.css" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f2f2ef;
+        color: #202321;
+        font:
+          17px/1.65 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 1120px;
+        padding: 40px 24px 100px;
+        margin: auto;
+      }
+      header {
+        max-width: 760px;
+        margin-bottom: 36px;
+      }
+      h1 {
+        font-size: clamp(34px, 5vw, 62px);
+        line-height: 1.15;
+        letter-spacing: -0.035em;
+        font-weight: 650;
+        margin: 24px 0;
+      }
+      h2 {
+        font-size: 28px;
+        line-height: 1.3;
+      }
+      a {
+        color: #314f77;
+        text-underline-offset: 4px;
+      }
+      nav {
+        display: flex;
+        gap: 24px;
+        flex-wrap: wrap;
+        font-size: 14px;
+      }
+      .eyebrow {
+        font-size: 12px;
+        letter-spacing: 0.13em;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 9px 15px;
+        border: 1px solid #b7beb6;
+        border-radius: 6px;
+        background: #fafbf8;
+        color: inherit;
+        cursor: pointer;
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid #4559ff;
+        outline-offset: 3px;
+      }
+      .tools {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 22px 0;
+      }
+      .context {
+        max-width: 700px;
+        margin: 0 0 26px;
+        color: #586055;
+      }
+      .destination {
+        padding: 80px 0;
+        border-top: 1px solid #cfd4cd;
+      }
+      .article {
+        max-width: 740px;
+        margin: auto;
+        font-size: clamp(21px, 2.4vw, 30px);
+        line-height: 1.75;
+      }
+      .article p {
+        margin: 0 0 1.6em;
+      }
+      .chapter {
+        padding: 10vh 0 6vh;
+      }
+      .reading-scroll {
+        height: 440px;
+        overflow: auto;
+        border: 1px solid #c5cec4;
+        background: #fff;
+        padding: 0 28px;
+        overscroll-behavior: auto;
+      }
+      .reading-scroll .spacer {
+        height: 330px;
+      }
+      .viewport {
+        position: relative;
+        width: 100%;
+        height: 390px;
+        background: #e8ece7;
+        overflow: hidden;
+        border-radius: 10px;
+      }
+      .content {
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        overscroll-behavior: auto;
+        scrollbar-width: thin;
+      }
+      .track {
+        display: flex;
+        gap: 34px;
+        width: max-content;
+        height: 100%;
+        align-items: center;
+        padding: 20px 34px;
+      }
+      .track a {
+        display: block;
+        flex: none;
+        height: 300px;
+      }
+      .track img {
+        display: block;
+        height: 100%;
+        width: auto;
+        border-radius: 6px;
+      }
+      .vertical {
+        height: 580px;
+      }
+      .vertical .track {
+        flex-direction: column;
+        height: auto;
+        width: 100%;
+        padding: 34px;
+      }
+      .vertical .track a {
+        height: auto;
+        max-width: 100%;
+        width: 80%;
+      }
+      .vertical .track img {
+        width: 100%;
+        height: auto;
+      }
+      .carousel .content {
+        overflow: hidden;
+      }
+      .carousel .track {
+        transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      details {
+        margin-top: 36px;
+        max-width: 760px;
+        font-size: 15px;
+      }
+      code {
+        background: #e3e7e0;
+        padding: 2px 4px;
+      }
+      footer {
+        padding-top: 60px;
+        font-size: 14px;
+        color: #586055;
+      }
+      @media (max-width: 600px) {
+        main {
+          padding: 24px 18px 60px;
+        }
+        .viewport {
+          height: 320px;
+        }
+        .track {
+          gap: 22px;
+          padding: 20px 22px;
+        }
+        .track a {
+          height: 250px;
+        }
+        .vertical {
+          height: 460px;
+        }
+        .reading-scroll {
+          padding: 0 18px;
+        }
+        .article {
+          font-size: 22px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .carousel .track {
+          transition: none;
+        }
+      }
+      body {
+        background: #fff;
+        color: #17181a;
+      }
+      a {
+        color: #4559ff;
+      }
+      button,
+      select {
+        background: #fff;
+        border-color: rgba(23, 24, 26, 0.18);
+      }
+      .context,
+      footer {
+        color: #73726d;
+      }
+      .destination {
+        border-color: rgba(23, 24, 26, 0.14);
+      }
+      code {
+        background: #f1f1f1;
+      }
+      .reading-scroll {
+        background: transparent;
+        border-color: rgba(23, 24, 26, 0.14);
+      }
+      .reading-scroll:focus:not(:focus-visible) {
+        outline: none;
+      }
+      .reading-scroll:focus-visible {
+        outline: 2px solid #4559ff;
+        outline-offset: 4px;
+      }
+      .rta-root {
+        --rta-ink: #17181a;
+        --rta-muted: #73726d;
+        --rta-border: rgba(23, 24, 26, 0.14);
+        --rta-surface: #fff;
+        --rta-active-surface: #fff;
+        --rta-image-surface: #f1f1f1;
+      }
+      .viewport {
+        background: transparent;
+      }
+      .viewport:not([data-loop-gallery]) .content:focus {
+        outline: none;
+      }
+      .viewport:not([data-loop-gallery]):has(.content:focus-visible) {
+        outline: 2px solid #4559ff;
+        outline-offset: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">INDEPENDENT EXAMPLE</p>
+        <h1>Studio services</h1>
+        <p class="context">
+          Four numbered service columns, each with a short paragraph. Replace the titles and descriptions with your own
+          content.
+        </p>
+      </header>
+      <div id="host"></div>
+      <div class="tools">
+        <button id="close" type="button">Close all</button><button id="replace" type="button">Replace content</button>
+      </div>
+      <section class="destination" id="project-0">
+        <h2>Strategy</h2>
+        <p>More information about this service can live here.</p>
+      </section>
+      <section class="destination" id="project-1">
+        <h2>Design</h2>
+        <p>More information about this service can live here.</p>
+      </section>
+      <section class="destination" id="project-2">
+        <h2>Development</h2>
+        <p>More information about this service can live here.</p>
+      </section>
+      <section class="destination" id="project-3">
+        <h2>Intelligence</h2>
+        <p>More information about this service can live here.</p>
+      </section>
+      <details>
+        <summary>Integration notes</summary>
+        <p>
+          Four numbered service columns, each with a short paragraph. Replace the titles and descriptions with your own
+          content.
+        </p>
+        <p>The effect files contain only the behaviour. This HTML owns the content and layout.</p>
+      </details>
+      <footer>A self-contained HTML example.</footer>
+    </main>
+    <script src="effect.js"></script>
+    <script>
+      const host = document.getElementById("host");
+      let alternate = false;
+      const titles = ["Strategy", "Design", "Development", "Intelligence"],
+        descriptions = [
+          "We bring focus to complex ideas, helping teams find a clear direction and a practical way forward.",
+          "We shape thoughtful visual experiences, giving every detail a purpose and every idea room to be understood.",
+          "We turn useful ideas into reliable digital experiences that feel simple to use and are built to grow.",
+          "We explore new possibilities with a curious mind, connecting information and tools to make everyday work a little easier.",
+        ];
+      function items() {
+        return titles.map((title, i) => ({
+          title,
+          description: alternate ? descriptions[(i + 1) % descriptions.length] : descriptions[i],
+        }));
+      }
+      let effect;
+      function remount() {
+        effect = mountRotatingTabAccordion(host, { items: items() });
+        window.effect = effect;
+        return effect;
+      }
+      remount();
+      document.getElementById("close").onclick = () => effect.setActive(null);
+      document.getElementById("replace").onclick = () => {
+        alternate = !alternate;
+        effect.setItems(items());
+      };
+      window.example = {
+        type: "accordion",
+        host,
+        remount,
+        items,
+        get effect() {
+          return effect;
+        },
+      };
+    </script>
+  </body>
+</html>

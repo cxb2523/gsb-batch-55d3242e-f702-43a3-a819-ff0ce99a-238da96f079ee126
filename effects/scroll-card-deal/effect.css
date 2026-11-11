@@ -1,0 +1,145 @@
+/* Scroll Card Deal: styles for the effect. mountScrollCardDeal() adds the .scroll-card-deal class to your element; give that element a size. */
+.scroll-card-deal {
+  --accent: var(--fx-accent);
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-ink: #17181a;
+  --fx-object: #fff;
+  --fx-shadow-lift:
+    0 0 0 1px rgba(23, 24, 26, 0.06), 0 22px 44px -6px rgba(23, 24, 26, 0.16), 0 6px 14px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --ink: var(--fx-ink);
+  --ink-2: #5c5b56;
+  --object: var(--fx-object);
+  --shadow-lift: var(--fx-shadow-lift);
+}
+.scroll-card-deal {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.scroll-card-deal,
+.scroll-card-deal *,
+.scroll-card-deal *::before,
+.scroll-card-deal *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.scroll-card-deal::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+[data-deal-board] {
+  border-radius: inherit;
+  touch-action: none;
+  cursor: grab;
+}
+[data-deal-board].deal-dragging {
+  cursor: grabbing;
+}
+[data-deal-board]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -8px;
+}
+[data-deal-board] .deal-wrap {
+  position: absolute;
+  perspective: 1600px;
+}
+[data-deal-board] .deal-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+[data-deal-board] .deal-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+[data-deal-board] .deal-face-back {
+  transform: rotateY(180deg);
+}
+[data-deal-board] .deal-face > * {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+[data-deal-board] .deal-front {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--fx-k));
+  padding: calc(14px * var(--fx-k));
+  border-radius: calc(16px * var(--fx-k));
+  background: var(--object);
+  box-shadow: var(--shadow-lift);
+  color: var(--ink);
+}
+[data-deal-board] .deal-art {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  margin-bottom: calc(12px * var(--fx-k));
+  border-radius: calc(10px * var(--fx-k));
+  background: #efefee;
+  color: var(--ink);
+}
+[data-deal-board] .deal-art[data-accent] {
+  color: var(--accent);
+}
+[data-deal-board] .deal-glyph {
+  width: 34%;
+  max-height: 60%;
+}
+[data-deal-board] .deal-name {
+  font: 500 calc(17px * var(--fx-k))/1.2 var(--font);
+}
+[data-deal-board] .deal-line {
+  font: 400 calc(14px * var(--fx-k))/1.3 var(--font);
+  color: var(--ink-2);
+}
+[data-deal-board] .deal-back {
+  display: grid;
+  place-items: center;
+  border-radius: calc(16px * var(--fx-k));
+  background: var(--ink);
+  color: var(--object);
+  box-shadow: var(--shadow-lift);
+}
+[data-deal-board] .deal-back svg {
+  width: 40%;
+  height: auto;
+}
+[data-deal-board].deal-narrow .deal-card {
+  width: 100% !important;
+}

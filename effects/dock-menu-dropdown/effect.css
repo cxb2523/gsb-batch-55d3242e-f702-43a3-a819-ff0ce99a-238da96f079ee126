@@ -1,0 +1,663 @@
+/* Dock Menu Dropdown: styles for the effect. mountDockMenuDropdown() adds the .dock-menu-dropdown class to your element; give that element a size. */
+.dock-menu-dropdown {
+  --accent: var(--fx-accent);
+  --ck-max: 336px;
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-ink-3: #9a9993;
+  --fx-object: #fff;
+  --fx-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-shadow-lift:
+    0 0 0 1px rgba(23, 24, 26, 0.06), 0 22px 44px -6px rgba(23, 24, 26, 0.16), 0 6px 14px rgba(23, 24, 26, 0.06);
+  --fx-spring: cubic-bezier(0.28, 1.3, 0.36, 1);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --ink-3: var(--fx-ink-3);
+  --mono: "Geist", "Inter", system-ui, sans-serif;
+  --object: var(--fx-object);
+  --out: var(--fx-out);
+  --r-lg: 24px;
+  --r-md: 16px;
+  --r-sm: 10px;
+  --shadow: var(--fx-shadow);
+  --shadow-lift: var(--fx-shadow-lift);
+  --spring: var(--fx-spring);
+  --surface: #f0f0ef;
+}
+.dock-menu-dropdown {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.dock-menu-dropdown,
+.dock-menu-dropdown *,
+.dock-menu-dropdown *::before,
+.dock-menu-dropdown *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.dock-menu-dropdown::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.ck-panel {
+  position: relative;
+  width: min(var(--ck-max), 100%);
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--object);
+  box-shadow: var(--shadow);
+}
+.ck-panel[data-size="lg"] {
+  border-radius: var(--r-lg);
+  padding: 12px;
+}
+.ck-solid {
+  background: var(--ink) !important;
+  color: var(--object) !important;
+  box-shadow: none;
+}
+.ck-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+}
+.ck-row[data-on] {
+  background: rgba(23, 24, 26, 0.05);
+}
+.ck-text {
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+}
+.ck-text[data-strong] {
+  font-weight: 500;
+}
+.ck-num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.ck-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.ck-dot[data-size="lg"] {
+  width: 24px;
+  height: 24px;
+}
+.ck-dot[data-accent] {
+  background: var(--accent);
+}
+.ck-dot[data-weak] {
+  background: rgba(23, 24, 26, 0.16);
+}
+.dock-menu-dropdown .ck-dot {
+  width: calc(8px * var(--fx-k, 1));
+  height: calc(8px * var(--fx-k, 1));
+}
+.dock-menu-dropdown .ck-dot[data-size="lg"] {
+  width: calc(24px * var(--fx-k, 1));
+  height: calc(24px * var(--fx-k, 1));
+}
+.dock-menu-dropdown :is(.ck-panel, .ck-pill, .ck-row) {
+  --fx-k: 1;
+}
+.dock-stage {
+  --row: 280ms;
+  --stagger: 50ms;
+  --dock-ease: var(--out);
+  --open-d: 0.54s;
+  --close-d: 0.36s;
+  --fade-in: 0.5;
+  --fade-out: 0.5;
+  --bar-delay: 0.18s;
+  --label-d: 0.44s;
+  --row-base: 60ms;
+  --yr-k: 0.8;
+  --yr-from: 110%;
+  --yr-ease: var(--spring);
+}
+.dock-page {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.dock-disc {
+  position: absolute;
+  left: 50%;
+  top: 62%;
+  width: min(32cqw, 46cqh);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--object);
+  box-shadow: var(--shadow);
+  display: grid;
+  place-items: center;
+}
+.dock-disc i {
+  width: 18%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+.dock-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(23, 24, 26, 0.04);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--close-d) var(--dock-ease) 40ms;
+}
+.dock-stage.is-open .dock-dim {
+  opacity: 1;
+  transition: opacity var(--open-d) var(--dock-ease) 0s;
+}
+.dock {
+  --h0: 3em;
+  --oh: 24em;
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  transform: translateX(-50%);
+  font: 500 clamp(11px, 1.56cqw, 16px)/1 var(--font);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  width: var(--w-open, 24em);
+  z-index: 2;
+}
+.dock-bg {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: var(--w, 18em);
+  height: var(--h0);
+  transform: translateX(-50%);
+  background: var(--object);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow);
+  transition:
+    height var(--close-d) var(--dock-ease),
+    width var(--close-d) var(--dock-ease),
+    box-shadow var(--close-d) var(--dock-ease);
+  will-change: height;
+}
+.dock.is-open .dock-bg {
+  height: var(--oh);
+  width: var(--w-open);
+  box-shadow: var(--shadow-lift);
+  transition-duration: var(--open-d);
+}
+.dock-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25em;
+  height: var(--h0);
+  width: max-content;
+  margin: 0 auto;
+  padding: 0 0.5em;
+  white-space: nowrap;
+}
+.dock-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 0.5em;
+}
+.dock-logo i {
+  display: block;
+  width: 0.8em;
+  height: 0.8em;
+  background: var(--ink);
+  border-radius: 50%;
+}
+.dock-logo i + i {
+  border-radius: 2px;
+}
+.dock-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375em;
+  padding: 0.25em 0.75em;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.dock-link:not(.is-current):not(.dock-toggle) {
+  opacity: 0.6;
+  transition: opacity 0.3s var(--dock-ease);
+}
+.dock-link:not(.is-current):not(.dock-toggle):hover {
+  opacity: 1;
+}
+.dock-dot {
+  position: absolute;
+  left: 50%;
+  bottom: -0.15em;
+  width: 0.3em;
+  height: 0.3em;
+  margin-left: -0.15em;
+  border-radius: 50%;
+  background: currentColor;
+}
+.dock-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.dock-label {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  height: 1.15em;
+  line-height: 1.15;
+  transition: width var(--label-d) var(--dock-ease);
+}
+.dock-word,
+.dock-count {
+  display: block;
+  transition: transform var(--label-d) var(--dock-ease);
+  white-space: nowrap;
+}
+.dock-count {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translateY(130%);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.dock.is-open .dock-word {
+  transform: translateY(-130%);
+}
+.dock.is-open .dock-count {
+  transform: translateY(0);
+}
+.dock[data-card] .dock-count {
+  display: none;
+}
+.dock[data-card].is-open .dock-word {
+  transform: none;
+}
+.dock-chev {
+  width: 0.875em;
+  height: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--close-d) var(--dock-ease);
+}
+.dock.is-open .dock-chev {
+  transform: rotate(180deg);
+  transition-duration: var(--open-d);
+}
+.dock-drop {
+  position: absolute;
+  left: 50%;
+  top: var(--h0);
+  width: var(--w-open);
+  height: 0;
+  transform: translateX(-50%);
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    height var(--close-d) var(--dock-ease),
+    opacity calc(var(--close-d) * var(--fade-out)) var(--dock-ease),
+    visibility 0s linear calc(var(--close-d) * var(--fade-out));
+}
+.dock.is-open .dock-drop {
+  height: calc(var(--oh) - var(--h0));
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    height var(--open-d) var(--dock-ease),
+    opacity calc(var(--open-d) * var(--fade-in)) var(--dock-ease),
+    visibility 0s;
+}
+.dock[data-card] .dock-drop {
+  clip-path: inset(0 calc((var(--w-open) - var(--w)) / 2));
+  transition:
+    height var(--close-d) var(--dock-ease),
+    opacity calc(var(--close-d) * var(--fade-out)) var(--dock-ease),
+    visibility 0s linear calc(var(--close-d) * var(--fade-out)),
+    clip-path var(--close-d) var(--dock-ease);
+}
+.dock[data-card].is-open .dock-drop {
+  clip-path: inset(0);
+  transition:
+    height var(--open-d) var(--dock-ease),
+    opacity calc(var(--open-d) * var(--fade-in)) var(--dock-ease),
+    visibility 0s,
+    clip-path var(--open-d) var(--dock-ease);
+}
+.dock-scroller {
+  --ft: 0;
+  --fb: 0;
+  position: absolute;
+  inset: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 calc(3em * var(--ft)),
+    #000 calc(100% - 3em * var(--fb)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 calc(3em * var(--ft)),
+    #000 calc(100% - 3em * var(--fb)),
+    transparent 100%
+  );
+}
+.dock-scroller::-webkit-scrollbar {
+  display: none;
+}
+.dock-list {
+  list-style: none;
+  margin: 0 auto;
+  padding: 1.25em 0 0.75em;
+  max-width: 16em;
+  display: grid;
+  gap: 2px;
+}
+.dock-item {
+  position: relative;
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 0.4em 0.5em;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  border-radius: 3px;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(0.6em);
+  transition:
+    color 0.14s var(--dock-ease),
+    opacity 0.2s var(--dock-ease),
+    transform 0.2s var(--dock-ease);
+}
+.dock.is-open .dock-item {
+  opacity: 1;
+  transform: none;
+  transition:
+    color 0.14s var(--dock-ease),
+    opacity calc(var(--open-d) * 0.7) var(--dock-ease) calc(var(--row-base) + var(--stagger) * var(--n, 0)),
+    transform var(--open-d) var(--dock-ease) calc(var(--row-base) + var(--stagger) * var(--n, 0));
+}
+.dock-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--ink);
+  transform: scaleY(0);
+  transform-origin: center bottom;
+  transition: transform var(--row) var(--dock-ease);
+}
+.dock-inner {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+}
+.dock-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dock-yr-mask {
+  display: block;
+  overflow: hidden;
+  flex: none;
+}
+.dock-yr {
+  display: block;
+  font: 500 0.86em/1.1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  transform: translateY(var(--yr-from));
+  transition: transform calc(var(--row) * var(--yr-k)) var(--yr-ease);
+}
+.dock-item.is-hot,
+.dock-item.is-active {
+  color: var(--object);
+}
+.dock-item.is-hot .dock-fill,
+.dock-item.is-active .dock-fill {
+  transform: scaleY(1);
+}
+.dock-item.is-hot .dock-yr,
+.dock-item.is-active .dock-yr {
+  transform: translateY(0);
+}
+.dock-item.is-active .dock-name::before {
+  content: "";
+  display: inline-block;
+  width: 0.38em;
+  height: 0.38em;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 0.45em;
+  vertical-align: 0.12em;
+}
+.dock-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.dock-inner {
+  transition: translate var(--row) var(--spring);
+}
+.dock-item.is-hot .dock-inner {
+  translate: 0.14em 0;
+}
+.dock-bar {
+  position: absolute;
+  right: 0.6em;
+  top: 50%;
+  width: 4px;
+  height: 7.25em;
+  margin-top: -3.625em;
+  border-radius: 2px;
+  background: rgba(23, 24, 26, 0.1);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  opacity: 0;
+  transform: translateY(0.5em);
+  transition:
+    opacity calc(var(--close-d) * var(--fade-out)) var(--dock-ease),
+    transform var(--close-d) var(--dock-ease);
+}
+.dock-bar::before {
+  content: "";
+  position: absolute;
+  inset: -6px -8px;
+}
+.dock.is-open .dock-bar {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity calc(var(--open-d) * var(--fade-in)) var(--dock-ease) var(--bar-delay),
+    transform var(--open-d) var(--dock-ease) var(--bar-delay);
+}
+.dock-thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 50%;
+  border-radius: 2px;
+  background: var(--ink);
+  cursor: grab;
+  will-change: transform, height;
+}
+.dock-thumb.is-dragging {
+  cursor: grabbing;
+}
+.dock-bar.is-disabled {
+  pointer-events: none;
+  opacity: 0 !important;
+}
+.dock-stage .cr-hint {
+  left: 50%;
+  right: auto;
+  translate: -50% 0;
+  width: max-content;
+  max-width: 84%;
+  bottom: 5%;
+  color: var(--ink-3);
+}
+.dock-stage[data-paused="true"] * {
+  animation-play-state: paused !important;
+}
+.dock-stage[data-reduced="true"] * {
+  transition: none !important;
+  animation: none !important;
+}
+@container (aspect-ratio<1) {
+  .dock {
+    top: 10%;
+  }
+  .dock-disc {
+    top: 64%;
+    width: 62cqw;
+  }
+}
+.dock-stage[data-preview="true"] .dock-dim {
+  display: none;
+}
+.dock[data-catalog] .dock-list {
+  max-width: none;
+  margin: 0 calc(0.6em + 10px) 0 6px;
+}
+.dock[data-catalog] .dock-item {
+  padding: 8px 14px 8px 20px;
+}
+.dock[data-catalog] .dock-inner {
+  display: grid;
+  grid-template-columns: 2px minmax(0, 1fr);
+  gap: 2px 14px;
+  align-items: start;
+}
+.dock[data-catalog] .dock-tick {
+  grid-area: 1/1/3/2;
+  align-self: stretch;
+  margin: 2px 0;
+  border-radius: 1px;
+  background: var(--hair);
+  transition: background-color 0.14s var(--dock-ease);
+}
+.dock[data-catalog] .dock-name {
+  grid-area: 1/2;
+  font-size: 18px;
+  line-height: 24px;
+}
+.dock[data-catalog] .dock-kind {
+  grid-area: 2/2;
+  font: 400 14px/18px var(--font);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.14s var(--dock-ease);
+}
+.dock[data-catalog] .dock-item.is-active .dock-tick {
+  background: var(--accent);
+}
+.dock[data-catalog] .dock-item.is-active .dock-name::before {
+  content: none;
+}
+.dock[data-catalog] .dock-item.is-active:not(.is-hot) {
+  color: var(--ink);
+}
+.dock[data-catalog] .dock-item.is-active:not(.is-hot) .dock-fill {
+  transform: scaleY(0);
+}
+.dock[data-catalog] .dock-item.is-hot .dock-kind {
+  color: rgba(255, 255, 255, 0.5);
+}
+.dock[data-catalog] .dock-item.is-hot:not(.is-active) .dock-tick {
+  background: rgba(255, 255, 255, 0.24);
+}
+[data-dock] .dock {
+  top: max(16px, min((100% - 360px) / 2, 100% - 456px));
+}
+[data-dock] .dock {
+  font: 400 var(--ck-text)/20px var(--font);
+}
+[data-dock] .dock-item {
+  display: flex;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+}
+[data-dock] .dock-logo i {
+  width: 0.8em;
+  height: 0.8em;
+}
+[data-dock] svg {
+  display: block;
+}
+[data-dock] .dock-list {
+  max-width: min(16em, calc(100% - 3em));
+}
+[data-dock] .dock-inner {
+  width: 100%;
+}

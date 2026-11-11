@@ -1,0 +1,24 @@
+# Line endings: text files are stored and checked out with LF on every system.
+# This overrides core.autocrlf (true by default in Git for Windows).
+* text=auto eol=lf
+
+# Binary files: no line-ending conversion, no text diff.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.avif  binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.mp4   binary
+*.webm  binary
+*.mov   binary
+*.mp3   binary
+*.wav   binary
+*.zip   binary
+*.gz    binary
+*.pdf   binary

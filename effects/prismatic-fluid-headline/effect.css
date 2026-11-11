@@ -1,0 +1,100 @@
+/* Prismatic Fluid Headline: styles for the effect. mountPrismaticFluidHeadline() adds the .prismatic-fluid-headline class to your element; give that element a size. */
+.prismatic-fluid-headline {
+  --ck-text: 14px;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-ink: #17181a;
+  --fx-object: #fff;
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --ink: var(--fx-ink);
+  --object: var(--fx-object);
+  --r-lg: 24px;
+  --shadow: var(--fx-shadow);
+}
+.prismatic-fluid-headline {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.prismatic-fluid-headline,
+.prismatic-fluid-headline *,
+.prismatic-fluid-headline *::before,
+.prismatic-fluid-headline *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.prismatic-fluid-headline::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.pf-stage {
+  position: relative;
+}
+.pf-sheet {
+  --pf-paper: var(--object, #ffffff);
+  --pf-ink: var(--ink, #17181a);
+  position: absolute;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  background: var(--pf-paper);
+  border-radius: var(--r-lg, 24px);
+  box-shadow: var(--shadow, 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06));
+  font-family: var(--font, system-ui, sans-serif);
+}
+.pf-sheet:not(.pf-fill) {
+  left: 8%;
+  right: 8%;
+  top: 13%;
+  bottom: 17%;
+}
+.pf-stage .pf-sheet.pf-fill {
+  inset: 0;
+}
+.pf-gl {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+.pf-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.pf-box {
+  position: absolute;
+}

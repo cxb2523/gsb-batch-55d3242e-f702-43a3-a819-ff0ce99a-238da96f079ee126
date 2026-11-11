@@ -1,0 +1,247 @@
+/* Card Fan Intro: styles for the effect. mountCardFanIntro() adds the .card-fan-intro class to your element; give that element a size. */
+.card-fan-intro {
+  --accent: var(--fx-accent);
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-object: #fff;
+  --fx-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-shadow-lift:
+    0 0 0 1px rgba(23, 24, 26, 0.06), 0 22px 44px -6px rgba(23, 24, 26, 0.16), 0 6px 14px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --object: var(--fx-object);
+  --out: var(--fx-out);
+  --r-md: 16px;
+  --r-sm: 10px;
+  --shadow: var(--fx-shadow);
+  --shadow-lift: var(--fx-shadow-lift);
+}
+.card-fan-intro {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.card-fan-intro,
+.card-fan-intro *,
+.card-fan-intro *::before,
+.card-fan-intro *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.card-fan-intro::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.ck-media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--object);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.ck-media[data-size="sm"] {
+  border-radius: var(--r-sm);
+}
+.ck-media[data-tone="1"] {
+  background: #e4e4e3;
+  box-shadow: none;
+}
+.ck-media[data-tone="2"] {
+  background: #d6d6d4;
+  box-shadow: none;
+}
+.ck-media[data-accent] {
+  color: var(--accent);
+}
+.ck-media[hidden] {
+  display: none;
+}
+.ck-glyph {
+  width: 34%;
+  height: 34%;
+}
+.ck-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.ck-dot[data-size="lg"] {
+  width: 24px;
+  height: 24px;
+}
+.ck-dot[data-accent] {
+  background: var(--accent);
+}
+.ck-dot[data-weak] {
+  background: rgba(23, 24, 26, 0.16);
+}
+.ck-screen {
+  position: relative;
+  width: min(288px, 100%);
+  aspect-ratio: 16 / 10;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--object);
+  box-shadow: var(--shadow);
+}
+.ck-line {
+  display: block;
+  height: 1px;
+  border: 0;
+  background: var(--hair);
+}
+.ck-line[data-strong] {
+  height: 1.5px;
+  background: var(--ink);
+}
+.ck-line[data-v] {
+  width: 1px;
+  height: auto;
+}
+.ck-line[data-v][data-strong] {
+  width: 1.5px;
+}
+.ck-lift {
+  transition: box-shadow 240ms var(--out);
+}
+.ck-lift[data-lifted] {
+  box-shadow: var(--shadow-lift);
+}
+.card-fan-intro .ck-media {
+  border-radius: calc(var(--r-md) * var(--fx-k, 1));
+}
+.card-fan-intro .ck-media[data-size="sm"] {
+  border-radius: calc(var(--r-sm) * var(--fx-k, 1));
+}
+.card-fan-intro .ck-glyph * {
+  stroke-width: clamp(7px, 8px - (var(--fx-k, 1) - 1) * 100px, 8px);
+}
+.card-fan-intro .ck-dot {
+  width: calc(8px * var(--fx-k, 1));
+  height: calc(8px * var(--fx-k, 1));
+}
+.card-fan-intro .ck-dot[data-size="lg"] {
+  width: calc(24px * var(--fx-k, 1));
+  height: calc(24px * var(--fx-k, 1));
+}
+.card-fan-intro .ck-screen {
+  width: min(calc(288px * var(--fx-k, 1)), 100%);
+  border-radius: calc(var(--r-md) * var(--fx-k, 1));
+}
+[data-ov-board] {
+  cursor: default;
+  touch-action: none;
+}
+[data-ov-board]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -8px;
+}
+[data-ov-board] .ov-screen {
+  position: absolute;
+  left: var(--ov-x);
+  top: var(--ov-y);
+}
+.ov-hero {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.ov-tiles {
+  position: absolute;
+  left: calc(20px * var(--fx-k));
+  right: calc(20px * var(--fx-k));
+  top: calc(24px * var(--fx-k));
+  height: calc(56px * var(--fx-k));
+  display: flex;
+  gap: calc(8px * var(--fx-k));
+}
+.ov-tiles > span {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+.ov-tiles > span > i {
+  position: absolute;
+  inset: 0;
+  display: block;
+  will-change: transform;
+}
+.ov-rule {
+  position: absolute;
+  left: calc(20px * var(--fx-k));
+  right: calc(20px * var(--fx-k));
+  top: calc(100px * var(--fx-k));
+  transform-origin: left;
+  will-change: transform;
+}
+.ov-copy {
+  position: absolute;
+  left: calc(20px * var(--fx-k));
+  top: calc(120px * var(--fx-k));
+  display: flex;
+  gap: calc(8px * var(--fx-k));
+}
+.ov-copy > span {
+  display: block;
+  will-change: transform, opacity;
+}
+.ov-screen > .overture-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: auto;
+  height: auto;
+}
+.overture-stack {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(64px * var(--fx-k));
+  height: calc(96px * var(--fx-k));
+  margin: calc(-48px * var(--fx-k)) 0 0 calc(-32px * var(--fx-k));
+}
+.overture-card {
+  position: absolute;
+  inset: 0;
+  transform: scale(0);
+  transform-origin: center;
+}

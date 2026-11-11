@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>A considered reading experience</title>
+    <link rel="stylesheet" href="effect.css" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f2f2ef;
+        color: #202321;
+        font:
+          17px/1.65 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 1120px;
+        padding: 40px 24px 100px;
+        margin: auto;
+      }
+      header {
+        max-width: 760px;
+        margin-bottom: 36px;
+      }
+      h1 {
+        font-size: clamp(34px, 5vw, 62px);
+        line-height: 1.15;
+        letter-spacing: -0.035em;
+        font-weight: 650;
+        margin: 24px 0;
+      }
+      h2 {
+        font-size: 28px;
+        line-height: 1.3;
+      }
+      a {
+        color: #314f77;
+        text-underline-offset: 4px;
+      }
+      nav {
+        display: flex;
+        gap: 24px;
+        flex-wrap: wrap;
+        font-size: 14px;
+      }
+      .eyebrow {
+        font-size: 12px;
+        letter-spacing: 0.13em;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 9px 15px;
+        border: 1px solid #b7beb6;
+        border-radius: 6px;
+        background: #fafbf8;
+        color: inherit;
+        cursor: pointer;
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid #4559ff;
+        outline-offset: 3px;
+      }
+      .tools {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 22px 0;
+      }
+      .context {
+        max-width: 700px;
+        margin: 0 0 26px;
+        color: #586055;
+      }
+      .destination {
+        padding: 80px 0;
+        border-top: 1px solid #cfd4cd;
+      }
+      .article {
+        max-width: 740px;
+        margin: auto;
+        font-size: clamp(21px, 2.4vw, 30px);
+        line-height: 1.75;
+      }
+      .article p {
+        margin: 0 0 1.6em;
+      }
+      .chapter {
+        padding: 10vh 0 6vh;
+      }
+      .reading-scroll {
+        height: 440px;
+        overflow: auto;
+        border: 1px solid #c5cec4;
+        background: #fff;
+        padding: 0 28px;
+        overscroll-behavior: auto;
+      }
+      .reading-scroll .spacer {
+        height: 330px;
+      }
+      .viewport {
+        position: relative;
+        width: 100%;
+        height: 390px;
+        background: #e8ece7;
+        overflow: hidden;
+        border-radius: 10px;
+      }
+      .content {
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        overscroll-behavior: auto;
+        scrollbar-width: thin;
+      }
+      .track {
+        display: flex;
+        gap: 34px;
+        width: max-content;
+        height: 100%;
+        align-items: center;
+        padding: 20px 34px;
+      }
+      .track a {
+        display: block;
+        flex: none;
+        height: 300px;
+      }
+      .track img {
+        display: block;
+        height: 100%;
+        width: auto;
+        border-radius: 6px;
+      }
+      .vertical {
+        height: 580px;
+      }
+      .vertical .track {
+        flex-direction: column;
+        height: auto;
+        width: 100%;
+        padding: 34px;
+      }
+      .vertical .track a {
+        height: auto;
+        max-width: 100%;
+        width: 80%;
+      }
+      .vertical .track img {
+        width: 100%;
+        height: auto;
+      }
+      .carousel .content {
+        overflow: hidden;
+      }
+      .carousel .track {
+        transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      details {
+        margin-top: 36px;
+        max-width: 760px;
+        font-size: 15px;
+      }
+      code {
+        background: #e3e7e0;
+        padding: 2px 4px;
+      }
+      footer {
+        padding-top: 60px;
+        font-size: 14px;
+        color: #586055;
+      }
+      @media (max-width: 600px) {
+        main {
+          padding: 24px 18px 60px;
+        }
+        .viewport {
+          height: 320px;
+        }
+        .track {
+          gap: 22px;
+          padding: 20px 22px;
+        }
+        .track a {
+          height: 250px;
+        }
+        .vertical {
+          height: 460px;
+        }
+        .reading-scroll {
+          padding: 0 18px;
+        }
+        .article {
+          font-size: 22px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .carousel .track {
+          transition: none;
+        }
+      }
+      body {
+        background: #fff;
+        color: #17181a;
+      }
+      a {
+        color: #4559ff;
+      }
+      button,
+      select {
+        background: #fff;
+        border-color: rgba(23, 24, 26, 0.18);
+      }
+      .context,
+      footer {
+        color: #73726d;
+      }
+      .destination {
+        border-color: rgba(23, 24, 26, 0.14);
+      }
+      code {
+        background: #f1f1f1;
+      }
+      .reading-scroll {
+        background: transparent;
+        border-color: rgba(23, 24, 26, 0.14);
+      }
+      .reading-scroll:focus:not(:focus-visible) {
+        outline: none;
+      }
+      .reading-scroll:focus-visible {
+        outline: 2px solid #4559ff;
+        outline-offset: 4px;
+      }
+      .rta-root {
+        --rta-ink: #17181a;
+        --rta-muted: #73726d;
+        --rta-border: rgba(23, 24, 26, 0.14);
+        --rta-surface: #fff;
+        --rta-active-surface: #fff;
+        --rta-image-surface: #f1f1f1;
+      }
+      .viewport {
+        background: transparent;
+      }
+      .viewport:not([data-loop-gallery]) .content:focus {
+        outline: none;
+      }
+      .viewport:not([data-loop-gallery]):has(.content:focus-visible) {
+        outline: 2px solid #4559ff;
+        outline-offset: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">INDEPENDENT EXAMPLE</p>
+        <h1>A considered reading experience</h1>
+        <p class="context">
+          Bind existing paragraphs. Use mark elements for phrases and call refresh after content edits.
+        </p>
+      </header>
+      <section class="chapter">
+        <h2>Start with what matters</h2>
+        <p class="context">Scroll the whole page. The text below keeps its original layout.</p>
+      </section>
+      <article id="host" class="article">
+        <p>
+          A useful product starts with <mark>careful observation</mark>. Before we choose a typeface or arrange a
+          photograph, we look at the things people already do. Their habits tell us where a page needs clarity, where it
+          should offer a choice, and where a quieter moment would make reading easier.
+        </p>
+        <p>
+          This passage uses the existing page typography. It keeps <strong>ordinary emphasis</strong>, an
+          <a href="#contact">ordinary contact link</a>, and the original paragraph nodes. The local window owns
+          scrolling. The reading effect only adds a gradual change in <mark>visual emphasis</mark> as each paragraph
+          passes through that window.
+        </p>
+        <p>
+          Content rarely arrives in a perfectly uniform shape. An editor might supply a longer introduction, a designer
+          might change the font, and a team might add another paragraph before launch. A reusable treatment needs to
+          welcome that work. <mark>Refresh the current content</mark> after making changes and keep the host layout in
+          charge.
+        </p>
+        <p>
+          A second instance can sit in another section of the same document. Its state and scroll container remain
+          separate. When the treatment is removed, the existing links and emphasis remain usable.
+          <mark>Small integration details</mark> are what make an effect comfortable to maintain over time.
+        </p>
+        <p>
+          Move backwards to retrace the reading. Change the highlight colour or the pace without jumping to another
+          scroll position. With reduced motion enabled, every word remains fully visible.
+          <mark>Complete readable content</mark> is the baseline, including sentences longer than the original
+          demonstration allowed.
+        </p>
+        <p>
+          The paragraphs here deliberately exceed seven hundred and twenty characters and contain more than three
+          highlighted phrases. They are still regular HTML and can be edited without rebuilding a hidden copy. Try the
+          controls below, then follow the contact link to its real destination on the surrounding page.
+        </p>
+      </article>
+      <div class="tools">
+        <button id="update" type="button">Add a paragraph</button
+        ><button id="font" type="button">Change typeface</button>
+      </div>
+      <section class="destination" id="contact">
+        <h2>Let us talk</h2>
+        <p>hello@example.test</p>
+      </section>
+      <details>
+        <summary>Integration notes</summary>
+        <p>Bind existing paragraphs. Use mark elements for phrases and call refresh after content edits.</p>
+        <p>The effect files contain only the behaviour. This HTML owns the content and layout.</p>
+      </details>
+      <footer>A self-contained HTML example.</footer>
+    </main>
+    <script src="effect.js"></script>
+    <script>
+      const host = document.getElementById("host"),
+        scrollRoot = window;
+      let effect;
+      function remount() {
+        effect = mountReadingWordHighlight(host, { scrollRoot });
+        window.effect = effect;
+        return effect;
+      }
+      remount();
+      document.getElementById("update").onclick = () => {
+        const p = document.createElement("p");
+        p.innerHTML = "A new paragraph with a <mark>new highlight</mark> is now part of the same document.";
+        host.append(p);
+        effect.refresh();
+      };
+      document.getElementById("font").onclick = () => {
+        host.style.fontFamily = host.style.fontFamily ? "" : "Georgia, serif";
+        effect.refresh();
+      };
+      window.example = {
+        type: "reading",
+        host,
+        scrollRoot,
+        remount,
+        get effect() {
+          return effect;
+        },
+      };
+    </script>
+  </body>
+</html>

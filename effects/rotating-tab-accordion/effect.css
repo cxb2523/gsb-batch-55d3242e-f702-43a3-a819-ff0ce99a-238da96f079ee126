@@ -1,0 +1,266 @@
+.rta-root {
+  min-width: 0;
+  color: var(--rta-ink, #20221f);
+}
+.rta-root .rta-object:not([data-layout-ready]),
+.rta-root .rta-object:not([data-layout-ready]) * {
+  transition: none !important;
+}
+.rta-root .rta-object {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--rta-border, #c8ccc3);
+  border-radius: 0;
+  background: var(--rta-surface, #f1f2ed);
+  overflow: hidden;
+  box-sizing: border-box;
+  transition: height var(--rta-duration, 600ms) cubic-bezier(0.4, 0, 0.12, 1);
+}
+.rta-root .rta-panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: transparent;
+  transition:
+    transform var(--rta-duration, 600ms) cubic-bezier(0.4, 0, 0.12, 1),
+    clip-path var(--rta-duration, 600ms) cubic-bezier(0.4, 0, 0.12, 1),
+    background-color calc(var(--rta-duration, 600ms) * 0.75) ease;
+}
+.rta-root .rta-panel[data-open="true"] {
+  background: var(--rta-active-surface, #e8eae3);
+}
+.rta-root .rta-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: var(--rta-border, #c8ccc3);
+  pointer-events: none;
+  transition: transform var(--rta-duration, 600ms) cubic-bezier(0.4, 0, 0.12, 1);
+}
+.rta-root .rta-panel:last-child .rta-divider {
+  display: none;
+}
+.rta-root .rta-toggle {
+  appearance: none;
+  display: block;
+  position: absolute;
+  inset: 0 0 auto;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.rta-root .rta-rot {
+  position: absolute;
+  inset: 0;
+  opacity: 1;
+  transition: opacity calc(var(--rta-duration, 600ms) * 0.416667) ease;
+}
+.rta-root .rta-rot-inner {
+  position: absolute;
+  bottom: calc(var(--rta-padding) * 1.25);
+  left: 0;
+  height: max-content;
+  display: flex;
+  align-items: center;
+  gap: 0.65em;
+  writing-mode: vertical-rl;
+  text-orientation: sideways;
+  font-size: var(--rta-title-size, 28px);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  transition: transform var(--rta-duration, 600ms) cubic-bezier(0.4, 0, 0.12, 1);
+}
+.rta-root .rta-rot-title {
+  display: block;
+  flex: none;
+  height: max-content;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.rta-root .rta-rot-number {
+  flex: none;
+  font-size: 0.6em;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--rta-muted, #6c7168);
+  font-variant-numeric: tabular-nums;
+}
+.rta-root .rta-heading {
+  position: absolute;
+  left: var(--rta-padding);
+  top: var(--rta-padding);
+  display: flex;
+  align-items: baseline;
+  gap: 0.55em;
+  opacity: 0;
+  transition: opacity calc(var(--rta-duration, 600ms) * 0.75) ease;
+  pointer-events: none;
+}
+.rta-root .rta-label {
+  display: block;
+  min-width: 0;
+  font-size: var(--rta-heading-size, 26px);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.rta-root .rta-number {
+  flex: none;
+  color: var(--rta-muted, #6c7168);
+  font-size: var(--rta-number-size, 14px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.rta-root .rta-body {
+  position: absolute;
+  left: var(--rta-padding);
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity calc(var(--rta-duration, 600ms) * 0.75) ease;
+  overflow-wrap: anywhere;
+}
+.rta-root .rta-panel[data-open="true"] .rta-rot {
+  opacity: 0;
+  pointer-events: none;
+}
+.rta-root .rta-panel[data-open="true"] :is(.rta-heading, .rta-body) {
+  opacity: 1;
+  transition-delay: calc(var(--rta-duration, 600ms) * 0.25);
+}
+.rta-root .rta-panel[data-open="true"] .rta-body {
+  pointer-events: auto;
+}
+.rta-root .rta-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 calc(var(--rta-padding) * 1.25);
+}
+.rta-root .rta-list li {
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--rta-border, #c8ccc3);
+}
+.rta-root .rta-list li:first-child {
+  border-top: 1px solid var(--rta-border, #c8ccc3);
+}
+.rta-root .rta-list-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: var(--rta-row-padding, 9px) 0;
+  color: inherit;
+  font-size: var(--rta-body-size, 16px);
+  font-weight: 600;
+  line-height: 1.55;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.rta-root .rta-list-entry > span:first-child {
+  min-width: 0;
+}
+.rta-root .rta-list-entry:hover {
+  color: var(--rta-accent, #4559ff);
+}
+.rta-root .rta-arrow {
+  flex: none;
+  font-weight: 400;
+  opacity: 0.5;
+}
+.rta-root .rta-list-entry:hover .rta-arrow {
+  opacity: 1;
+}
+.rta-root .rta-image {
+  display: block;
+  width: 100%;
+  height: var(--rta-image-height, clamp(140px, 18vw, 220px));
+  object-fit: contain;
+  margin-top: 16px;
+  background: var(--rta-image-surface, #e8ebe5);
+}
+.rta-root .rta-description {
+  margin: 12px 0;
+  font-size: var(--rta-body-size, 16px);
+  line-height: 1.6;
+  color: inherit;
+}
+.rta-root .rta-link {
+  color: var(--rta-accent, #4559ff);
+  font: inherit;
+  font-size: var(--rta-body-size, 16px);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.rta-root .rta-toggle:focus-visible {
+  outline: 2px solid var(--rta-accent, #4559ff);
+  outline-offset: -5px;
+}
+.rta-root .rta-body a:focus-visible {
+  outline: 2px solid var(--rta-accent, #4559ff);
+  outline-offset: 2px;
+}
+.rta-root .rta-chevron {
+  display: none;
+}
+.rta-root .rta-object[data-layout="vertical"] {
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+.rta-root .rta-object[data-layout="vertical"] .rta-panel {
+  position: relative;
+  border-bottom: 1px solid var(--rta-border, #c8ccc3);
+  background: transparent;
+  transition: height calc(var(--rta-duration, 600ms) * 0.75) ease;
+}
+.rta-root .rta-object[data-layout="vertical"] .rta-panel:last-child {
+  border-bottom: 0;
+}
+.rta-root .rta-object[data-layout="vertical"] .rta-divider {
+  display: none;
+}
+.rta-root .rta-object[data-layout="vertical"] .rta-rot {
+  visibility: hidden;
+  pointer-events: none;
+}
+.rta-root .rta-object[data-layout="vertical"] :is(.rta-heading, .rta-body) {
+  opacity: 1;
+  transition: none;
+}
+.rta-root .rta-object[data-layout="vertical"] .rta-chevron {
+  display: block;
+  position: absolute;
+  right: var(--rta-padding);
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  opacity: 0.55;
+  transform: rotate(45deg);
+  transition: transform calc(var(--rta-duration, 600ms) * 0.416667) ease;
+}
+.rta-root .rta-object[data-layout="vertical"] .rta-panel[data-open="true"] .rta-chevron {
+  transform: rotate(-135deg);
+}
+.rta-root .rta-object[data-layout="vertical"] .rta-list li:last-child {
+  border-bottom: 0;
+}

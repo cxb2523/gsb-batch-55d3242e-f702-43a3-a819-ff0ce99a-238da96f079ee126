@@ -1,0 +1,406 @@
+/* Cut-Line Preloader: styles for the effect. mountCutLinePreloader() adds the .cut-line-preloader class to your element; give that element a size. */
+.cut-line-preloader {
+  --accent: var(--fx-accent);
+  --ck-max: 336px;
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-object: #fff;
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --ink-2: #5c5b56;
+  --mono: "Geist", "Inter", system-ui, sans-serif;
+  --object: var(--fx-object);
+  --r-lg: 24px;
+  --r-md: 16px;
+  --r-pill: 999px;
+  --shadow: var(--fx-shadow);
+  --surface: #f0f0ef;
+}
+.cut-line-preloader {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.cut-line-preloader,
+.cut-line-preloader *,
+.cut-line-preloader *::before,
+.cut-line-preloader *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.cut-line-preloader::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.cl-stage {
+  position: relative;
+}
+.cl-screen {
+  position: absolute;
+  inset: 9% 9% 10%;
+  overflow: hidden;
+  background: var(--object);
+  border-radius: var(--r-lg, 24px);
+  box-shadow: var(--shadow);
+  container-type: size;
+  --cl-fs: clamp(12px, 1.6cqw, 14px);
+  --cl-line: 55%;
+  --cl-paper: var(--surface, #f0f0ef);
+  color: var(--ink);
+}
+.cl-site {
+  position: absolute;
+  inset: 0;
+}
+.cl-face {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+  box-sizing: border-box;
+  padding: clamp(16px, 5cqw, 40px) clamp(18px, 6cqw, 48px);
+}
+.cl-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cl-links {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 3.4cqw, 28px);
+}
+.cl-screen .cl-title {
+  margin: 0;
+  font: 600 min(16cqw, 24cqh)/0.9 var(--font);
+  letter-spacing: -0.05em;
+  color: var(--ink);
+}
+.cl-title > span {
+  display: block;
+}
+.cl-stop {
+  color: var(--accent);
+}
+.cl-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cl-screen .cl-sub {
+  margin: 0;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.cl-cover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: block;
+  background: var(--ink);
+  will-change: transform;
+}
+.cl-top {
+  top: 0;
+  height: var(--cl-line);
+  transform-origin: 50% 0;
+}
+.cl-bot {
+  bottom: 0;
+  height: calc(100% - var(--cl-line));
+  transform-origin: 50% 100%;
+}
+.cl-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--cl-line);
+  height: 0;
+  font: 500 var(--cl-fs)/1 var(--font);
+  color: var(--cl-paper);
+}
+.cl-dash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -0.75px;
+  height: 1.5px;
+  display: block;
+  background: repeating-linear-gradient(90deg, var(--cl-paper) 0 6px, transparent 6px 11px);
+  opacity: 0.75;
+}
+.cl-solid {
+  position: absolute;
+  left: 0;
+  top: -0.75px;
+  height: 1.5px;
+  width: calc(4% + 1.275em);
+  display: block;
+  background: var(--cl-paper);
+}
+.cl-cutter {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 0;
+  will-change: transform;
+}
+.cl-progress {
+  --cl-sw: 3.4em;
+  --cl-pivot: 1.275em;
+  --cl-edge: clamp(12px, 1.4cqw, 20px);
+}
+.cl-scissors {
+  position: absolute;
+  left: 0;
+  top: -1.02em;
+  width: var(--cl-sw);
+  height: 2.04em;
+  overflow: visible;
+  fill: none;
+  stroke: var(--cl-paper);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cl-scissors .cl-pin {
+  fill: var(--cl-paper);
+  stroke: none;
+}
+.cl-count {
+  display: inline-flex;
+  font: 500 1em/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.cl-win {
+  display: block;
+  height: 1.3em;
+  overflow: hidden;
+}
+.cl-strip {
+  display: block;
+  will-change: transform;
+}
+.cl-strip > span {
+  display: block;
+  height: 1.3em;
+  line-height: 1.3em;
+  text-align: center;
+  width: 0.75em;
+}
+.cl-progress .cl-count {
+  position: absolute;
+  left: clamp(12px, 1.4cqw, 20px);
+  bottom: 0.75em;
+}
+.cl-label {
+  position: absolute;
+  right: clamp(12px, 1.4cqw, 20px);
+  bottom: 0.9em;
+  display: flex;
+  align-items: center;
+  gap: 0.9em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.86em;
+  white-space: nowrap;
+}
+.cl-arrows {
+  display: flex;
+  gap: 1px;
+}
+.cl-arrows i {
+  display: block;
+  width: 0;
+  height: 0;
+  border-left: 0.42em solid var(--cl-paper);
+  border-top: 0.26em solid transparent;
+  border-bottom: 0.26em solid transparent;
+}
+.cl-dots {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 5%;
+  display: flex;
+  justify-content: center;
+  gap: clamp(6px, 1cqw, 10px);
+}
+.cl-dots i {
+  display: block;
+  width: clamp(6px, 0.9cqw, 10px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--cl-paper);
+  opacity: 0.85;
+  will-change: translate;
+}
+.cl-dots i:first-child {
+  border-radius: 1px;
+  rotate: 45deg;
+  scale: 0.85;
+}
+.cl-only-count {
+  background: transparent;
+  box-shadow: none;
+}
+.cl-solo {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: clamp(40px, 16cqw, 140px);
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+.cl-solo .cl-strip > span {
+  width: 0.68em;
+}
+@container (aspect-ratio < 1) {
+  .cl-screen .cl-title {
+    font-size: min(24cqw, 20cqh);
+  }
+  .cl-screen .cl-sub,
+  .cl-links {
+    display: none;
+  }
+}
+.ck-panel {
+  position: relative;
+  width: min(var(--ck-max), 100%);
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--object);
+  box-shadow: var(--shadow);
+}
+.ck-panel[data-size="lg"] {
+  border-radius: var(--r-lg);
+  padding: 12px;
+}
+.ck-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--object);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font: 500 var(--ck-text)/1 var(--font);
+  white-space: nowrap;
+}
+.ck-pill[data-size="sm"] {
+  height: 32px;
+  padding: 0 12px;
+}
+.ck-solid {
+  background: var(--ink) !important;
+  color: var(--object) !important;
+  box-shadow: none;
+}
+.ck-text {
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+}
+.ck-text[data-strong] {
+  font-weight: 500;
+}
+.ck-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.ck-dot[data-size="lg"] {
+  width: 24px;
+  height: 24px;
+}
+.ck-dot[data-accent] {
+  background: var(--accent);
+}
+.ck-dot[data-weak] {
+  background: rgba(23, 24, 26, 0.16);
+}
+.cut-line-preloader .ck-dot {
+  width: calc(8px * var(--fx-k, 1));
+  height: calc(8px * var(--fx-k, 1));
+}
+.cut-line-preloader .ck-dot[data-size="lg"] {
+  width: calc(24px * var(--fx-k, 1));
+  height: calc(24px * var(--fx-k, 1));
+}
+.cut-line-preloader :is(.ck-panel, .ck-pill, .ck-row) {
+  --fx-k: 1;
+}
+[data-cl-board] {
+  cursor: pointer;
+  touch-action: pan-y;
+}
+[data-cl-board]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -8px;
+}
+[data-cl-board] .cl-screen {
+  inset: auto;
+  left: var(--cl-x);
+  top: var(--cl-y);
+  width: var(--cl-w);
+  height: var(--cl-h);
+}
+.cl-replay {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3;
+  cursor: pointer;
+  border: 0;
+}
+.cl-replay:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 760px) {
+  .cl-replay {
+    right: 50%;
+    translate: 50% 0;
+  }
+}

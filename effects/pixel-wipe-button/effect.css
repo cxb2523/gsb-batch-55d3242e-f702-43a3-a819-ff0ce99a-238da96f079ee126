@@ -1,0 +1,173 @@
+/* Pixel Wipe Button: styles for the effect. mountPixelWipeButton() adds the .pixel-wipe-button class to your element; give that element a size. */
+.pixel-wipe-button {
+  --accent: var(--fx-accent);
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-ink: #17181a;
+  --fx-ink-3: #9a9993;
+  --fx-object: #fff;
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --ink: var(--fx-ink);
+  --ink-3: var(--fx-ink-3);
+  --object: var(--fx-object);
+}
+.pixel-wipe-button {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 15px/1.5 var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.pixel-wipe-button,
+.pixel-wipe-button *,
+.pixel-wipe-button *::before,
+.pixel-wipe-button *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.pixel-wipe-button::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.pw-host [data-pw] {
+  --pw-rest: var(--object, #fff);
+  --pw-rest-ink: var(--ink, #17181a);
+  --pw-fill: var(--ink, #17181a);
+  --pw-fill-ink: #fff;
+  color: var(--pw-rest-ink);
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pw-host [data-pw][data-tone="solid"] {
+  --pw-rest: var(--ink, #17181a);
+  --pw-rest-ink: #fff;
+  --pw-fill: var(--accent, #4559ff);
+}
+.pw-host [data-pw]:not([data-tone]) {
+  --pw-rest-ink: #fff;
+}
+.pw-host [data-pw]:not([data-tone]) :is(.pw-word, .pw-go) {
+  mix-blend-mode: difference;
+}
+.pw-host [data-pw]:focus-visible {
+  outline: 1px solid var(--ink-3, #9a9993);
+  outline-offset: 4px;
+}
+.pw-face {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 0.5em;
+  background: var(--pw-rest);
+  box-shadow:
+    0 0 0 1px rgba(23, 24, 26, 0.06),
+    0 2px 8px rgba(23, 24, 26, 0.06);
+  font: 500 1em/1.2 var(--font, Inter, system-ui, sans-serif);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.pw-face[data-pw-state="on"] {
+  background: var(--pw-fill);
+}
+.pw-grain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+.pw-word {
+  position: relative;
+  z-index: 2;
+  display: block;
+  height: 1.2em;
+  overflow: hidden;
+  margin: 0.95em 1.15em;
+}
+.pw-word-in {
+  display: block;
+  text-shadow: 0 1.2em currentColor;
+}
+.pw-go {
+  position: relative;
+  z-index: 2;
+  align-self: stretch;
+  width: 3em;
+  overflow: hidden;
+}
+.pw-go-track {
+  display: flex;
+  height: 100%;
+  width: 200%;
+  transform: translateX(-50%);
+}
+.pw-go-track i {
+  flex: 1 1 0;
+  display: grid;
+  place-items: center;
+}
+.pw-go svg {
+  width: 1em;
+  height: 1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pw-scene {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+  width: min(90%, 860px);
+  font-size: clamp(16px, 2.4cqw, 22px);
+}
+.pw-row {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max-content;
+  display: flex;
+  gap: 0.9em;
+  font-size: 28px;
+}
+@media (max-width: 760px) {
+  .pw-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.7em;
+  }
+}

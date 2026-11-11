@@ -1,0 +1,240 @@
+/* Smear-In Grid: styles for the effect. mountSmearInGrid() adds the .smear-in-grid class to your element; give that element a size. */
+.smear-in-grid {
+  --accent: var(--fx-accent);
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-object: #fff;
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --object: var(--fx-object);
+  --r-md: 16px;
+  --r-pill: 999px;
+  --r-sm: 10px;
+  --shadow: var(--fx-shadow);
+}
+.smear-in-grid {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.smear-in-grid,
+.smear-in-grid *,
+.smear-in-grid *::before,
+.smear-in-grid *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.smear-in-grid::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.sq-stage {
+  overflow: hidden;
+}
+.sq-grid {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(720px, 78%);
+  translate: -50% -50%;
+  display: grid;
+  grid-template-columns: repeat(var(--sq-cols, 4), minmax(0, 1fr));
+  gap: var(--sq-gap, 14px);
+}
+.sq-cell {
+  position: relative;
+  aspect-ratio: 4/3;
+}
+.sq-arrive {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+}
+.sq-pic {
+  position: absolute;
+  inset: 0;
+}
+.sq-f {
+  position: absolute;
+  display: block;
+  margin: 0;
+  border: 0;
+}
+.sq-f.sq-disc {
+  aspect-ratio: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sq-arrive {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+  }
+}
+.ck-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--object);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font: 500 var(--ck-text)/1 var(--font);
+  white-space: nowrap;
+}
+.ck-pill[data-size="sm"] {
+  height: 32px;
+  padding: 0 12px;
+}
+.ck-solid {
+  background: var(--ink) !important;
+  color: var(--object) !important;
+  box-shadow: none;
+}
+.ck-media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--object);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.ck-media[data-size="sm"] {
+  border-radius: var(--r-sm);
+}
+.ck-media[data-tone="1"] {
+  background: #e4e4e3;
+  box-shadow: none;
+}
+.ck-media[data-tone="2"] {
+  background: #d6d6d4;
+  box-shadow: none;
+}
+.ck-media[data-accent] {
+  color: var(--accent);
+}
+.ck-media[hidden] {
+  display: none;
+}
+.ck-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.ck-dot[data-size="lg"] {
+  width: 24px;
+  height: 24px;
+}
+.ck-dot[data-accent] {
+  background: var(--accent);
+}
+.ck-dot[data-weak] {
+  background: rgba(23, 24, 26, 0.16);
+}
+.ck-line {
+  display: block;
+  height: 1px;
+  border: 0;
+  background: var(--hair);
+}
+.ck-line[data-strong] {
+  height: 1.5px;
+  background: var(--ink);
+}
+.ck-line[data-v] {
+  width: 1px;
+  height: auto;
+}
+.ck-line[data-v][data-strong] {
+  width: 1.5px;
+}
+.smear-in-grid .ck-media {
+  border-radius: calc(var(--r-md) * var(--fx-k, 1));
+}
+.smear-in-grid .ck-media[data-size="sm"] {
+  border-radius: calc(var(--r-sm) * var(--fx-k, 1));
+}
+.smear-in-grid .ck-dot {
+  width: calc(8px * var(--fx-k, 1));
+  height: calc(8px * var(--fx-k, 1));
+}
+.smear-in-grid .ck-dot[data-size="lg"] {
+  width: calc(24px * var(--fx-k, 1));
+  height: calc(24px * var(--fx-k, 1));
+}
+.smear-in-grid :is(.ck-panel, .ck-pill, .ck-row) {
+  --fx-k: 1;
+}
+[data-sq-board] {
+  cursor: default;
+  touch-action: none;
+}
+[data-sq-board]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -8px;
+}
+[data-sq-board] .sq-grid {
+  left: var(--sq-x);
+  top: var(--sq-y);
+  width: var(--sq-w);
+  translate: none;
+}
+.sq-replay {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3;
+  cursor: pointer;
+  border: 0;
+}
+.sq-replay:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 760px) {
+  .sq-replay {
+    right: 50%;
+    translate: 50% 0;
+  }
+}

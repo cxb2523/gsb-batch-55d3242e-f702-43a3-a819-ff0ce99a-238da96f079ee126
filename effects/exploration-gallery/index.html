@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Wave Gallery</title>
+    <link rel="stylesheet" href="effect.css" />
+    <style>
+      /* Host styling: replace this with your own layout, type and colours. */
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #faf9f6;
+        color: #242723;
+        font:
+          16px/1.6 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 1100px;
+        margin: auto;
+      }
+      #component {
+        height: 410px;
+        --ea-eg-radius: 0px;
+        --ea-eg-accent: #376c4d;
+      }
+      #component img {
+        background: #e1e4de;
+      }
+      #component h2 {
+        font-size: 16px;
+        margin: 12px 0 0;
+      }
+      .card {
+        color: inherit;
+        text-decoration: none;
+      }
+      .details {
+        padding-block: 24px;
+        border-top: 1px solid #ddd;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Wave Gallery</h1>
+      <p>Drag, scroll or use arrow keys. Open a project to view its content.</p>
+      <!-- Keep data-id unique. Replace these nodes with your own content and real links. Images have no src until you provide your own URL and alt text. -->
+      <div id="component">
+        <a class="card" data-id="one" data-title="Project 1" href="#project-one"
+          ><img alt="" />
+          <h2>Project 1</h2></a
+        >
+        <a class="card" data-id="two" data-title="Project 2" href="#project-two"
+          ><img alt="" />
+          <h2>Project 2</h2></a
+        >
+        <a class="card" data-id="three" data-title="Project 3" href="#project-three"
+          ><img alt="" />
+          <h2>Project 3</h2></a
+        >
+        <a class="card" data-id="four" data-title="Project 4" href="#project-four"
+          ><img alt="" />
+          <h2>Project 4</h2></a
+        >
+      </div>
+      <section class="details" id="project-one">
+        <h2>Project 1</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+      <section class="details" id="project-two">
+        <h2>Project 2</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+      <section class="details" id="project-three">
+        <h2>Project 3</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+      <section class="details" id="project-four">
+        <h2>Project 4</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+    </main>
+    <script src="effect.js"></script>
+    <script>
+      // Motion options from the website. Edit freely or keep the defaults.
+      const motionOptions = /* EA_OPTIONS_START */ {
+        bend: 1,
+        chroma: 1,
+        highlightColor: "#4559FF",
+      }; /* EA_OPTIONS_END */
+      const effect = mountExplorationGallery(document.querySelector("#component"), {
+        width: 220,
+        height: 260,
+        gap: 28,
+        padding: 24,
+        captionHeight: 64,
+        fit: "cover",
+        colour: "focus",
+        inertia: 1,
+        motion: "auto",
+        ...motionOptions,
+      });
+      // highlightColor changes the glow and colour split, e.g. updateOptions({highlightColor:"#FF5AA5"}).
+      // Content and real links live in HTML; colours and shapes live in the CSS above.
+      // Square: ratio:1. Circle: ratio:1 and --ea-eg-radius:50%.
+      // Rectangles are the default. Radius:0px keeps square corners; 28px gives rounded corners.
+      // updateOptions({...}) changes settings; refresh() remeasures after CSS edits.
+      // setItems([...existingElements]) changes content while preserving original nodes and their events.
+      // focus('two') browses; select('two') confirms a choice; getState() reads independent browsing/selection state.
+      // onChange, onSelect and onActivate connect to your application. Ordinary links keep working.
+      // destroy() releases listeners, animations and generated elements, then returns your original content.
+      // Add your own img src/alt. Same-origin images work directly; cross-origin images need CORS permission.
+      // With no image or unavailable WebGL, DOM browsing still works; texture bending and colour split need a loadable image.
+      // Use HTTP for WebGL textures; file URLs may restrict local texture access.
+    </script>
+  </body>
+</html>

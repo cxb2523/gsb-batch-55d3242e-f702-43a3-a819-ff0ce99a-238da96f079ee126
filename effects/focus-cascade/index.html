@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Stacked Card Carousel</title>
+    <link rel="stylesheet" href="effect.css" />
+    <style>
+      /* Host styling: replace this with your own layout, type and colours. */
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #faf9f6;
+        color: #242723;
+        font:
+          16px/1.6 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 1100px;
+        margin: auto;
+      }
+      #component {
+        height: 550px;
+        --ea-fc-radius: 0px;
+        --ea-fc-accent: #376c4d;
+        --ea-fc-base: #e1e4de;
+      }
+      #component img {
+        background: #e1e4de;
+      }
+      #component h2 {
+        font-size: 28px;
+        margin: 0;
+      }
+      .card {
+        display: grid !important;
+        place-content: center;
+        padding: 24px;
+        text-align: center;
+        background: #e9ede6;
+        color: inherit;
+        text-decoration: none;
+      }
+      .details {
+        padding-block: 24px;
+        border-top: 1px solid #ddd;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Stacked Card Carousel</h1>
+      <p>Click a side card or use arrow keys to focus it. Open the current card to view its content.</p>
+      <!-- Keep data-id unique. Replace these nodes with your own content and real links. -->
+      <div id="component">
+        <a class="card" data-id="one" data-title="Project 1" href="#project-one"
+          ><h2>Project 1</h2>
+          <p>Your content here</p></a
+        >
+        <a class="card" data-id="two" data-title="Project 2" href="#project-two"
+          ><h2>Project 2</h2>
+          <p>Your content here</p></a
+        >
+        <a class="card" data-id="three" data-title="Project 3" href="#project-three"
+          ><h2>Project 3</h2>
+          <p>Your content here</p></a
+        >
+        <a class="card" data-id="four" data-title="Project 4" href="#project-four"
+          ><h2>Project 4</h2>
+          <p>Your content here</p></a
+        >
+      </div>
+      <section class="details" id="project-one">
+        <h2>Project 1</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+      <section class="details" id="project-two">
+        <h2>Project 2</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+      <section class="details" id="project-three">
+        <h2>Project 3</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+      <section class="details" id="project-four">
+        <h2>Project 4</h2>
+        <p>Replace with your own content or route.</p>
+      </section>
+    </main>
+    <script src="effect.js"></script>
+    <script>
+      // Motion options from the website. Edit freely or keep the defaults.
+      const motionOptions = /* EA_OPTIONS_START */ { duration: 0.7, angle: 15 }; /* EA_OPTIONS_END */
+      const effect = mountFocusCascade(document.querySelector("#component"), {
+        width: 420,
+        ratio: 1.6,
+        loop: true,
+        motion: "auto",
+        ...motionOptions,
+      });
+      // Content and real links live in HTML; colours and shapes live in the CSS above.
+      // Square: ratio:1. Circle: ratio:1 and --ea-fc-radius:50%, captionSpace:0.
+      // Rectangles are the default. Radius:0px keeps square corners; 28px gives rounded corners.
+      // updateOptions({...}) changes settings; refresh() remeasures after CSS edits.
+      // setItems([...existingElements]) changes content while preserving original nodes and their events.
+      // focus('two') browses; select('two') confirms a choice; getState() reads independent browsing/selection state.
+      // onChange, onSelect and onActivate connect to your application. Ordinary links keep working.
+      // destroy() releases listeners, animations and generated elements, then returns your original content.
+      // next() and previous() browse. Side cards first focus; the current card activates its own links.
+      // Avoid overriding the component's internal transforms; style the card content instead.
+      // effect.js includes GSAP 3.12.5 and its original license notice; an existing window.gsap is reused.
+    </script>
+  </body>
+</html>

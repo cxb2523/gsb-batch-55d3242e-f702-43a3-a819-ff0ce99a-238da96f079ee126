@@ -1,0 +1,417 @@
+/* Tear-Off Pricing Ticket: styles for the effect. mountTearOffPricingTicket() adds the .tear-off-pricing-ticket class to your element; give that element a size. */
+.tear-off-pricing-ticket {
+  --accent: var(--fx-accent);
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-ink: #17181a;
+  --fx-ink-3: #9a9993;
+  --fx-object: #fff;
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --ink: var(--fx-ink);
+  --ink-3: var(--fx-ink-3);
+  --mono: "Geist", "Inter", system-ui, sans-serif;
+  --object: var(--fx-object);
+}
+.tear-off-pricing-ticket {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.tear-off-pricing-ticket,
+.tear-off-pricing-ticket *,
+.tear-off-pricing-ticket *::before,
+.tear-off-pricing-ticket *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.tear-off-pricing-ticket::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.ck-text {
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+}
+.ck-text[data-strong] {
+  font-weight: 500;
+}
+.ck-num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.ck-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.ck-dot[data-size="lg"] {
+  width: 24px;
+  height: 24px;
+}
+.ck-dot[data-accent] {
+  background: var(--accent);
+}
+.ck-dot[data-weak] {
+  background: rgba(23, 24, 26, 0.16);
+}
+.tear-off-pricing-ticket .ck-dot {
+  width: calc(8px * var(--fx-k, 1));
+  height: calc(8px * var(--fx-k, 1));
+}
+.tear-off-pricing-ticket .ck-dot[data-size="lg"] {
+  width: calc(24px * var(--fx-k, 1));
+  height: calc(24px * var(--fx-k, 1));
+}
+.tk-stage {
+  --tk-drop: 13px;
+  --tk-turn: 4deg;
+  --tk-in: cubic-bezier(0.3, 0.6, 0.25, 1.38);
+  --tk-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --tk-quad: cubic-bezier(0.4, 0, 0.5, 1);
+  --tk-k: var(--fx-k, 1);
+  --tk-r: calc(16px * var(--tk-k));
+  --tk-tooth: calc(4px * var(--tk-k));
+  --tk-gap: calc(5px * var(--tk-k));
+  --tk-pitch: 20px;
+  --tk-teeth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 8' preserveAspectRatio='none'%3E%3Crect x='4.5' width='9' height='8' rx='2'/%3E%3C/svg%3E");
+  font-family: var(--font);
+  color: var(--ink);
+}
+.tk-view {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.tk-fade {
+  -webkit-mask-image: linear-gradient(to bottom, #000 86%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 86%, transparent 100%);
+}
+.tk-row {
+  position: absolute;
+  display: flex;
+  align-items: stretch;
+}
+.tk-ticket {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  pointer-events: none;
+}
+.tk-flip {
+  position: relative;
+  flex: 1;
+  display: flex;
+  transform-style: preserve-3d;
+  pointer-events: auto;
+  will-change: transform;
+}
+.tk-face {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+.tk-front {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-gap);
+  --tk-paper: var(--object);
+  filter: drop-shadow(0 0 1px rgba(23, 24, 26, 0.16)) drop-shadow(0 2px 4px rgba(23, 24, 26, 0.06));
+}
+.tk-back {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-gap);
+  transform: rotateY(180deg);
+  --tk-paper: var(--ink);
+}
+.tk-body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: var(--tk-paper);
+  border-radius: var(--tk-r);
+  padding: calc(18px * var(--tk-k)) calc(18px * var(--tk-k)) calc(42px * var(--tk-k) - var(--tk-gap));
+}
+.tk-stub {
+  position: relative;
+  z-index: 1;
+  background: var(--tk-paper);
+  border-radius: var(--tk-r);
+  padding: calc(16px * var(--tk-k)) calc(18px * var(--tk-k)) calc(18px * var(--tk-k));
+  transform-origin: 50% 50%;
+  transition: transform 280ms var(--tk-out);
+}
+.tk-ticket.is-torn .tk-stub {
+  transform: translate3d(0, var(--tk-drop), 0) rotate(var(--tk-turn));
+  transition: transform 460ms var(--tk-in);
+}
+.tk-name {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(8px * var(--tk-k));
+  font-size: calc(20px * var(--tk-k));
+  line-height: calc(28px * var(--tk-k));
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.tk-amount {
+  display: block;
+  margin-top: calc(6px * var(--tk-k));
+  font-size: calc(44px * var(--tk-k));
+  line-height: calc(48px * var(--tk-k));
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+.tk-body::after,
+.tk-stub::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--tk-r) - var(--tk-pitch) / 4);
+  right: calc(var(--tk-r) - var(--tk-pitch) / 4);
+  height: calc(var(--tk-tooth) * 2);
+  background: var(--tk-paper);
+  -webkit-mask: var(--tk-teeth) 0 0 / var(--tk-pitch) 100% round no-repeat;
+  mask: var(--tk-teeth) 0 0 / var(--tk-pitch) 100% round no-repeat;
+}
+.tk-body::after {
+  bottom: calc(var(--tk-tooth) * -1);
+}
+.tk-stub::before {
+  top: calc(var(--tk-tooth) * -1);
+}
+.tk-label {
+  position: absolute;
+  left: 50%;
+  bottom: calc(8px * var(--tk-k));
+  transform: translateX(-50%);
+  font: 500 12px/16px var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tk-code {
+  position: relative;
+  display: block;
+  height: calc(44px * var(--tk-k));
+  border-radius: calc(6px * var(--tk-k));
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.tk-code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.tk-bars {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.tk-bars i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--ink);
+  transform-origin: 0 50%;
+  transition: transform 280ms var(--tk-quad);
+}
+.tk-bars::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--ink);
+  opacity: 0;
+  transition: opacity 140ms var(--tk-quad);
+}
+.tk-ticket.is-torn .tk-bars::before {
+  opacity: 1;
+  transition: opacity 180ms var(--tk-quad) 260ms;
+}
+.tk-stage .tk-cta {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--object);
+  opacity: 0;
+  white-space: nowrap;
+  transition: opacity 280ms var(--tk-quad);
+}
+.tk-ticket.is-torn .tk-bars i {
+  transform: scaleX(var(--s));
+  transition: transform 460ms var(--tk-quad);
+}
+.tk-ticket.is-torn .tk-cta {
+  opacity: 1;
+  transition: opacity 460ms var(--tk-quad);
+}
+.tk-back .tk-body,
+.tk-back .tk-stub {
+  color: var(--object);
+}
+.tk-back .tk-body {
+  flex: none;
+  height: var(--tk-bh, auto);
+}
+.tk-back .tk-stub {
+  flex: 1;
+}
+.tk-marks {
+  display: flex;
+  gap: calc(8px * var(--tk-k));
+}
+.tk-marks svg {
+  width: calc(14px * var(--tk-k));
+  height: calc(14px * var(--tk-k));
+  fill: none;
+  stroke: var(--object);
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+}
+.tk-corner {
+  position: absolute;
+  right: calc(16px * var(--tk-k));
+  top: calc(16px * var(--tk-k));
+  width: calc(12px * var(--tk-k));
+  height: calc(12px * var(--tk-k));
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.5);
+}
+.tk-corner[data-b] {
+  top: auto;
+  bottom: calc(14px * var(--tk-k));
+}
+.tk-compact {
+  --tk-r: 10px;
+  --tk-tooth: 2.5px;
+  --tk-gap: 3px;
+  --tk-pitch: 11px;
+}
+.tk-compact .tk-front {
+  filter: drop-shadow(0 0 0.5px rgba(23, 24, 26, 0.18)) drop-shadow(0 1px 2px rgba(23, 24, 26, 0.04));
+}
+.tk-compact .tk-body {
+  padding: 12px 12px calc(15.5px - var(--tk-gap));
+}
+.tk-compact .tk-stub {
+  padding: 10px 12px 12px;
+}
+.tk-compact .tk-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  gap: 6px;
+}
+.tk-compact .tk-amount {
+  margin-top: 2px;
+  font-size: 22px;
+  line-height: 26px;
+  letter-spacing: -0.02em;
+}
+.tk-compact .tk-label {
+  display: none;
+}
+.tk-compact .tk-code {
+  height: 28px;
+  border-radius: 4px;
+}
+.tk-compact .tk-cta {
+  font-size: 12px;
+}
+.tk-compact .tk-marks {
+  gap: 5px;
+}
+.tk-compact .tk-marks svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 1.25px;
+}
+.tk-compact .tk-corner {
+  right: 10px;
+  top: 10px;
+  width: 8px;
+  height: 8px;
+}
+.tk-compact .tk-corner[data-b] {
+  bottom: 10px;
+}
+.tk-scroller {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  outline: none;
+}
+.tk-scroller::-webkit-scrollbar {
+  display: none;
+}
+.tk-runway {
+  position: relative;
+}
+.tk-pin {
+  position: sticky;
+  top: 0;
+}
+.tk-stage[data-reduced="true"] * {
+  transition: none !important;
+}
+.tk-intro {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: max(28px, 8%);
+  text-align: center;
+}
+.tk-title {
+  margin: 0 0 4px;
+  font: 600 clamp(24px, 4vw, 40px)/1.1 var(--font);
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+[data-tk-board] {
+  touch-action: pan-x;
+  outline: none;
+}
+[data-tk-board]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -8px;
+}

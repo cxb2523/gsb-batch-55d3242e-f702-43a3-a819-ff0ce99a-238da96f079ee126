@@ -1,0 +1,266 @@
+/* Hairline Burger: styles for the effect. mountHairlineBurger() adds the .hairline-burger class to your element; give that element a size. */
+.hairline-burger {
+  --accent: var(--fx-accent);
+  --ck-hint: 12px;
+  --ck-max: 336px;
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-ink: #17181a;
+  --fx-ink-3: #9a9993;
+  --fx-object: #fff;
+  --fx-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-shadow-lift:
+    0 0 0 1px rgba(23, 24, 26, 0.06), 0 22px 44px -6px rgba(23, 24, 26, 0.16), 0 6px 14px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --ink: var(--fx-ink);
+  --ink-3: var(--fx-ink-3);
+  --mono: "Geist", "Inter", system-ui, sans-serif;
+  --object: var(--fx-object);
+  --out: var(--fx-out);
+  --r-lg: 24px;
+  --r-md: 16px;
+  --shadow: var(--fx-shadow);
+  --shadow-lift: var(--fx-shadow-lift);
+}
+.hairline-burger {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.hairline-burger,
+.hairline-burger *,
+.hairline-burger *::before,
+.hairline-burger *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.hairline-burger::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.hl-stage {
+  --gap: 11px;
+  --shift: 2px;
+  --dur: 500ms;
+  --weight: 1.5px;
+}
+.hl-wrap {
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  transform: translate(-50%, -50%) scale(var(--fit, 1));
+  transform-origin: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(18px, 4.5cqh, 30px);
+}
+.hl-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hl-chip {
+  height: 72px;
+  padding: 0 26px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--r-md);
+  background: var(--ink);
+  color: var(--object);
+  font: 500 13px/1 var(--font);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.hl-btn {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--object);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition:
+    box-shadow 0.3s var(--out),
+    background-color 0.3s var(--out);
+}
+.hl-stage.is-hover .hl-btn {
+  box-shadow: var(--shadow-lift);
+}
+.hl-stage.is-open-late.is-hover .hl-btn {
+  background-color: #f6f6f5;
+}
+.hl-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.hl-lines {
+  position: relative;
+  display: block;
+  width: 32px;
+  height: var(--gap);
+  transform-origin: center;
+}
+.hl-lines i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--weight);
+  border-radius: var(--weight);
+  background: currentColor;
+  transform-origin: center;
+  transition:
+    margin var(--dur) var(--out),
+    transform var(--dur) var(--out),
+    opacity var(--dur) var(--out);
+}
+.hl-lines i + i {
+  top: 100%;
+  margin-top: calc(var(--weight) * -1);
+}
+.hl-stage.is-hover:not(.is-open) .hl-lines i {
+  transform: translateY(var(--shift));
+}
+.hl-stage.is-hover:not(.is-open) .hl-lines i + i {
+  transform: translateY(calc(var(--shift) * -1));
+}
+.hl-stage.is-open .hl-lines i {
+  transform: translateY(calc(var(--gap) / 2 - var(--weight) / 2)) rotate(45deg);
+}
+.hl-stage.is-open .hl-lines i + i {
+  transform: translateY(calc(var(--gap) / -2 + var(--weight) / 2)) rotate(-45deg);
+}
+.hl-state {
+  display: block;
+  overflow: hidden;
+  height: 1.2em;
+  font: 500 11px/1.2 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.hl-roll {
+  display: grid;
+  justify-items: center;
+  transition: transform var(--dur) var(--out);
+}
+.hl-roll span {
+  display: block;
+}
+.hl-stage.is-open .hl-roll {
+  transform: translateY(-50%);
+}
+.hl-stage .cr-hint {
+  left: 50%;
+  right: auto;
+  translate: -50% 0;
+  width: max-content;
+  max-width: 84%;
+  bottom: 7%;
+  color: var(--ink-3);
+}
+.hl-stage[data-reduced="true"] * {
+  transition: none !important;
+}
+.hl-stage .hl-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.ck-panel {
+  position: relative;
+  width: min(var(--ck-max), 100%);
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--object);
+  box-shadow: var(--shadow);
+}
+.ck-panel[data-size="lg"] {
+  border-radius: var(--r-lg);
+  padding: 12px;
+}
+.ck-hint {
+  font: 400 var(--ck-hint)/16px var(--font);
+  color: var(--ink-3);
+}
+.hairline-burger :is(.ck-panel, .ck-pill, .ck-row) {
+  --fx-k: 1;
+}
+.fx-board .hl-wrap {
+  top: 50%;
+  gap: calc(16px * var(--hl-k, 1));
+}
+.fx-board .hl-btn {
+  width: calc(72px * var(--hl-k, 1));
+  height: calc(72px * var(--hl-k, 1));
+  padding: 0;
+  border-radius: calc(16px * var(--hl-k, 1));
+}
+.fx-board .hl-lines {
+  width: calc(32px * var(--hl-k, 1));
+  height: calc(var(--gap) * var(--hl-k, 1));
+}
+.fx-board .hl-lines i {
+  height: calc(var(--weight) * var(--hl-k, 1));
+  border-radius: calc(var(--weight) * var(--hl-k, 1));
+}
+.fx-board .hl-lines i + i {
+  margin-top: calc(var(--weight) * var(--hl-k, 1) * -1);
+}
+.fx-board.hl-stage.is-hover:not(.is-open) .hl-lines i {
+  transform: translateY(calc(var(--shift) * var(--hl-k, 1)));
+}
+.fx-board.hl-stage.is-hover:not(.is-open) .hl-lines i + i {
+  transform: translateY(calc(var(--shift) * var(--hl-k, 1) * -1));
+}
+.fx-board.hl-stage.is-open .hl-lines i {
+  transform: translateY(calc((var(--gap) - var(--weight)) / 2 * var(--hl-k, 1))) rotate(45deg);
+}
+.fx-board.hl-stage.is-open .hl-lines i + i {
+  transform: translateY(calc((var(--weight) - var(--gap)) / 2 * var(--hl-k, 1))) rotate(-45deg);
+}
+.fx-board .hl-state {
+  height: calc(16px * var(--hl-k, 1));
+  font-size: calc(12px * var(--hl-k, 1));
+  line-height: calc(16px * var(--hl-k, 1));
+}

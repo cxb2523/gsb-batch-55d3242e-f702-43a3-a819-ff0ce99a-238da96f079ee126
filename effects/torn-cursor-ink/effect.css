@@ -1,0 +1,165 @@
+/* Torn Cursor Ink: styles for the effect. mountTornCursorInk() adds the .torn-cursor-ink class to your element; give that element a size. */
+.torn-cursor-ink {
+  --accent: var(--fx-accent);
+  --ck-max: 336px;
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-ink: #17181a;
+  --fx-object: #fff;
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --ink: var(--fx-ink);
+  --object: var(--fx-object);
+  --r-lg: 24px;
+  --r-md: 16px;
+  --shadow: var(--fx-shadow);
+}
+.torn-cursor-ink {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.torn-cursor-ink,
+.torn-cursor-ink *,
+.torn-cursor-ink *::before,
+.torn-cursor-ink *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.torn-cursor-ink::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.ink-stage {
+  position: relative;
+}
+.ink-sheet {
+  position: absolute;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.ink-sheet:not(.ck-panel) {
+  left: 14%;
+  right: 14%;
+  top: 13%;
+  bottom: 17%;
+  background: var(--object, #fff);
+  border-radius: var(--r-lg, 24px);
+  box-shadow: var(--shadow);
+}
+.ink-stage .ink-sheet.ink-fill {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+}
+.ink-stage .ink-face {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 22px;
+}
+.ink-label {
+  font: 500 14px/20px var(--font);
+  color: var(--ink);
+}
+.ink-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.ink-gl {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+.ck-panel {
+  position: relative;
+  width: min(var(--ck-max), 100%);
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--object);
+  box-shadow: var(--shadow);
+}
+.ck-panel[data-size="lg"] {
+  border-radius: var(--r-lg);
+  padding: 12px;
+}
+.ck-text {
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+}
+.ck-text[data-strong] {
+  font-weight: 500;
+}
+.ck-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.ck-dot[data-size="lg"] {
+  width: 24px;
+  height: 24px;
+}
+.ck-dot[data-accent] {
+  background: var(--accent);
+}
+.ck-dot[data-weak] {
+  background: rgba(23, 24, 26, 0.16);
+}
+.torn-cursor-ink .ck-dot {
+  width: calc(8px * var(--fx-k, 1));
+  height: calc(8px * var(--fx-k, 1));
+}
+.torn-cursor-ink .ck-dot[data-size="lg"] {
+  width: calc(24px * var(--fx-k, 1));
+  height: calc(24px * var(--fx-k, 1));
+}
+.torn-cursor-ink :is(.ck-panel, .ck-pill, .ck-row) {
+  --fx-k: 1;
+}
+.ink-box {
+  position: absolute;
+}

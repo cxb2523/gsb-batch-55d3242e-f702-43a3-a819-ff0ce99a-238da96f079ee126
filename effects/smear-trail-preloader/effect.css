@@ -1,0 +1,229 @@
+/* Smear-Trail Preloader: styles for the effect. mountSmearTrailPreloader() adds the .smear-trail-preloader class to your element; give that element a size. */
+.smear-trail-preloader {
+  --accent: var(--fx-accent);
+  --ck-max: 336px;
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-object: #fff;
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --object: var(--fx-object);
+  --r-lg: 24px;
+  --r-md: 16px;
+  --r-pill: 999px;
+  --shadow: var(--fx-shadow);
+  --surface: #f0f0ef;
+}
+.smear-trail-preloader {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.smear-trail-preloader,
+.smear-trail-preloader *,
+.smear-trail-preloader *::before,
+.smear-trail-preloader *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.smear-trail-preloader::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.sm-stage {
+  position: relative;
+}
+.sm-screen {
+  position: absolute;
+  inset: 9% 9% 10%;
+  overflow: hidden;
+  background: var(--object);
+  border-radius: var(--r-lg, 24px);
+  box-shadow: var(--shadow);
+  container-type: size;
+  color: var(--ink);
+  --sm-cover: var(--ink);
+  --sm-paper: var(--surface, #f0f0ef);
+}
+.sm-site {
+  position: absolute;
+  inset: 0;
+}
+.sm-face {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+  box-sizing: border-box;
+  padding: clamp(16px, 5cqw, 40px) clamp(18px, 6cqw, 48px);
+}
+.sm-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.sm-links {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 3.4cqw, 28px);
+}
+.sm-screen .sm-title {
+  margin: 0;
+  font: 600 min(16cqw, 24cqh)/0.95 var(--font);
+  letter-spacing: -0.05em;
+  color: var(--ink);
+}
+.sm-title > span {
+  display: block;
+}
+.sm-stop {
+  color: var(--accent);
+}
+.sm-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+.sm-cover {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: var(--sm-cover);
+  color: var(--sm-paper);
+  will-change: transform;
+  font: 500 var(--sm-fs, 32px)/1.04 var(--font);
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+}
+.sm-group + .sm-group {
+  margin-top: 0.8em;
+}
+.sm-row {
+  position: relative;
+  height: 1.04em;
+}
+.sm-row p {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  white-space: nowrap;
+  width: max-content;
+  will-change: transform;
+  opacity: 0;
+}
+.ck-panel {
+  position: relative;
+  width: min(var(--ck-max), 100%);
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--object);
+  box-shadow: var(--shadow);
+}
+.ck-panel[data-size="lg"] {
+  border-radius: var(--r-lg);
+  padding: 12px;
+}
+.ck-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--object);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font: 500 var(--ck-text)/1 var(--font);
+  white-space: nowrap;
+}
+.ck-pill[data-size="sm"] {
+  height: 32px;
+  padding: 0 12px;
+}
+.ck-solid {
+  background: var(--ink) !important;
+  color: var(--object) !important;
+  box-shadow: none;
+}
+.ck-text {
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+}
+.ck-text[data-strong] {
+  font-weight: 500;
+}
+.smear-trail-preloader :is(.ck-panel, .ck-pill, .ck-row) {
+  --fx-k: 1;
+}
+[data-sm-board] {
+  cursor: pointer;
+  touch-action: pan-y;
+}
+[data-sm-board]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -8px;
+}
+[data-sm-board] .sm-screen {
+  inset: auto;
+  left: var(--sm-x);
+  top: var(--sm-y);
+  width: var(--sm-w);
+  height: var(--sm-h);
+}
+.sm-replay {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3;
+  cursor: pointer;
+  border: 0;
+}
+.sm-replay:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 760px) {
+  .sm-replay {
+    right: 50%;
+    translate: 50% 0;
+  }
+}

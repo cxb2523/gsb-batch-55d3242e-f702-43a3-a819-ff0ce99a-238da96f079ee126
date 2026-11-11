@@ -1,0 +1,259 @@
+/* Link Hover Set: styles for the effect. mountLinkHoverSet() adds the .link-hover-set class to your element; give that element a size. */
+.link-hover-set {
+  --accent: var(--fx-accent);
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-ink-3: #9a9993;
+  --fx-object: #fff;
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --ink-2: #5c5b56;
+  --ink-3: var(--fx-ink-3);
+  --object: var(--fx-object);
+  --r-lg: 24px;
+}
+.link-hover-set {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 15px/1.5 var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.link-hover-set,
+.link-hover-set *,
+.link-hover-set *::before,
+.link-hover-set *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.link-hover-set::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.lk-host [data-link] {
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lk-host [data-link]:focus-visible {
+  outline: 1px solid var(--hair);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.lk-chase {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 0.18em;
+}
+.lk-u {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: max(1.5px, 0.07em);
+  transform-origin: left center;
+  pointer-events: none;
+}
+.lk-u0 {
+  background: var(--ink);
+  opacity: 0.22;
+}
+.lk-u1 {
+  background: var(--accent);
+  transform: scaleX(0);
+}
+.lk-u2 {
+  background: var(--ink);
+  transform: scaleX(0);
+}
+.lk-roll {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  padding-bottom: 0.28em;
+}
+.lk-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.lk-chars {
+  display: inline-flex;
+  overflow: hidden;
+  line-height: 1.25;
+}
+.lk-char {
+  display: inline-block;
+  position: relative;
+  white-space: pre;
+}
+.lk-char::after {
+  content: attr(data-char);
+  position: absolute;
+  left: 0;
+  top: 100%;
+}
+.lk-rule {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: max(1.5px, 0.07em);
+  background: var(--ink);
+  opacity: 0.3;
+  transform-origin: left center;
+  pointer-events: none;
+}
+.lk-ne {
+  position: relative;
+  display: inline-grid;
+  overflow: hidden;
+  width: 0.62em;
+  height: 0.62em;
+  align-self: center;
+  translate: 0 -0.08em;
+}
+.lk-ne > span {
+  grid-area: 1/1;
+  display: block;
+}
+.lk-ne-b {
+  transform: translate(-120%, 120%);
+}
+.lk-ne svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.lk-scene {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(16px, 3cqw, 32px);
+  width: min(88%, 820px);
+  font-family: var(--font);
+}
+.lk-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: clamp(14px, 3.4cqh, 26px);
+  padding: clamp(20px, 4cqw, 36px);
+  border-radius: var(--r-lg, 24px);
+  background: var(--object);
+  box-shadow:
+    0 0 0 1px rgba(23, 24, 26, 0.06),
+    0 2px 8px rgba(23, 24, 26, 0.06);
+}
+.lk-host .lk-col p {
+  margin: 0;
+  max-width: none;
+}
+.lk-host .lk-col .lk-tag {
+  color: var(--ink-3);
+  font: 400 12px/16px var(--font);
+}
+.lk-cta {
+  font: 500 clamp(22px, 3.2cqw, 30px)/1.2 var(--font);
+  letter-spacing: -0.02em;
+}
+.lk-host .lk-col .lk-body {
+  color: var(--ink-2);
+  font: 400 15px/1.6 var(--font);
+}
+.lk-body [data-link] {
+  color: var(--ink);
+}
+.lk-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  padding-top: clamp(12px, 2.6cqh, 20px);
+  border-top: 1px solid var(--hair);
+  align-self: stretch;
+  font: 500 14px/20px var(--font);
+}
+@container (max-width:620px) {
+  .lk-scene {
+    grid-template-columns: 1fr;
+    width: min(84%, 420px);
+  }
+  .lk-body {
+    display: none;
+  }
+}
+.lk-body .lk-chase,
+.lk-body .lk-roll,
+.lk-foot .lk-chase,
+.lk-foot .lk-roll {
+  padding-bottom: 0.12em;
+}
+.lk-pair {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max-content;
+  display: flex;
+  gap: 1.6em;
+  font-size: 56px;
+}
+.lk-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3em;
+}
+.lk-pair [data-link] {
+  font: 500 1em/1.25 var(--font);
+  letter-spacing: -0.02em;
+}
+.lk-pair [data-link="chase"] {
+  margin-bottom: 0.1em;
+}
+@media (max-width: 760px) {
+  .lk-pair {
+    flex-direction: column;
+    gap: 0.9em;
+  }
+}

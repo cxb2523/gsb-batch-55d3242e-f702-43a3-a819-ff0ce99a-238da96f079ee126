@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Bouncing Text Entrance</title>
+    <link rel="stylesheet" href="effect.css" />
+    <style>
+      /* Host styling: replace this with your own layout, type and colours. */
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #faf9f6;
+        color: #242723;
+        font:
+          16px/1.6 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 1100px;
+        margin: auto;
+      }
+      header {
+        min-height: 70vh;
+        padding-block: 32px;
+      }
+      footer {
+        min-height: 45vh;
+        padding-block: 32px;
+      }
+      #chapter {
+        --ea-story-accent: #376c4d;
+        --ea-story-line-width: 3px;
+        --ea-story-inset: 24px;
+      }
+      #statement {
+        margin: 0;
+        font:
+          600 clamp(36px, 7vw, 90px)/1.35 system-ui,
+          sans-serif;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Bouncing Text Entrance</h1>
+        <p>Scroll down. The statement animates once and remains readable.</p>
+        <a href="#chapter">Read the statement ↓</a>
+      </header>
+      <!-- Replace the existing heading. Typography and alignment belong to your page. -->
+      <section id="chapter"><h2 id="statement">Leave a little room for new ideas.</h2></section>
+      <footer><p>Continue with your own page content here.</p></footer>
+    </main>
+    <script src="effect.js"></script>
+    <script>
+      // Motion options from the website. Edit freely or keep the defaults.
+      const motionOptions = /* EA_OPTIONS_START */ { displacement: 600, duration: 1.8 }; /* EA_OPTIONS_END */
+      const effect = mountScrollStory(document.querySelector("#statement"), {
+        driver: "enter",
+        locale: "en",
+        emphasis: "new ideas",
+        params: { height: 0.7, rotation: 30, motion: "auto", ...motionOptions },
+      });
+      // 'enter' triggers once, continues without scrolling, and keeps the completed title visible.
+      // replay() explicitly repeats it. Normal revisits never replay. update({params:{...}}) changes options.
+      // Edit the existing heading and host CSS; refresh() remeasures. No links/buttons inside animated headings.
+      // getState() reads state; destroy() restores the original heading and releases observers and motion.
+      // Optional 'scroll' or 'external' drivers exist, but are not the default. See setProgress(0..1).
+      // effect.js includes GSAP 3.12.5 and its original license notice; an existing window.gsap is reused.
+    </script>
+  </body>
+</html>

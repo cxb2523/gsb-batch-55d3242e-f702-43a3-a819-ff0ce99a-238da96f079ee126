@@ -1,0 +1,74 @@
+Effect Atlas License 1.0
+
+Copyright (c) 2026 PROJECT Y/O
+
+This license is adapted from the MIT License and the Commons Clause. It is not
+the MIT License, and it is not an open-source license.
+
+Definitions
+
+"The Effects" means the code, styles, and demo files published as Effect Atlas
+at effectatlas.com and in the Effect Atlas repository, and any modified version
+of them, including a version rewritten for another framework or library.
+
+"Your Project" means a website, app, or design that you build, or that you build
+for a client, in which the Effects are one part of a larger work and not its
+main value.
+
+1. Permission
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+the Effects, to use, copy, modify, combine, and rename the Effects in Your
+Project, for any purpose, including commercial use, and to publish and
+distribute Your Project with the Effects included in it, subject to the
+conditions below.
+
+2. Client work
+
+You may build Your Project for a client, charge a fee for that work, and deliver
+the finished project to the client, including its source code with the Effects
+in it. This is not selling or redistributing the Effects, as long as the Effects
+are not delivered as a standalone product or collection.
+
+3. Sharing and restrictions
+
+You may share or publish the Effects, modified or not, outside Your Project,
+for example in a tutorial, a course, a code demo, a template, or an open-source
+project, provided that you keep the copyright notice. A credit to Effect Atlas
+with a link to effectatlas.com is appreciated but not required.
+
+Whether for a fee or free of charge, you may not:
+
+  a. sell the Effects on their own, individually or as a set. Selling a
+     tutorial or course that uses the Effects is not selling the Effects on
+     their own;
+  b. remove the copyright notice;
+  c. mirror effectatlas.com or the Effect Atlas repository, in whole or in
+     substantial part.
+
+Forks: viewing the Effect Atlas repository on GitHub and forking it there, as
+GitHub's Terms of Service allow, does not break this license. A fork grants no
+rights beyond this license, and publishing a fork as a website (for example on
+GitHub Pages) or as a package (for example on npm) is mirroring under 3c.
+
+4. Notice
+
+Keep the copyright notice above and a reference to this license (for example,
+the comment at the top of effect.js) in the source code of every copy of the
+Effects. You do not have to credit Effect Atlas anywhere visible in Your
+Project.
+
+5. Third-party code
+
+Some effects ship with third-party libraries, such as three.js. Those libraries
+remain under their own licenses, which are included next to them.
+
+6. No warranty
+
+THE EFFECTS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE EFFECTS OR THE USE OR OTHER DEALINGS IN THE
+EFFECTS.

@@ -1,0 +1,266 @@
+.ea-dock {
+  --dock-layout-gap: var(--dock-gap, 12px);
+  position: relative;
+  width: max-content;
+  /* The core already reserves edge space when measuring each open panel.
+     Keep the shell wide enough for labels and panels crossing during a close. */
+  max-width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: var(--dock-ink, #202124);
+  isolation: isolate;
+  margin-inline: auto;
+  z-index: 20;
+}
+.ea-dock,
+.ea-dock * {
+  box-sizing: border-box;
+}
+.ea-dock[data-placement="fixed"] {
+  position: fixed;
+  bottom: calc(var(--dock-bottom, 24px) + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: calc(100vw - 24px);
+}
+.ea-dock[data-placement="container"] {
+  position: absolute;
+  bottom: var(--dock-bottom, 20px);
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+}
+.ea-dock-row {
+  display: flex;
+  align-items: center;
+  gap: var(--dock-layout-gap);
+  height: var(--dock-unit, 44px);
+  /* Keep the upward overshoot and focus rings, but mask buttons after they
+     leave the action row. Option popovers are siblings and remain unclipped. */
+  clip-path: inset(-24px -100% -8px);
+}
+.ea-dock-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  height: var(--dock-unit, 44px);
+}
+.ea-dock button,
+.ea-dock a {
+  font: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.ea-dock button {
+  cursor: pointer;
+}
+.ea-dock button:focus-visible,
+.ea-dock a:focus-visible {
+  outline: 2px solid var(--dock-accent, #4559ff);
+  outline-offset: 4px;
+}
+.ea-dock-trigger {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  height: var(--dock-unit, 44px);
+  flex: none;
+}
+.ea-dock-symbol {
+  width: var(--dock-unit, 44px);
+  height: var(--dock-unit, 44px);
+  border-radius: var(--dock-radius, 4px);
+  display: grid;
+  place-items: center;
+  position: relative;
+  background: var(--dock-ink, #202124);
+  color: var(--dock-paper, #fff);
+  flex: none;
+}
+.ea-dock-line {
+  position: absolute;
+  width: 16px;
+  height: 1px;
+  background: currentColor;
+  transform-origin: center;
+}
+.ea-dock-line:first-child {
+  transform: translateY(-4px);
+}
+.ea-dock-line:last-child {
+  transform: translateY(4px);
+}
+.ea-dock-label-clip {
+  display: flex;
+  align-items: center;
+  height: var(--dock-unit, 44px);
+  width: auto;
+  overflow: clip;
+  /* The capsule belongs to the width-changing shell. Only its text moves
+     vertically, so a spring overshoot cannot cut the capsule's outline. */
+  background: var(--dock-ink, #202124);
+  color: var(--dock-paper, #fff);
+  border-radius: var(--dock-radius, 4px);
+}
+.ea-dock-label {
+  display: flex;
+  flex: none;
+  gap: 7px;
+  align-items: center;
+  white-space: nowrap;
+  height: var(--dock-unit, 44px);
+  padding: 0 14px;
+  color: inherit;
+}
+.ea-dock-badge:empty {
+  display: none;
+}
+.ea-dock-badge {
+  font-size: 10px;
+  border: 1px solid currentColor;
+  border-radius: 30px;
+  min-width: 16px;
+  height: 16px;
+  padding-inline: 4px;
+  display: grid;
+  place-items: center;
+}
+.ea-dock-panel {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 0;
+  height: var(--dock-unit, 44px);
+  visibility: hidden;
+  flex: none;
+  overflow: visible;
+}
+.ea-dock-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  height: var(--dock-unit, 44px);
+  border: 0;
+  background: var(--dock-ink, #202124);
+  color: var(--dock-paper, #fff) !important;
+  text-decoration: none;
+  white-space: nowrap;
+  border-radius: var(--dock-radius, 4px);
+  flex: none;
+  transform: translateY(8em);
+}
+.ea-dock-item[aria-current="page"]:before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ea-dock-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ea-dock-item[aria-expanded="true"] {
+  background: var(--dock-accent, #4559ff);
+}
+.ea-dock-value {
+  font-size: 10px;
+  opacity: 0.75;
+}
+.ea-dock-value:empty {
+  display: none;
+}
+.ea-dock-group[data-tone="light"] .ea-dock-symbol,
+.ea-dock-group[data-tone="light"] .ea-dock-label-clip,
+.ea-dock-group[data-tone="light"] .ea-dock-item {
+  background: var(--dock-paper, #fff);
+  color: var(--dock-ink, #202124) !important;
+  box-shadow: inset 0 0 0 1px #cfd3da;
+}
+.ea-dock-group[data-tone="light"] .ea-dock-item[aria-expanded="true"] {
+  box-shadow: inset 0 0 0 1px var(--dock-accent, #4559ff);
+  color: var(--dock-accent, #4559ff) !important;
+}
+.ea-dock-options {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--dock-unit, 44px) + 13px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  background: var(--dock-paper, #fff);
+  color: var(--dock-ink, #202124);
+  border: 1px solid #d5d9df;
+  border-radius: var(--dock-options-radius, 7px);
+  width: max-content;
+  max-width: var(--dock-available, 340px);
+  box-shadow: 0 6px 20px #11182714;
+}
+.ea-dock-options[hidden] {
+  display: none;
+}
+.ea-dock-option {
+  padding: 9px 13px;
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: var(--dock-option-radius, var(--dock-radius, 4px));
+  background: var(--dock-option-paper, #f2f4f7);
+  white-space: nowrap;
+}
+.ea-dock-option[aria-pressed="true"] {
+  background: var(--dock-ink, #202124);
+  color: var(--dock-paper, #fff);
+}
+.ea-dock-option:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ea-dock-summary {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--dock-unit, 44px) + 10px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  font-size: 10px;
+  background: var(--dock-paper, #fff);
+  padding: 5px 9px;
+  border-radius: var(--dock-option-radius, var(--dock-radius, 4px));
+  border: 1px solid #e1e4e8;
+  color: #656d79;
+}
+.ea-dock-summary:empty {
+  display: none;
+}
+.ea-dock[data-options-open="true"] .ea-dock-summary {
+  visibility: hidden;
+}
+.ea-dock[data-compact="true"] {
+  --dock-layout-gap: var(--dock-compact-gap, var(--dock-gap, 8px));
+}
+.ea-dock[data-compact="true"] .ea-dock-item {
+  padding-inline: 10px;
+  font-size: 12px;
+}
+.ea-dock[data-panel-overflow="true"] .ea-dock-panel[data-open="true"] {
+  overflow-x: auto;
+  overflow-y: clip;
+  scrollbar-width: thin;
+  scrollbar-color: #a8acb5 transparent;
+  padding-block: 4px;
+  height: calc(var(--dock-unit, 44px) + 8px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ea-dock * {
+    scroll-behavior: auto !important;
+  }
+}

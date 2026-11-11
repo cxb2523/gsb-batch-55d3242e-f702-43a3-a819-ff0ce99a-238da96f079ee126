@@ -1,0 +1,419 @@
+/* Film Jitter Button: styles for the effect. mountFilmJitterButton() adds the .film-jitter-hover class to your element; give that element a size. */
+.film-jitter-hover {
+  --accent: var(--fx-accent);
+  --ck-max: 336px;
+  --ck-text: 14px;
+  --fx-accent: #4559ff;
+  --fx-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fx-hair: rgba(23, 24, 26, 0.1);
+  --fx-ink: #17181a;
+  --fx-ink-3: #9a9993;
+  --fx-object: #fff;
+  --fx-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --fx-shadow: 0 0 0 1px rgba(23, 24, 26, 0.06), 0 2px 8px rgba(23, 24, 26, 0.06);
+  --fx-shadow-lift:
+    0 0 0 1px rgba(23, 24, 26, 0.06), 0 22px 44px -6px rgba(23, 24, 26, 0.16), 0 6px 14px rgba(23, 24, 26, 0.06);
+  --fx-spring: cubic-bezier(0.28, 1.3, 0.36, 1);
+  --fx-wash: rgba(23, 24, 26, 0.06);
+  --font: var(--fx-font);
+  --hair: var(--fx-hair);
+  --ink: var(--fx-ink);
+  --ink-2: #5c5b56;
+  --ink-3: var(--fx-ink-3);
+  --object: var(--fx-object);
+  --out: var(--fx-out);
+  --r-lg: 24px;
+  --r-md: 16px;
+  --r-sm: 10px;
+  --shadow: var(--fx-shadow);
+  --shadow-lift: var(--fx-shadow-lift);
+  --spring: var(--fx-spring);
+}
+.film-jitter-hover {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--fx-wash);
+  isolation: isolate;
+  -webkit-user-select: none;
+  user-select: none;
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+.film-jitter-hover,
+.film-jitter-hover *,
+.film-jitter-hover *::before,
+.film-jitter-hover *::after {
+  box-sizing: border-box;
+}
+.cr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.film-jitter-hover::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(23, 24, 26, 0.1) 1px, transparent 1.6px) center / 22px 22px;
+}
+.fx-board {
+  position: absolute;
+  inset: 0;
+}
+.jt-stage {
+  --j: 1;
+  --swap: 70ms;
+  --jt-bounce: var(--spring);
+  --jt-smooth: var(--out);
+  --jt-elastic: var(--spring);
+  --jt-transform: var(--out);
+  --jt-menu: var(--out);
+}
+.jt-wrap {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(40px, 12cqh, 96px);
+  font: 500 clamp(13px, 3.1cqw, 32px)/1 var(--font);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.jt-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+.jt-h {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.5s var(--jt-elastic);
+}
+.jt-h.is-press {
+  transform: scale(0.96);
+}
+.jt-bg {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-sm);
+  background: var(--object);
+  box-shadow: var(--shadow);
+  transition:
+    scale 0.15s var(--jt-transform),
+    transform 0.15s var(--jt-transform),
+    box-shadow 0.3s var(--jt-smooth);
+}
+.jt-h.is-hover .jt-bg {
+  transform: scale(1.03, 1.06);
+  box-shadow: var(--shadow-lift);
+  transition:
+    scale 0.15s var(--jt-transform),
+    transform 0.4s var(--jt-bounce) 0.12s,
+    box-shadow 0.3s var(--jt-smooth);
+}
+.jt-link {
+  height: 2.75em;
+  padding: 0 1.15em;
+}
+.jt-link:focus-visible,
+.jt-menu:focus-visible,
+.jt-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--r-sm);
+}
+.jt-inner {
+  position: relative;
+  display: inline-grid;
+  vertical-align: top;
+}
+.jt-inner::after,
+.jt-text {
+  grid-area: 1/1;
+  display: block;
+  white-space: nowrap;
+}
+.jt-inner::after {
+  content: attr(data-text);
+  clip-path: inset(0 0 100% 0);
+  transform-origin: top;
+  translate: 0 -0.3em;
+  scale: 1.07;
+  transition:
+    clip-path 0.42s var(--jt-smooth),
+    scale 0.34s var(--jt-bounce),
+    translate 0.38s var(--jt-smooth);
+}
+.jt-text {
+  clip-path: inset(0);
+  transform-origin: bottom;
+  translate: 0;
+  scale: 1;
+  transition:
+    clip-path 0.42s var(--jt-smooth),
+    scale 0.34s var(--jt-bounce),
+    translate 0.38s var(--jt-smooth);
+}
+.jt-h.is-hover .jt-inner::after {
+  clip-path: inset(0);
+  translate: 0;
+  scale: 1;
+  transition-delay: var(--swap);
+}
+.jt-h.is-hover .jt-text {
+  clip-path: inset(100% 0 0 0);
+  translate: 0 0.3em;
+  scale: 0.94;
+}
+.jt-link:not(.is-current) .jt-inner {
+  color: var(--ink-2);
+}
+.jt-link.is-hover .jt-inner {
+  color: var(--ink);
+}
+.jt-dot {
+  position: absolute;
+  left: 50%;
+  bottom: 0.45em;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.jt-menu {
+  width: 2.75em;
+  height: 2.75em;
+  margin-left: 0.25em;
+}
+.jt-bars {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 1.15em;
+  height: 1em;
+}
+.jt-bars i {
+  grid-area: 1/1;
+  display: block;
+  width: 100%;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: translateY(-0.22em) rotate(0.001deg);
+  transition: transform 0.55s var(--jt-menu);
+}
+.jt-bars i + i {
+  transform: translateY(0.18em) rotate(0.001deg);
+}
+.jt-menu.is-hover .jt-bars i {
+  transform: translateY(0.22em) rotate(0.001deg);
+}
+.jt-menu.is-hover .jt-bars i + i {
+  transform: translateY(-0.18em) rotate(0.001deg);
+}
+.jt-stage.is-menu-open .jt-bars i {
+  transform: translateY(0) rotate(45deg) scaleX(0.75);
+}
+.jt-stage.is-menu-open .jt-bars i + i {
+  transform: translateY(0) rotate(-45deg) scaleX(0.75);
+}
+.jt-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55em;
+  width: max-content;
+  font-size: 2.1em;
+  letter-spacing: -0.03em;
+  font-weight: 500;
+}
+.jt-btn.is-hover {
+  transform: scale(1.035) rotate(-1deg);
+}
+.jt-btn.is-press {
+  transform: scale(0.965) rotate(0);
+}
+.jt-rule {
+  display: block;
+  width: 100%;
+  height: 3px;
+  background: var(--ink);
+}
+.jt-mask {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  padding: 0 0.1em;
+}
+.jt-label {
+  display: block;
+  line-height: 1.05;
+}
+.jt-btn.is-hover .jt-rule {
+  animation: jt-gate-slip 0.42s step-end infinite;
+}
+.jt-btn.is-hover .jt-rule:last-child {
+  animation-duration: 0.33s;
+  animation-direction: alternate-reverse;
+}
+.jt-btn.is-hover .jt-mask {
+  animation: jt-gate-sway 0.52s step-end infinite;
+}
+@keyframes jt-gate-slip {
+  0%,
+  to {
+    transform: none;
+  }
+  16% {
+    transform: translate(calc(-0.035em * var(--j)), calc(0.018em * var(--j))) scaleX(calc(1 - 0.003 * var(--j)));
+  }
+  33% {
+    transform: translate(calc(0.05em * var(--j)), calc(-0.01em * var(--j))) scaleX(calc(1 + 0.005 * var(--j)));
+  }
+  50% {
+    transform: translate(calc(0.012em * var(--j)), calc(0.03em * var(--j))) scaleX(calc(1 - 0.001 * var(--j)));
+  }
+  66% {
+    transform: translate(calc(-0.028em * var(--j)), calc(-0.02em * var(--j))) scaleX(calc(1 + 0.003 * var(--j)));
+  }
+  83% {
+    transform: translate(calc(0.02em * var(--j)), calc(0.008em * var(--j)));
+  }
+}
+@keyframes jt-gate-sway {
+  0%,
+  to {
+    transform: rotate(calc(0.35deg * var(--j)));
+  }
+  25% {
+    transform: rotate(calc(-0.4deg * var(--j))) translate(calc(-0.012em * var(--j)), calc(0.008em * var(--j)));
+  }
+  50% {
+    transform: rotate(calc(0.2deg * var(--j))) translate(calc(0.018em * var(--j)), calc(-0.01em * var(--j)));
+  }
+  75% {
+    transform: rotate(calc(-0.15deg * var(--j))) translateY(calc(0.012em * var(--j)));
+  }
+}
+.jt-stage .cr-hint {
+  left: 50%;
+  right: auto;
+  translate: -50% 0;
+  width: max-content;
+  max-width: 84%;
+  bottom: 6%;
+  color: var(--ink-3);
+}
+.jt-stage[data-paused="true"] * {
+  animation-play-state: paused !important;
+}
+.jt-stage[data-reduced="true"] * {
+  transition: none !important;
+  animation: none !important;
+}
+.jt-stage[data-reduced="true"] .jt-h.is-hover .jt-text {
+  clip-path: inset(0);
+  translate: 0;
+  scale: 1;
+}
+.jt-stage[data-reduced="true"] .jt-h .jt-inner::after {
+  display: none;
+}
+@container (max-width:520px) {
+  .jt-btn {
+    font-size: 1.6em;
+  }
+  .jt-link {
+    padding: 0 0.8em;
+  }
+}
+.jt-stage .jt-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.ck-panel {
+  position: relative;
+  width: min(var(--ck-max), 100%);
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--object);
+  box-shadow: var(--shadow);
+}
+.ck-panel[data-size="lg"] {
+  border-radius: var(--r-lg);
+  padding: 12px;
+}
+.ck-text {
+  font: 400 var(--ck-text)/20px var(--font);
+  color: var(--ink);
+}
+.ck-text[data-strong] {
+  font-weight: 500;
+}
+.ck-line {
+  display: block;
+  height: 1px;
+  border: 0;
+  background: var(--hair);
+}
+.ck-line[data-strong] {
+  height: 1.5px;
+  background: var(--ink);
+}
+.ck-line[data-v] {
+  width: 1px;
+  height: auto;
+}
+.ck-line[data-v][data-strong] {
+  width: 1.5px;
+}
+.film-jitter-hover :is(.ck-panel, .ck-pill, .ck-row) {
+  --fx-k: 1;
+}
+.fx-board .jt-wrap {
+  top: 50%;
+  font-size: calc(14px * var(--jt-k, 1));
+}
+.fx-board .jt-btn {
+  width: calc(184px * var(--jt-k, 1));
+  padding: calc(24px * var(--jt-k, 1)) calc(28px * var(--jt-k, 1));
+  border-radius: calc(16px * var(--jt-k, 1));
+}
+.fx-board .jt-label {
+  font-size: calc(14px * var(--jt-k, 1));
+  line-height: calc(20px * var(--jt-k, 1));
+}
+.fx-board .jt-rule {
+  height: calc(1.5px * var(--jt-k, 1));
+}
