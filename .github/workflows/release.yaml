@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v7
+        with:
+          # This makes GitHub Actions fetch all Git history so that Changesets can generate changelogs with the correct commits
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run the build
+        run: npm run build
+
+      - name: Create release PR or publish to NPM
+        id: changesets
+        uses: changesets/action@v2
+        with:
+          publish-script: npm run release
+          commit-message: "chore: release"
+          pr-title: "Merge to release"
+          github-token: ${{ secrets.GITHUB_TOKEN }}

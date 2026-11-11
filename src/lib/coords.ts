@@ -1,0 +1,183 @@
+/**
+ * Context for the coordinates of the whiteboard.
+ */
+export class CoordsContext {
+  private x: number;
+  private y: number;
+  private zoom: number;
+
+  // Offset for the canvas coordinates, used to have (0, 0) at the center of the canvas.
+  private offsetX: number = 0;
+  private offsetY: number = 0;
+
+  constructor(x: number = 0, y: number = 0, zoom: number = 1) {
+    this.x = x;
+    this.y = y;
+    this.zoom = zoom;
+  }
+
+  /**
+   * Convert the point from the canvas coordinates to the coordinates of the whiteboard.
+   *
+   * @param x X-coordinate in the canvas coordinates.
+   * @param y Y-coordinate in the canvas coordinates.
+   * @returns Point in the coordinates of the whiteboard.
+   */
+  public convertFromCanvas(x: number, y: number): { x: number; y: number } {
+    return {
+      x: (x - this.x - this.offsetX) / this.zoom,
+      y: (y - this.y - this.offsetY) / this.zoom,
+    };
+  }
+
+  /**
+   * Convert the point from the coordinates of the whiteboard to the canvas coordinates.
+   *
+   * @param x X-coordinate in the coordinates of the whiteboard.
+   * @param y Y-coordinate in the coordinates of the whiteboard.
+   * @returns Point in the canvas coordinates.
+   */
+  public convertToCanvas(x: number, y: number): { x: number; y: number } {
+    return {
+      x: x * this.zoom + this.x + this.offsetX,
+      y: y * this.zoom + this.y + this.offsetY,
+    };
+  }
+
+  /**
+   * Set the offset for the canvas coordinates.
+   *
+   * @param offsetX The offset for the x-coordinate.
+   * @param offsetY The offset for the y-coordinate.
+   */
+  public setOffset(offsetX: number, offsetY: number): void {
+    this.offsetX = offsetX;
+    this.offsetY = offsetY;
+  }
+
+  /**
+   * Get the offset for the canvas coordinates.
+   *
+   * @returns The offset for the canvas coordinates.
+   */
+  public getOffset(): { x: number; y: number } {
+    return { x: this.offsetX, y: this.offsetY };
+  }
+
+  /**
+   * Set the zoom level.
+   *
+   * @param zoom The zoom level.
+   */
+  public setZoom(zoom: number): void {
+    this.zoom = zoom;
+  }
+
+  /**
+   * Set the zoom level while keeping a given screen point visually anchored.
+   *
+   * The world point that is currently under `(screenX, screenY)` stays under
+   * the exact same screen position after the zoom changes. This is what makes
+   * zooming feel natural: the content grows/shrinks around the cursor (or the
+   * pinch center) instead of around the canvas origin.
+   *
+   * @param zoom The new zoom level.
+   * @param screenX The x-coordinate to anchor, in canvas pixels.
+   * @param screenY The y-coordinate to anchor, in canvas pixels.
+   */
+  public zoomToScreenPoint(
+    zoom: number,
+    screenX: number,
+    screenY: number
+  ): void {
+    // World point currently under the anchor.
+    const world = this.convertFromCanvas(screenX, screenY);
+
+    this.zoom = zoom;
+
+    // Adjust the pan so that this same world point maps back to the anchor.
+    this.x = screenX - this.offsetX - world.x * zoom;
+    this.y = screenY - this.offsetY - world.y * zoom;
+  }
+
+  /**
+   * Get the zoom level.
+   *
+   * @returns The zoom level.
+   */
+  public getZoom(): number {
+    return this.zoom;
+  }
+
+  /**
+   * Get the coordinates of the whiteboard.
+   */
+  public getCoords(): { x: number; y: number } {
+    return { x: this.x, y: this.y };
+  }
+
+  /**
+   * Set the coordinates of the whiteboard.
+   *
+   * @param x The x-coordinate.
+   * @param y The y-coordinate.
+   */
+  public setCoords(x: number, y: number): void {
+    this.x = x;
+    this.y = y;
+  }
+
+  /**
+   * Reset the coordinates and zoom level.
+   */
+  public reset(): void {
+    this.x = 0;
+    this.y = 0;
+    this.zoom = 1;
+  }
+
+  /**
+   * Get a plain snapshot of the camera (pan, offset and zoom).
+   * This is handy to pass around to pure helpers (e.g. the dotted background)
+   * without exposing the whole context.
+   *
+   * @returns The current camera.
+   */
+  public toCamera(): {
+    panX: number;
+    panY: number;
+    offsetX: number;
+    offsetY: number;
+    zoom: number;
+  } {
+    return {
+      panX: this.x,
+      panY: this.y,
+      offsetX: this.offsetX,
+      offsetY: this.offsetY,
+      zoom: this.zoom,
+    };
+  }
+
+  /**
+   * Get the world-space rectangle that is currently visible on a canvas of the
+   * given size. This is used to skip drawing items that are off-screen.
+   *
+   * @param canvasWidth The width of the canvas, in pixels.
+   * @param canvasHeight The height of the canvas, in pixels.
+   * @returns The visible rectangle expressed in world coordinates.
+   */
+  public getVisibleWorldRect(
+    canvasWidth: number,
+    canvasHeight: number
+  ): { x: number; y: number; width: number; height: number } {
+    const topLeft = this.convertFromCanvas(0, 0);
+    const bottomRight = this.convertFromCanvas(canvasWidth, canvasHeight);
+    return {
+      x: topLeft.x,
+      y: topLeft.y,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y,
+    };
+  }
+}

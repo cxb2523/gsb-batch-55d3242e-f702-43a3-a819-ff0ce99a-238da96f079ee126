@@ -1,0 +1,352 @@
+# @ludovicm67/whiteboard
+
+## 0.7.0
+
+### Minor Changes
+
+- 6a5e572: Make the whiteboard usable without a mouse and readable by assistive
+  technology. Every tool button now carries a name and its pressed state, the
+  toolbar is a single tab stop walked with the arrow keys, the sliders and colour
+  swatches are labelled controls (the swatches are radio buttons grouped under
+  their "Stroke" or "Fill" heading), and the menus open from the keyboard instead
+  of on hover alone. The canvas itself is focusable and describes what it holds:
+  Enter moves through the items, the arrow keys move the selected one or pan the
+  board, Backspace deletes it and Escape deselects — each announced in a live
+  region. The muted text colour was also darkened to meet the contrast minimum.
+- ee421b1: Ask for confirmation before the clear tool empties the board, instead of wiping
+  it on the first click. The dialog is a native modal `<dialog>`, so it traps
+  focus, closes on Escape and hands focus back to the button that opened it;
+  cancelling — with the button, Escape, or a click outside the panel — leaves
+  both the board and the previously selected tool untouched.
+  An already empty board still clears straight away, since there is nothing to
+  lose, and the new `skip-clear-confirmation` attribute turns the dialog off
+  for apps that have their own safeguards. Tools can reuse the same dialog
+  through the new `confirm()` method.
+
+## 0.6.2
+
+### Patch Changes
+
+- 41965e0: Upgrade dependencies: `lucide` to 1.33, `uuid` to 14.0.2, `vite` to 8.2.2, and
+  TypeScript to 7 — whose native compiler no longer ships the JavaScript compiler
+  API, so `@typescript/typescript6` comes along with it to keep `unplugin-dts`
+  able to generate the type declarations.
+
+## 0.6.1
+
+### Patch Changes
+
+- 3480f9d: Replace the native `<select>` of the zoom picker with a dropdown built like the
+  rest of the app (frosted panel, accent highlight, check mark on the active
+  level, closes on Escape or on an outside click). It also displays the exact
+  zoom level, including the in-between values that wheel and pinch zooming
+  produce, which a fixed list of options could not.
+
+  Polish the selection: boxes and resize handles are now rounded, sit slightly
+  away from the item, and follow the `--sw-accent` token, so theming the
+  whiteboard also themes what is drawn on the canvas. Hovering an item shows a
+  quieter version of the same box, and resize handles light up under the pointer
+  with a cursor showing which way they resize. Their grab area is sized in screen
+  pixels too, so handles stay easy to catch when zoomed out — previously it was
+  measured in world units and shrank with the zoom level.
+
+- 6d504ff: Fix selection and hover boxes that some items were overflowing: arrowheads now
+  count towards the arrow bounding box (they used to fall entirely outside it on a
+  horizontal or vertical arrow), thick lines account for their stroke width, and
+  text boxes are derived from the real glyph metrics so tall accents and
+  descenders stay inside them at any font size. The boxes are also drawn with a
+  small padding, which covers the few pixels by which the sketchy (Rough.js)
+  strokes wobble around the shapes they are drawn from.
+
+## 0.6.0
+
+### Minor Changes
+
+- c36d97f: Rename the `hideLocalePicker` property to `hide-locale-picker`.
+
+### Patch Changes
+
+- 86ae5c1: Add two more PNG export options next to "current view": "full view" (frames
+  every item on the board, regardless of pan/zoom) and "selected area" (drag a
+  rectangle on the canvas to export just that region). Exposed programmatically as
+  `downloadFullViewAsPng()`, `startAreaExport()` and `downloadRegionAsPng()`.
+- c36d97f: Internal refactor: split the large `SimpleWhiteboard` element into focused
+  pieces — `HistoryController`, `ExportController`, `CanvasRenderer`,
+  `PointerInputController` and `ItemStore` controllers, plus footer/tool-options
+  render helpers. The public API and behavior are unchanged; the element now just
+  coordinates these collaborators, which are each far easier to read and test.
+
+## 0.5.1
+
+### Patch Changes
+
+- d79729f: Add a `hide-tool-options` attribute to hide the floating tool-options panel.
+  This is useful for a compact or embedded board where the panel would otherwise
+  cover the canvas. The tools themselves keep working; only the per-tool controls
+  (color, size, …) are hidden.
+
+## 0.5.0
+
+### Minor Changes
+
+- 586adeb: Add an arrow tool: draw arrows with an arrowhead, resizable from both ends
+- 98965e0: Rework the eraser into a proper object eraser. Instead of painting
+  background-colored strokes (which only worked when the color matched the
+  background and left phantom items behind), it now removes the items it touches
+  as you drag over them. Thin shapes (lines, arrows, pen strokes) use precise
+  hit-testing so you only erase what you actually touch, a dashed circle shows the
+  eraser size, the whole stroke is a single undo step, and removals are propagated
+  through the `items-updated` events so they stay in sync with other clients.
+- e305d45: Add a sticky-note tool: a colored, resizable note with editable, wrapping text (syncs through the existing item events)
+
+## 0.4.0
+
+### Minor Changes
+
+- 231c095: Move canvas using the middle click
+- aad45b9: Allow to customize theme
+- 6ab1595: Enable the dotted background by default (disable it with `dotted-background="false"`)
+- 9db2751: Add stacking-order controls: move a selected item forward/backward or to the front/back, propagated through a new `reorder` event (`moveItemForward`/`moveItemBackward`/`bringItemToFront`/`sendItemToBack`/`moveItemToIndex`/`applyItemsOrder` API)
+- 25a9eea: Add undo/redo (toolbar buttons, `Ctrl`/`Cmd`+`Z` shortcuts, and `undo()`/`redo()`/`canUndo()`/`canRedo()` API)
+
+### Patch Changes
+
+- 47a93e5: Improve zoom
+- eb16827: Improve the look and feel of the hamburger menu (icons, active-language indicator, open/close animation, close on outside click / Escape) and give every floating panel the same frosted, translucent background (menu, tool options, toolbar, footer)
+
+## 0.3.13
+
+### Patch Changes
+
+- 1d5729a: Upgrade various dependencies and pin `lucide` to version 0.562.0, as the package is broken for the newer releases (see: https://github.com/lucide-icons/lucide/issues/4027).
+
+## 0.3.12
+
+### Patch Changes
+
+- ef30a9c: Upgrade dependencies
+
+## 0.3.11
+
+### Patch Changes
+
+- 4d44435: Add tool-updated events
+
+## 0.3.10
+
+### Patch Changes
+
+- 58f67d5: Add tooltips for tools
+
+## 0.3.9
+
+### Patch Changes
+
+- 09aeae3: The fill is not dependent of the stroke width anymore
+- 2a80426: Fix location of pictures
+- 8db1866: Automatically ask for the picture when selecting the tool
+
+## 0.3.8
+
+### Patch Changes
+
+- 5f47338: Improve bounding boxes of some kind of items
+
+## 0.3.7
+
+### Patch Changes
+
+- 4c33018: Dynamically update the cursor style
+
+## 0.3.6
+
+### Patch Changes
+
+- 3166a7c: Rectangle: autoselect once item is added
+- 55c3e7b: Reduce bundle size
+- a999abb: The text tool feels more interactive, as some little bugs have been fixed.
+- ccc1c02: Line: autoselect once item is added
+- a23646b: Circle: autoselect once item is added
+
+## 0.3.5
+
+### Patch Changes
+
+- 17a92d3: Improve text tool to allow users to edit text content directly from the canvas.
+
+## 0.3.4
+
+### Patch Changes
+
+- 484dfbe: Fix an edge case where picture items could not be selected anymore
+- 3fc3d2d: Make sure that rectangle items can be selected in all cases
+
+## 0.3.3
+
+### Patch Changes
+
+- 99cb3a6: It is possible to configure the max size of a picture
+- 3c2f651: Cancel hover effect if the user is not selecting an item
+
+## 0.3.2
+
+### Patch Changes
+
+- df245ba: Inline locales files instead of having them generated as modules
+- f574cb6: Handle wheel events for zooming and moving on the canvas.
+
+## 0.3.1
+
+### Patch Changes
+
+- 08b4cd5: Add "tool-registered" event
+- bc6b3b2: Most of the items can be resized
+- ce7589a: Add "ready" event
+
+## 0.3.0
+
+### Minor Changes
+
+- 0cd2603: Rewrite some of the logic to have a separation between elements, tools and items.
+
+## 0.2.16
+
+### Patch Changes
+
+- e0ab727: Delete the selected item by using the backspace key.
+- 6c1b81c: Show the whiteboard item that gets hovered
+
+## 0.2.15
+
+### Patch Changes
+
+- 2ecd651: Set the date and time in the generated name file for the export
+- e41627f: Custom style for delete buttons
+- 7c28353: Switch to Lucide Icons
+
+## 0.2.14
+
+### Patch Changes
+
+- f51017a: Remove language picker from the bottom, as it is already available in the menu.
+- ff76981: Add more languages
+
+## 0.2.13
+
+### Patch Changes
+
+- 27fbf55: Export Text tool
+
+## 0.2.12
+
+### Patch Changes
+
+- faaefbf: Pinch to zoom support
+
+## 0.2.11
+
+### Patch Changes
+
+- 262577e: Add top menu
+
+## 0.2.10
+
+### Patch Changes
+
+- 3eeb721: Add i18n support
+
+## 0.2.9
+
+### Patch Changes
+
+- b9d049b: Pictures are by default at max 80% of the canvas size
+- b1662ab: Add basic save button
+- 870a968: It is possible to set a custom size for a picture
+
+## 0.2.8
+
+### Patch Changes
+
+- f2d10aa: Some minor styles tweaks
+
+## 0.2.7
+
+### Patch Changes
+
+- fc99c50: Add basic eraser tool
+- 2a71cc4: Add basic zoom controls
+
+## 0.2.6
+
+### Patch Changes
+
+- f9f4415: Create Text tool
+
+## 0.2.5
+
+### Patch Changes
+
+- 162bdec: Improve color selection for the different tools
+
+## 0.2.4
+
+### Patch Changes
+
+- 1a92683: Improve tools options:
+
+  - more logical order
+  - full width
+  - use ranges (with defined steps) for the stroke width
+
+## 0.2.3
+
+### Patch Changes
+
+- 3017bb9: The user can now move items by using the Pointer tool.
+
+  Just click on an item to select it, click again on it and drag it to move it around.
+
+## 0.2.2
+
+### Patch Changes
+
+- e84af68: Add `debug` property
+- aa8124b: Fix an issue where the picture add event had a null value
+
+## 0.2.1
+
+### Patch Changes
+
+- cc8c5eb: Export tools and types
+
+## 0.2.0
+
+### Minor Changes
+
+- b08bfbb: **Refactoring:** tools should be added as child of the `simple-whiteboard` element.
+
+  This change is helpful for the future, as it will allow to add more tools easily.
+  The main goal is to make the code more readable and maintainable.
+
+### Patch Changes
+
+- 357d000: Change tool colors
+- 118aee5: Create Picture Tool
+
+## 0.1.1
+
+### Patch Changes
+
+- fda1a5d: Improve exports.
+
+## 0.1.0
+
+### Minor Changes
+
+- 9881c49: Initial release
+
+## 0.1.0
+
+### Minor Changes
+
+- 8627a4a: Initial release
