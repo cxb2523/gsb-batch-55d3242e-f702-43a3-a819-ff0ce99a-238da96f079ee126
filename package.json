@@ -1,0 +1,73 @@
+{
+  "name": "olostep-mcp",
+  "version": "1.0.21",
+  "description": "Live web search, scraping and crawling API for AI. Get structured, LLM-ready data from any site. Scale to 1M requests with 10 parallel batches at low cost.",
+  "type": "module",
+  "mcpName": "io.github.olostep/olostep-mcp-server",
+  "bin": {
+    "olostep-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && node -e \"const fs=require('fs');const p='build/index.js';let s=fs.readFileSync(p,'utf8');if(!s.startsWith('#!/usr/bin/env node')){fs.writeFileSync(p,'#!/usr/bin/env node\\n'+s);}fs.chmodSync(p,0o755);\"",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build",
+    "validate-server-json": "node scripts/validate-schema.mjs",
+    "test:descriptions": "node tests/check-descriptions.mjs",
+    "test:e2e": "node tests/e2e.mjs",
+    "test:oauth-relay": "node tests/oauth-relay.mjs",
+    "test:paging": "node --test tests/paging.test.mjs",
+    "test:job-status": "node --test tests/job-status.test.mjs",
+    "test:page-content": "node --test tests/page-content.test.mjs"
+  },
+  "files": [
+    "build/**/*"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "ajv-formats": "^3.0.1",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "node-fetch": "^3.3.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.13.10",
+    "ajv": "^8.12.0",
+    "ajv-cli": "^5.0.0",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "olostep",
+    "web-scraping",
+    "web-search",
+    "search-api",
+    "markdown-extraction",
+    "ai-agent",
+    "llm-tools",
+    "web-crawler",
+    "batch-scraping",
+    "ai-answers",
+    "content-extraction",
+    "data-extraction",
+    "anthropic",
+    "claude",
+    "web-data",
+    "web-data-infrastructure"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/olostep/olostep-mcp-server.git"
+  },
+  "author": "olostep",
+  "bugs": {
+    "url": "https://github.com/olostep/olostep-mcp-server/issues"
+  },
+  "homepage": "https://www.olostep.com"
+}

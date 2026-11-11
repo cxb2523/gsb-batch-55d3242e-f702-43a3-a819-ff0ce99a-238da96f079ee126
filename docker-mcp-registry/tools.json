@@ -1,0 +1,304 @@
+[
+  {
+    "name": "scrape_website",
+    "description": "Extract content from a single URL. Supports multiple formats and JavaScript rendering.",
+    "arguments": [
+      {
+        "name": "url_to_scrape",
+        "type": "string",
+        "desc": "The URL of the website you want to scrape"
+      },
+      {
+        "name": "output_format",
+        "type": "string",
+        "desc": "Choose format: html, markdown, json, or text. Default: markdown",
+        "optional": true
+      },
+      {
+        "name": "country",
+        "type": "string",
+        "desc": "Optional country code (e.g., US, GB, CA) for location-specific scraping",
+        "optional": true
+      },
+      {
+        "name": "wait_before_scraping",
+        "type": "number",
+        "desc": "Wait time in milliseconds before scraping (0-10000)",
+        "optional": true
+      },
+      {
+        "name": "parser",
+        "type": "string",
+        "desc": "Optional parser ID for specialized extraction (e.g., @olostep/amazon-it-product)",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "search_web",
+    "description": "Search the web for a given query and return structured results (non-AI, parser-based)",
+    "arguments": [
+      {
+        "name": "query",
+        "type": "string",
+        "desc": "Search query"
+      },
+      {
+        "name": "country",
+        "type": "string",
+        "desc": "Optional country code for localized results (e.g., US, GB)",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "answers",
+    "description": "Search the web and return AI-powered answers in the JSON structure you want, with sources and citations",
+    "arguments": [
+      {
+        "name": "task",
+        "type": "string",
+        "desc": "Question or task to answer using web data"
+      },
+      {
+        "name": "json",
+        "type": "string",
+        "desc": "Optional JSON schema/object or description of desired output shape",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "batch_scrape_urls",
+    "description": "Scrape up to 100k URLs in one batch. Perfect for large-scale data extraction",
+    "arguments": [
+      {
+        "name": "urls_to_scrape",
+        "type": "array",
+        "desc": "JSON array of objects with url and optional custom_id"
+      },
+      {
+        "name": "output_format",
+        "type": "string",
+        "desc": "Choose format for all URLs. Default: markdown",
+        "optional": true
+      },
+      {
+        "name": "country",
+        "type": "string",
+        "desc": "Optional country code for location-specific scraping",
+        "optional": true
+      },
+      {
+        "name": "wait_before_scraping",
+        "type": "number",
+        "desc": "Wait time in milliseconds before scraping each URL",
+        "optional": true
+      },
+      {
+        "name": "parser",
+        "type": "string",
+        "desc": "Optional parser ID for specialized extraction (e.g. @olostep/google-search)",
+        "optional": true
+      },
+      {
+        "name": "wait_for_completion_seconds",
+        "type": "number",
+        "desc": "Seconds to wait for batch completion (polls every 10s). Use 0 to return immediately with batch_id, then call get_batch_results later. Recommended: 60 for small batches.",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "get_batch_results",
+    "description": "Retrieve the status and scraped content for a batch job. If completed, fetches items and retrieves content for each URL.",
+    "arguments": [
+      {
+        "name": "batch_id",
+        "type": "string",
+        "desc": "The batch_id returned from batch_scrape_urls"
+      },
+      {
+        "name": "formats",
+        "type": "array",
+        "desc": "Content formats to retrieve per URL (e.g. [\"markdown\"]). Default: [\"markdown\"]",
+        "optional": true
+      },
+      {
+        "name": "items_limit",
+        "type": "number",
+        "desc": "Max number of items to retrieve content for per call (1-100). Default: 20",
+        "optional": true
+      },
+      {
+        "name": "cursor",
+        "type": "number",
+        "desc": "Pass next_cursor from the previous result to get the next pages. Default: 0",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "create_crawl",
+    "description": "Start an async crawl that autonomously discovers and scrapes pages from a start URL. Returns a crawl_id — pair with get_crawl_results to fetch content.",
+    "arguments": [
+      {
+        "name": "start_url",
+        "type": "string",
+        "desc": "Starting URL for the crawl"
+      },
+      {
+        "name": "max_pages",
+        "type": "number",
+        "desc": "Maximum number of pages to crawl. Set to 1 to scrape only the start URL",
+        "optional": true
+      },
+      {
+        "name": "output_format",
+        "type": "string",
+        "desc": "Format for scraped content. Default: markdown",
+        "optional": true
+      },
+      {
+        "name": "country",
+        "type": "string",
+        "desc": "Optional country code for location-specific crawling",
+        "optional": true
+      },
+      {
+        "name": "parser",
+        "type": "string",
+        "desc": "Optional parser ID for specialized content extraction",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "get_crawl_results",
+    "description": "Retrieve the status and scraped pages for a crawl job started with create_crawl. Polls status and fetches content for each discovered page.",
+    "arguments": [
+      {
+        "name": "crawl_id",
+        "type": "string",
+        "desc": "The crawl_id returned from create_crawl"
+      },
+      {
+        "name": "formats",
+        "type": "array",
+        "desc": "Content formats to retrieve per page (e.g. [\"markdown\"]). Default: [\"markdown\"]",
+        "optional": true
+      },
+      {
+        "name": "items_limit",
+        "type": "number",
+        "desc": "Max number of pages to retrieve content for (1-100). Default: 20",
+        "optional": true
+      },
+      {
+        "name": "cursor",
+        "type": "number",
+        "desc": "Pagination cursor into the list of discovered pages. Default: 0",
+        "optional": true
+      },
+      {
+        "name": "search_query",
+        "type": "string",
+        "desc": "Optional filter to rank/select pages by relevance to a query",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "create_map",
+    "description": "Get all URLs on a website. Extract URLs for discovery and site analysis",
+    "arguments": [
+      {
+        "name": "website_url",
+        "type": "string",
+        "desc": "Website URL to extract links from"
+      },
+      {
+        "name": "search_query",
+        "type": "string",
+        "desc": "Optional search query to filter URLs",
+        "optional": true
+      },
+      {
+        "name": "top_n",
+        "type": "number",
+        "desc": "Optional limit for number of URLs returned",
+        "optional": true
+      },
+      {
+        "name": "include_url_patterns",
+        "type": "array",
+        "desc": "Optional glob patterns to include (e.g., /blog/**)",
+        "optional": true
+      },
+      {
+        "name": "exclude_url_patterns",
+        "type": "array",
+        "desc": "Optional glob patterns to exclude (e.g., /admin/**)",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "get_webpage_content",
+    "description": "Retrieve content of a webpage in markdown format",
+    "arguments": [
+      {
+        "name": "url_to_scrape",
+        "type": "string",
+        "desc": "The URL of the webpage to scrape"
+      },
+      {
+        "name": "wait_before_scraping",
+        "type": "number",
+        "desc": "Time to wait in milliseconds before starting the scrape",
+        "optional": true
+      },
+      {
+        "name": "country",
+        "type": "string",
+        "desc": "Residential country to load the request from (e.g., US, CA, GB)",
+        "optional": true
+      }
+    ]
+  },
+  {
+    "name": "get_website_urls",
+    "description": "Search and retrieve relevant URLs from a website",
+    "arguments": [
+      {
+        "name": "url",
+        "type": "string",
+        "desc": "The URL of the website to map"
+      },
+      {
+        "name": "search_query",
+        "type": "string",
+        "desc": "The search query to sort URLs by"
+      }
+    ]
+  },
+  {
+    "name": "google_search",
+    "description": "Retrieve structured data from Google search results",
+    "arguments": [
+      {
+        "name": "query",
+        "type": "string",
+        "desc": "The search query to perform"
+      },
+      {
+        "name": "country",
+        "type": "string",
+        "desc": "Country code for localized results (e.g., US, GB)",
+        "optional": true
+      }
+    ]
+  }
+]
+
+

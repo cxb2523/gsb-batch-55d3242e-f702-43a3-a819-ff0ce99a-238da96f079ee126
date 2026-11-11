@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.olostep/olostep-mcp-server",
+  "title": "Olostep MCP Server",
+  "description": "Live web search, scraping and crawling API for AI. Get structured, LLM-ready data from any site.",
+  "websiteUrl": "https://www.olostep.com",
+  "repository": {
+    "url": "https://github.com/olostep/olostep-mcp-server",
+    "source": "github"
+  },
+  "version": "1.0.21",
+  "icon": "assets/logo.png",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "olostep-mcp",
+      "version": "1.0.21",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.olostep.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Optional. Bearer <OLOSTEP_API_KEY>. Get a key at https://olostep.com/auth. Clients that support OAuth can sign in instead.",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "family": "olostep-mcp-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::442042530275:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "olostep-mcp-server",
+      "image": "442042530275.dkr.ecr.us-east-1.amazonaws.com/olostep-mcp-server:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 3000, "hostPort": 3000, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "TRANSPORT", "value": "http" },
+        { "name": "PORT",      "value": "3000" },
+        { "name": "MCP_OAUTH_AUTHORIZATION_SERVER_URL", "value": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_GHo5vqMsL" },
+        { "name": "MCP_OAUTH_RESOURCE_URL",             "value": "https://mcp.olostep.com/mcp" },
+        { "name": "MCP_OAUTH_SCOPES",                   "value": "olostep/api" },
+        { "name": "MCP_OAUTH_REGISTER_CLIENT_ID",       "value": "v66ead5c4f81r7b6rfi9qdh52" },
+        { "name": "MCP_OAUTH_RELAY_LOOPBACK",         "value": "true" },
+        { "name": "MCP_OAUTH_REGISTER_REDIRECT_URIS",   "value": "https://claude.ai/api/mcp/auth_callback,https://replit.com/connectors/oauth/callback,https://antigravity.google/oauth-callback,https://huggingface.co/chat/api/mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback,http://localhost:8787/callback,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,http://127.0.0.1:33418/" },
+        { "name": "OPENAI_APPS_CHALLENGE_TOKEN",         "value": "7sOnWbNuPHQCFp1sS161PKyur62vGkdeGLX8qTJ7IOI" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group":         "/ecs/olostep-mcp-task",
+          "awslogs-region":        "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3
+      }
+    }
+  ]
+}

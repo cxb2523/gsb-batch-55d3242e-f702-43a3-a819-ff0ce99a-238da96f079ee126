@@ -1,0 +1,713 @@
+# Olostep MCP Server
+
+[Docker Hub](https://hub.docker.com/r/olostep/mcp-server)
+[npm version](https://www.npmjs.com/package/olostep-mcp)
+[License: ISC](https://opensource.org/licenses/ISC)
+
+**Live web search, scraping and crawling API for AI. Get structured, LLM-ready data from any site. Scale to 1M requests with 10 parallel batches at low cost.**
+
+[Olostep](https://www.olostep.com) is web data infrastructure for AI agents and enterprise AI workflows. Its APIs provide live web search, scraping and crawling to extract, clean and structure data from the web. This is the official Olostep Model Context Protocol (MCP) server, which gives any MCP-compatible AI agent those capabilities.
+
+Use the hosted server at `https://mcp.olostep.com/mcp` (sign in with OAuth, or use an API key), or run it locally with an API key from the [Olostep website](https://olostep.com/auth).
+
+## Why Olostep
+
+- Web data infrastructure for developers and enterprises
+- Scales to hundreds of millions to billions of requests per customer per month
+- The most performant, reliable and cost-effective API on the market
+- Used by the fastest-growing AI companies
+
+From extracting data from a handful of URLs to crawling hundreds of millions of pages, Olostep gives developers and AI companies reliable, scalable and highly cost-effective access to clean, structured web data.
+
+## Features
+
+- Scrape website content in HTML, Markdown, JSON or Plain Text (with optional parsers)
+- Parser-based web search with structured results
+- AI Answers with citations and optional JSON-shaped outputs
+- Batch scraping of up to 100k URLs
+- Autonomous site crawling from a start URL
+- Website URL discovery and mapping (with include/exclude filters)
+- Country-specific request routing for geo-targeted content
+- Configurable wait times for JavaScript-heavy websites
+- Comprehensive error handling and reporting
+- Simple API key configuration
+
+## Installation
+
+There are multiple ways to connect to the Olostep MCP Server. Choose the one that best fits your workflow.
+
+### One-click install
+
+Connect to the hosted server and sign in with your Olostep account (OAuth). No API key or local setup needed.
+
+[![Install in Cursor](https://img.shields.io/badge/Cursor-Install%20Olostep-000000?style=flat-square&logo=cursor&logoColor=white)](https://cursor.com/en/install-mcp?name=Olostep&config=eyJ1cmwiOiJodHRwczovL21jcC5vbG9zdGVwLmNvbS9tY3AifQ%3D%3D)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install%20Olostep-0098FF?style=flat-square)](https://insiders.vscode.dev/redirect/mcp/install?name=olostep&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmcp.olostep.com%2Fmcp%22%7D)
+[![Add to Replit](https://img.shields.io/badge/Replit-Add%20Olostep-F26207?style=flat-square&logo=replit&logoColor=white)](https://replit.com/integrations?mcp=eyJkaXNwbGF5TmFtZSI6Ik9sb3N0ZXAiLCJiYXNlVXJsIjoiaHR0cHM6Ly9tY3Aub2xvc3RlcC5jb20vbWNwIn0=)
+[![Add to Claude](https://img.shields.io/badge/Claude-Add%20Olostep-D97757?style=flat-square&logo=claude&logoColor=white)](https://claude.ai/directory/olostep)
+[![Add to ChatGPT](https://img.shields.io/badge/ChatGPT-Add%20Olostep-10A37F?style=flat-square&logo=openai&logoColor=white)](https://chatgpt.com/plugins/plugin_asdk_app_6a08dfd9b4948191b31c7f26bcfb256d)
+
+Or from the terminal:
+
+```bash
+# Claude Code
+claude mcp add --transport http olostep https://mcp.olostep.com/mcp
+
+# Gemini CLI (prompts for your API key)
+gemini extensions install https://github.com/olostep/olostep-mcp-server
+```
+
+For other clients, see [Client Setup](#client-setup).
+
+### ☁️ Remote Endpoint (Recommended)
+
+The simplest way — no local installation required. Connect directly to our hosted MCP server:
+
+```
+https://mcp.olostep.com/mcp
+```
+
+Authentication is done via a `Bearer` token in the `Authorization` header using your Olostep API key. See the [Client Setup](#client-setup) section below for configuration examples.
+
+### 🐳 Docker Hub
+
+Pull and run the official Docker image:
+
+```bash
+docker pull olostep/mcp-server
+
+docker run -i --rm \
+  -e OLOSTEP_API_KEY="your-api-key" \
+  olostep/mcp-server
+```
+
+### 🔧 Local Docker Build
+
+If you prefer to build the image yourself from source:
+
+```bash
+git clone https://github.com/olostep/olostep-mcp-server.git
+cd olostep-mcp-server
+npm install
+npm run build
+docker build -t olostep/mcp-server:local .
+
+docker run -i --rm -e OLOSTEP_API_KEY="your-api-key" olostep/mcp-server:local
+```
+
+### 📦 npx
+
+Run without any installation using npx:
+
+```bash
+env OLOSTEP_API_KEY=your-api-key npx -y olostep-mcp
+```
+
+On Windows (PowerShell):
+
+```powershell
+$env:OLOSTEP_API_KEY = "your-api-key"; npx -y olostep-mcp
+```
+
+On Windows (CMD):
+
+```cmd
+set OLOSTEP_API_KEY=your-api-key && npx -y olostep-mcp
+```
+
+Or install globally:
+
+```bash
+npm install -g olostep-mcp
+```
+
+## Client Setup
+
+### Gemini CLI
+
+Install the Olostep extension in [Gemini CLI](https://geminicli.com/) (requires an [Olostep API key](https://olostep.com/auth)):
+
+```bash
+gemini extensions install https://github.com/olostep/olostep-mcp-server
+```
+
+Configure your API key through Gemini CLI's sensitive extension settings:
+
+```bash
+gemini extensions config olostep OLOSTEP_API_KEY
+```
+
+Gemini CLI stores this value in your system keychain. Restart Gemini CLI, then verify the extension and MCP server:
+
+```bash
+gemini extensions list
+gemini mcp list
+```
+
+For authentication errors, configure the key again. For connection errors, restart Gemini CLI and run `gemini mcp list`. See the official [Gemini CLI extensions documentation](https://geminicli.com/docs/extensions/) for details.
+
+### Cursor
+
+The easiest way is to use the remote endpoint. Create or edit `.cursor/mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "olostep": {
+      "url": "https://mcp.olostep.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+**Alternative (local):** Go to Cursor Settings > Features > MCP Servers, click "+ Add New MCP Server":
+
+- **Name:** `olostep`
+- **Type:** `command`
+- **Command:** `env OLOSTEP_API_KEY=your-api-key npx -y olostep-mcp`
+
+### Claude Desktop
+
+Add this to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "mcp-server-olostep": {
+      "command": "npx",
+      "args": ["-y", "olostep-mcp"],
+      "env": {
+        "OLOSTEP_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+**Alternative (Docker):**
+
+```json
+{
+  "mcpServers": {
+    "olostep": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "OLOSTEP_API_KEY=YOUR_API_KEY_HERE",
+        "olostep/mcp-server"
+      ]
+    }
+  }
+}
+```
+
+Or install via the Smithery CLI in your device terminal:
+
+```bash
+npx -y @smithery/cli install @olostep/olostep-mcp-server --client claude
+```
+
+### Claude Code
+
+Add the remote endpoint to your Claude Code MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "olostep": {
+      "url": "https://mcp.olostep.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+**Alternative (local):**
+
+```json
+{
+  "mcpServers": {
+    "olostep": {
+      "command": "npx",
+      "args": ["-y", "olostep-mcp"],
+      "env": {
+        "OLOSTEP_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+Add this to your `./codeium/windsurf/model_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "olostep": {
+      "serverUrl": "https://mcp.olostep.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+**Alternative (local):**
+
+```json
+{
+  "mcpServers": {
+    "mcp-server-olostep": {
+      "command": "npx",
+      "args": ["-y", "olostep-mcp"],
+      "env": {
+        "OLOSTEP_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+### Cline
+
+Add this to your `cline_mcp_settings.json` (Cline → MCP Servers → Configure):
+
+```json
+{
+  "mcpServers": {
+    "olostep": {
+      "command": "npx",
+      "args": ["-y", "olostep-mcp"],
+      "env": {
+        "OLOSTEP_API_KEY": "YOUR_API_KEY_HERE"
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
+
+Cline can also set this up for you: ask it to install the MCP server from this repository, and it follows [llms-install.md](llms-install.md).
+
+### VS Code
+
+Add this to your `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "olostep": {
+      "type": "http",
+      "url": "https://mcp.olostep.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+**Alternative (local):**
+
+```json
+{
+  "servers": {
+    "olostep": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "olostep-mcp"],
+      "env": {
+        "OLOSTEP_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+### GitHub Copilot CLI
+
+Inside Copilot CLI, run `/mcp add` and enter:
+
+- **Name:** `olostep`
+- **Type:** HTTP
+- **URL:** `https://mcp.olostep.com/mcp`
+- **Headers:** leave empty
+
+Save with `Ctrl+S`, then sign in with your Olostep account when prompted (OAuth). Check the connection with `/mcp show olostep`.
+
+This writes the following to `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "olostep": {
+      "type": "http",
+      "url": "https://mcp.olostep.com/mcp",
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+### Zed
+
+Add this to your Zed `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "olostep": {
+      "url": "https://mcp.olostep.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+**Alternative (extension):** the [Olostep Zed extension](https://github.com/olostep-api/olostep-zed) runs the local server and asks for your API key in Zed's setup screen.
+
+### Metorial
+
+**Option 1: One-Click Installation (Recommended)**
+
+1. Open [Metorial](https://metorial.com) dashboard
+2. Navigate to MCP Servers directory
+3. Search for "Olostep"
+4. Click "Install" and enter your API key
+
+**Option 2: Manual Configuration**
+
+Add this to your Metorial MCP server configuration:
+
+```json
+{
+  "olostep": {
+    "command": "npx",
+    "args": ["-y", "olostep-mcp"],
+    "env": {
+      "OLOSTEP_API_KEY": "YOUR_API_KEY_HERE"
+    }
+  }
+}
+```
+
+The Olostep tools will then be available in your Metorial AI chats.
+
+## Configuration
+
+### Environment Variables
+
+- `OLOSTEP_API_KEY`: Your Olostep API key (required)
+- `ORBIT_KEY`: An optional key for using Orbit to route requests.
+
+## Available Tools
+
+### 1. Scrape Website (`scrape_website`)
+
+Use this when you have a URL and need what is on the page. Returns markdown (default), html or text with the page's `url` and `title`, after rendering JavaScript. Long pages are cut at `max_characters` (default 20,000) and link to their full text.
+
+```json
+{
+  "name": "scrape_website",
+  "arguments": {
+    "url_to_scrape": "https://example.com",
+    "output_format": "markdown",
+    "country": "US",
+    "wait_before_scraping": 1000,
+    "parser": "@olostep/amazon-it-product"
+  }
+}
+```
+
+#### Parameters:
+
+- `url_to_scrape`: The URL of the website you want to scrape (required)
+- `output_format`: Choose format (`html`, `markdown`, `json`, or `text`) - default: `markdown`
+- `country`: Optional country code (e.g., US, GB, CA) for location-specific scraping
+- `wait_before_scraping`: Wait time in milliseconds before scraping (0-10000)
+- `parser`: Optional parser ID for specialized extraction
+- `max_characters`: Max characters of page content to return (default: 20000). Raise it to read more of a long page.
+
+#### Response (example):
+
+The page's `url` and `title` come first. When the content is longer than `max_characters`, it is cut and `truncated` gives the full length and a `full_text_url`.
+
+```json
+{
+  "url": "https://en.wikipedia.org/wiki/Web_scraping",
+  "title": "Web scraping - Wikipedia",
+  "markdown_content": "Web scraping - Wikipedia ...",
+  "markdown_hosted_url": "https://olostep-storage.s3.us-east-1.amazonaws.com/markDown_....txt",
+  "truncated": [
+    { "field": "markdown_content", "returned_characters": 20000, "total_characters": 57235, "full_text_url": "https://olostep-storage.s3.us-east-1.amazonaws.com/markDown_....txt" }
+  ],
+  "truncation_note": "Content was cut at 20000 characters. ..."
+}
+```
+
+### 2. Search the Web (`search_web`)
+
+Search the web for a query and get each result's URL, title and description. Optionally get each result page's content as markdown in the same call.
+
+```json
+{
+  "name": "search_web",
+  "arguments": {
+    "query": "your search query",
+    "limit": 10,
+    "include_domains": ["docs.olostep.com"],
+    "scrape_results": true
+  }
+}
+```
+
+#### Parameters:
+
+- `query`: Search query in natural language (required)
+- `limit`: Number of results, from 1 to 25 (default: `10`)
+- `include_domains`: Only return results from these domains (optional)
+- `exclude_domains`: Never return results from these domains (optional)
+- `scrape_results`: Also return each result page's content as markdown (default: `false`). Each scraped page uses extra credits.
+- `max_characters`: With `scrape_results`, the maximum characters of content per page (default: `20000`)
+
+#### Response:
+
+- JSON (as text) with `query`, `search_id`, `total_results` and `results`: each result has `url`, `title` and `description`, plus `markdown_content` when `scrape_results` is true. Cut pages list the cut fields under `truncated`.
+
+### 3. Answers (AI) (`answers`)
+
+Search the web and return AI-powered answers in the JSON structure you want, with sources and citations.
+
+```json
+{
+  "name": "answers",
+  "arguments": {
+    "task": "Who are the top 5 competitors to Acme Inc. in the EU?",
+    "json": "Return a list of the top 5 competitors with name and homepage URL"
+  }
+}
+```
+
+#### Parameters:
+
+- `task`: Question or task to answer using web data (required)
+- `json`: Optional JSON schema/object or a short description of the desired output shape
+
+#### Response includes:
+
+- `answer_id`, `object`, `task`, `result` (JSON if provided), `sources`, `created`
+
+### 4. Batch Scrape URLs (`batch_scrape_urls`)
+
+Scrape up to 100k URLs in one batch. Perfect for large-scale data extraction. New accounts start at 100 URLs per batch, and info@olostep.com can lift this.
+
+```json
+{
+  "name": "batch_scrape_urls",
+  "arguments": {
+    "urls_to_scrape": [
+      {"url": "https://example.com/a", "custom_id": "a"},
+      {"url": "https://example.com/b", "custom_id": "b"}
+    ],
+    "output_format": "markdown",
+    "country": "US",
+    "wait_before_scraping": 500,
+    "parser": "@olostep/amazon-it-product"
+  }
+}
+```
+
+#### Response includes:
+
+- `batch_id`, `status`, `total_urls`, `created_at`, `formats`, `country`, `parser`, `urls`
+
+### 5. Create Crawl (`create_crawl`)
+
+Start an **async** crawl that autonomously discovers and scrapes entire websites by following links. Returns a `crawl_id` — the crawl runs in the background and does **not** return content in this response. You must then call `get_crawl_results` with the `crawl_id` to poll status and retrieve the scraped pages (same two-step pattern as `batch_scrape_urls` + `get_batch_results`).
+
+```json
+{
+  "name": "create_crawl",
+  "arguments": {
+    "start_url": "https://example.com/docs",
+    "max_pages": 25,
+    "output_format": "markdown",
+    "country": "US",
+    "parser": "@olostep/doc-parser"
+  }
+}
+```
+
+#### Response includes:
+
+- `crawl_id`, `object`, `status`, `start_url`, `max_pages`, `created`, `formats`, `country`, `parser`
+
+> Pair this call with `get_crawl_results` — do **not** pass a `crawl_id` to `get_batch_results` (crawls and batches are separate resources).
+
+### 6. Create Map (`create_map`)
+
+Get all URLs on a website. Extract all URLs for discovery and analysis.
+
+```json
+{
+  "name": "create_map",
+  "arguments": {
+    "website_url": "https://example.com",
+    "search_query": "blog",
+    "top_n": 200,
+    "include_url_patterns": ["/blog/**"],
+    "exclude_url_patterns": ["/admin/**"]
+  }
+}
+```
+
+#### Response includes:
+
+- `map_id`, `object`, `url`, `total_urls`, `urls`, `search_query`, `top_n`
+
+### 7. Get Batch Results (`get_batch_results`)
+
+Retrieve the results of a previously submitted batch scrape job using its `batch_id`.
+
+```json
+{
+  "name": "get_batch_results",
+  "arguments": {
+    "batch_id": "batch_abc123"
+  }
+}
+```
+
+#### Parameters:
+
+- `batch_id`: The batch ID returned from `batch_scrape_urls` (required)
+- `items_limit`: Max items to retrieve content for per call, 1–100 (default: 20)
+- `cursor`: Pass `next_cursor` from the previous result to get the next pages (default: 0)
+- `max_characters`: Max characters of content per URL (default: 20000). Longer pages are cut and link to their full text.
+
+Large batches return their pages a set at a time. When `has_more` is `true`, call again with `next_cursor` until you have every page.
+
+#### Response includes:
+
+- `batch_id`, `status` (`processing` or `completed`), `total_urls`, `completed_urls`, `items` (array of scraped results per URL with `url`, `custom_id`, `markdown_content`, `html_content`, `json_content`, `text_content`, `status`, `page_metadata`)
+
+### 8. Get Crawl Results (`get_crawl_results`)
+
+Retrieve the status and scraped pages for an async crawl started with `create_crawl`. This is the required companion to `create_crawl` — `create_crawl` only kicks off the job and returns a `crawl_id`; this tool is how you actually fetch the discovered pages and their content.
+
+```json
+{
+  "name": "get_crawl_results",
+  "arguments": {
+    "crawl_id": "crawl_abc123",
+    "formats": ["markdown"],
+    "items_limit": 20,
+    "cursor": 0
+  }
+}
+```
+
+#### Parameters:
+
+- `crawl_id`: The crawl ID returned from `create_crawl` (required)
+- `formats`: Array of formats to retrieve per page — `markdown`, `html`, `json`, `text` (default: `["markdown"]`)
+- `items_limit`: Max pages to retrieve content for, 1–100 (default: 20)
+- `cursor`: Pagination cursor into the list of discovered pages (default: 0)
+- `search_query`: Optional filter to rank/select pages by relevance to a query
+- `max_characters`: Max characters of content per page (default: 20000). Longer pages are cut and link to their full text.
+
+#### Response includes:
+
+- **While in progress:** `crawl_id`, `status` (`in_progress`), `pages_completed`, `pages_total`, and a `message` prompting you to call again in ~10 seconds.
+- **When completed:** `crawl_id`, `status` (`completed`), `pages_returned`, `next_cursor`, `has_more`, and a `pages` array where each entry has `url`, `title`, `custom_id`, and the requested content fields (`markdown_content`, `html_content`, `json_content`, `text_content`).
+
+### Older tool names
+
+`get_webpage_content` and `get_website_urls` duplicated `scrape_website` and `create_map`. They are no longer listed to clients, so models choose between fewer, clearer tools, but calls to them still work. Use `scrape_website` and `create_map` instead.
+
+## Error Handling
+
+The server provides robust error handling:
+
+- Detailed error messages for API issues
+- Network error reporting
+- Authentication failure handling
+- Rate limit information
+
+Example error response:
+
+```json
+{
+  "isError": true,
+  "content": [
+    {
+      "type": "text",
+      "text": "Olostep API Error: 401 Unauthorized. Details: {\"error\":\"Invalid API key\"}"
+    }
+  ]
+}
+```
+
+## Distribution
+
+### Docker Images
+
+The MCP server is available as a Docker image:
+
+- **Docker Hub:** `[olostep/mcp-server](https://hub.docker.com/r/olostep/mcp-server)`
+- **Official Docker MCP Registry:** `mcp/olostep` (coming soon - enhanced security with signatures & SBOMs)
+- **GitHub Container Registry:** `ghcr.io/olostep/olostep-mcp-server`
+
+### Docker Desktop MCP Toolkit
+
+The Olostep MCP Server is being added to Docker Desktop's official MCP Toolkit, which means users will be able to:
+
+- Discover it in Docker Desktop's MCP Toolkit UI
+- Install it with one click
+- Configure it visually
+- Use it with any MCP-compatible client (Claude Desktop, Cursor, etc.)
+
+**Status**: Submission in progress to [Docker MCP Registry](https://github.com/docker/mcp-registry)
+
+### Supported Platforms
+
+- `linux/amd64`
+- `linux/arm64`
+
+### Building Locally
+
+```bash
+# Clone the repository
+git clone https://github.com/olostep/olostep-mcp-server.git
+cd olostep-mcp-server
+
+# Build the image
+npm install
+npm run build
+docker build -t olostep/mcp-server .
+
+# Run locally
+docker run -i --rm -e OLOSTEP_API_KEY="your-key" olostep/mcp-server
+```
+
+## About Olostep
+
+[Olostep](https://www.olostep.com) is web data infrastructure for AI. It provides live web search, scraping and crawling API to extract and structure data, used in production by AI companies to give their agents fresh, LLM-ready web data at scale.
+
+- Website: https://www.olostep.com
+- Documentation: https://docs.olostep.com
+- Get an API key: https://olostep.com/auth
+
+## License
+
+ISC License

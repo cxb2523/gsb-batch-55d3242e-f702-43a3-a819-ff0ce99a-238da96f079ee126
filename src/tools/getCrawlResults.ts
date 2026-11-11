@@ -1,0 +1,235 @@
+import { z } from "zod";
+import { Headers } from "node-fetch";
+import fetch from "node-fetch";
+import { isRunning, unexpectedStatus } from "./jobStatus.js";
+import { DEFAULT_MAX_CHARACTERS, shapePage } from "./pageContent.js";
+
+const OLOSTEP_API_URL = process.env.OLOSTEP_API_URL ?? "https://api.olostep.com/v1";
+
+interface CrawlStatusResponse {
+	id?: string;
+	crawl_id?: string;
+	object?: string;
+	status?: string;
+	start_url?: string;
+	max_pages?: number;
+	pages_count?: number;
+	pages_completed?: number;
+	pages_total?: number;
+	created?: string;
+}
+
+interface CrawlPage {
+	url?: string;
+	retrieve_id?: string;
+	custom_id?: string;
+}
+
+interface CrawlPagesResponse {
+	pages?: CrawlPage[];
+	items?: CrawlPage[];
+	cursor?: number;
+}
+
+interface RetrieveResponse {
+	markdown_content?: string;
+	html_content?: string;
+	json_content?: unknown;
+	text_content?: string;
+	markdown_hosted_url?: string;
+	html_hosted_url?: string;
+	text_hosted_url?: string;
+}
+
+export const getCrawlResults = {
+	name: "get_crawl_results",
+	description:
+		"Use this to get the pages of a crawl started with create_crawl, using its crawl_id. " +
+		"While the crawl is in_progress it returns the status: call again in about 10 seconds. " +
+		"Once completed it returns each page's url, title and content, up to `items_limit` per call; " +
+		"when `has_more` is true, pass `next_cursor` for the rest. " +
+		"Do not start a new crawl to check on one that is still running.",
+	schema: {
+		crawl_id: z
+			.string()
+			.min(1)
+			.describe("The crawl_id (or id) returned from create_crawl."),
+		formats: z
+			.array(z.enum(["markdown", "html", "json", "text"]))
+			.default(["markdown"])
+			.describe('Content formats to retrieve per page. Default: ["markdown"].'),
+		items_limit: z
+			.number()
+			.int()
+			.min(1)
+			.max(100)
+			.default(20)
+			.describe("Max number of pages to retrieve content for (1-100). Default: 20."),
+		cursor: z
+			.number()
+			.int()
+			.min(0)
+			.default(0)
+			.describe("Pagination cursor for list-pages. Default: 0 (first page)."),
+		search_query: z
+			.string()
+			.optional()
+			.describe("Optional filter to rank/select pages by relevance to a query."),
+		max_characters: z
+			.number()
+			.int()
+			.min(500)
+			.default(DEFAULT_MAX_CHARACTERS)
+			.describe(`Max characters of content per page (default ${DEFAULT_MAX_CHARACTERS}). Longer pages are cut and link to their full text.`),
+	},
+	handler: async (
+		{
+			crawl_id,
+			formats,
+			items_limit,
+			cursor,
+			search_query,
+			max_characters,
+		}: {
+			crawl_id: string;
+			formats?: string[];
+			items_limit?: number;
+			cursor?: number;
+			search_query?: string;
+			max_characters?: number;
+		},
+		apiKey: string,
+	) => {
+		try {
+			const headers = new Headers({
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${apiKey}`,
+			});
+
+			const statusRes = await fetch(
+				`${OLOSTEP_API_URL}/crawls/${encodeURIComponent(crawl_id)}`,
+				{ method: "GET", headers },
+			);
+
+			if (!statusRes.ok) {
+				let errorDetails: unknown = null;
+				try { errorDetails = await statusRes.json(); } catch { /* ignore */ }
+				return {
+					isError: true,
+					content: [{
+						type: "text",
+						text: `Olostep API Error: ${statusRes.status} ${statusRes.statusText} while checking crawl "${crawl_id}". Details: ${JSON.stringify(errorDetails)}`,
+					}],
+				};
+			}
+
+			const status = (await statusRes.json()) as CrawlStatusResponse;
+			const crawlStatus = (status.status || "").toLowerCase();
+			const resolvedId = status.id || status.crawl_id || crawl_id;
+
+			if (crawlStatus !== "completed") {
+				if (!isRunning(crawlStatus)) return unexpectedStatus("crawl", { crawl_id: resolvedId, ...status });
+				return {
+					content: [{
+						type: "text",
+						text: JSON.stringify({
+							crawl_id: resolvedId,
+							status: status.status,
+							pages_completed: status.pages_completed ?? status.pages_count,
+							pages_total: status.pages_total ?? status.max_pages,
+							message: `Crawl is still ${status.status}. Call get_crawl_results again in ~10 seconds.`,
+						}, null, 2),
+					}],
+				};
+			}
+
+			const limit = items_limit ?? 20;
+			const startCursor = cursor ?? 0;
+			const params = new URLSearchParams({
+				cursor: String(startCursor),
+				limit: String(limit),
+			});
+			if (search_query) params.set("search_query", search_query);
+
+			const pagesRes = await fetch(
+				`${OLOSTEP_API_URL}/crawls/${encodeURIComponent(crawl_id)}/pages?${params.toString()}`,
+				{ method: "GET", headers },
+			);
+
+			if (!pagesRes.ok) {
+				return {
+					isError: true,
+					content: [{
+						type: "text",
+						text: JSON.stringify({
+							crawl_id: resolvedId,
+							status: "completed",
+							message: `Crawl completed but listing its pages failed: ${pagesRes.status} ${pagesRes.statusText}. Call get_crawl_results again to retry.`,
+						}, null, 2),
+					}],
+				};
+			}
+
+			const pagesData = (await pagesRes.json()) as CrawlPagesResponse;
+			const pages = pagesData.pages ?? pagesData.items ?? [];
+
+			const retrieveFormats = (formats && formats.length > 0) ? formats : ["markdown"];
+			const formatsParam = retrieveFormats.map(f => `formats[]=${encodeURIComponent(f)}`).join("&");
+
+			// The API returns a cursor until the listing is exhausted, which can end on an empty page.
+			const hasMore = pages.length > 0 && pagesData.cursor !== undefined && pagesData.cursor !== null;
+
+			const results = await Promise.all(
+				pages.map(async (page) => {
+					if (!page.retrieve_id) {
+						return { url: page.url, custom_id: page.custom_id, error: "No retrieve_id" };
+					}
+					try {
+						const retrieveRes = await fetch(
+							`${OLOSTEP_API_URL}/retrieve?retrieve_id=${encodeURIComponent(page.retrieve_id)}&${formatsParam}`,
+							{ method: "GET", headers },
+						);
+						if (!retrieveRes.ok) {
+							return { url: page.url, custom_id: page.custom_id, error: `Retrieve failed: ${retrieveRes.status}` };
+						}
+						const content = (await retrieveRes.json()) as RetrieveResponse;
+						const result: Record<string, unknown> = {
+							url: page.url,
+							custom_id: page.custom_id,
+						};
+						// The retrieve API can return more formats than asked for; keep only the requested ones.
+						if (retrieveFormats.includes("markdown") && content.markdown_content) result.markdown_content = content.markdown_content;
+						if (retrieveFormats.includes("html") && content.html_content) result.html_content = content.html_content;
+						if (retrieveFormats.includes("json") && content.json_content) result.json_content = content.json_content;
+						if (retrieveFormats.includes("text") && content.text_content) result.text_content = content.text_content;
+						return shapePage(result, { url: page.url, maxCharacters: max_characters, source: content as Record<string, unknown> });
+					} catch {
+						return { url: page.url, custom_id: page.custom_id, error: "Retrieve request failed" };
+					}
+				}),
+			);
+
+			return {
+				content: [{
+					type: "text",
+					text: JSON.stringify({
+						crawl_id: resolvedId,
+						status: "completed",
+						pages_returned: results.length,
+						has_more: hasMore,
+						...(hasMore && { next_cursor: pagesData.cursor }),
+						pages: results,
+					}, null, 2),
+				}],
+			};
+		} catch (error: unknown) {
+			return {
+				isError: true,
+				content: [{
+					type: "text",
+					text: `Error: Failed to get crawl results. ${error instanceof Error ? error.message : String(error)}`,
+				}],
+			};
+		}
+	},
+};
