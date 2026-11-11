@@ -1,0 +1,1397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dark mode</title>
+<meta name="theme-color" content="#c9c4bb">
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #c3bdb3; }
+  body { -webkit-font-smoothing: antialiased; }
+  canvas {
+    position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+    opacity: 0; transition: opacity 1100ms cubic-bezier(.2, .7, .2, 1);
+  }
+  canvas.ready { opacity: 1; }
+  #switch {
+    position: fixed; left: 0; top: 0; width: 1px; height: 1px;
+    margin: 0; padding: 0; border: 0; background: transparent; border-radius: 999px;
+    cursor: pointer; touch-action: none; outline: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #switch.dragging { cursor: grabbing; }
+  .hint {
+    position: fixed; left: 0; right: 0; bottom: max(26px, 5.5vh);
+    text-align: center; pointer-events: none; user-select: none;
+    font: 500 10.5px/1 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+    letter-spacing: .26em; text-transform: uppercase; color: rgba(52, 46, 38, .40);
+    transition: opacity 900ms ease, transform 900ms cubic-bezier(.2, .7, .2, 1);
+  }
+  .hint.gone { opacity: 0; transform: translateY(6px); }
+  .fallback {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    font: 500 14px/1.5 ui-sans-serif, -apple-system, system-ui, sans-serif; color: #4a443b;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="switch" role="switch" aria-checked="false" aria-label="Dark mode"></button>
+<div class="hint" id="hint">Click, drag or press space</div>
+<script>
+(() => {
+'use strict';
+
+const DEBUG = new URLSearchParams(location.search).has('debug');
+const LOCK_RES = DEBUG || new URLSearchParams(location.search).has('hq');  // ?hq: full resolution, never adapts (for recording)
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+// ─── world constants (shared with the shader) ───────────────────────────────
+const L = 0.95;      // half length of the groove's straight part
+const R = 0.50;      // groove radius
+const D = 0.17;      // groove depth
+const FOCAL = 3.0;
+const DIST = 7.6;
+const ELEV = 32 * Math.PI / 180;
+const TA = [0, 0.16, -0.02];
+
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+// ─── shaders ────────────────────────────────────────────────────────────────
+const VS = `#version 300 es
+const vec2 P[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+void main() { gl_Position = vec4(P[gl_VertexID], 0.0, 1.0); }`;
+
+const POST = `
+vec3 tonemapNeutral(vec3 c) {
+  const float start = 0.76;
+  const float desat = 0.07;
+  float x = min(c.r, min(c.g, c.b));
+  float off = x < 0.08 ? x - 6.25 * x * x : 0.04;
+  c -= off;
+  float peak = max(c.r, max(c.g, c.b));
+  if (peak < start) return c;
+  const float d = 1.0 - start;
+  float np = 1.0 - d * d / (peak + d - start);
+  c *= np / peak;
+  float g = 1.0 - 1.0 / (desat * (peak - np) + 1.0);
+  return mix(c, vec3(np), g);
+}
+vec3 toSRGB(vec3 c) {
+  c = max(c, 0.0);
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+}
+float grainHash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+vec3 finish(vec3 c, vec2 fc, vec2 res, float time, float expo, float vig) {
+  vec2 q = fc / res - 0.5; q.x *= res.x / res.y;
+  c *= 1.0 - vig * smoothstep(0.2, 1.15, length(q));
+  c = toSRGB(tonemapNeutral(c * expo));
+  c += (grainHash(fc + fract(time * 7.13) * 917.0) - 0.5) * 0.014;
+  return c;
+}`;
+
+const SCENE = (direct) => `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform vec2 uRes;
+uniform float uScale, uFocal, uTime, uOn, uFocus, uLabel, uExpo;
+uniform vec3 uRo, uTa;
+uniform vec4 uChain[3];   // tail, body, head: x, z, radius
+uniform float uSquash;    // height / width of the liquid
+uniform vec4 uDrop[3];    // two droplets + the cursor reach: x, z, rxz, ry
+uniform vec2 uFlow;       // ripple amount, ripple phase
+uniform float uDropK[3];
+uniform vec4 uRing;
+uniform vec2 uCrown, uLean;
+uniform vec4 uFBox;       // liquid bounds: min x, max x, top, half depth
+uniform vec3 uGlow, uGlowCol, uHotCol;
+uniform vec4 uSplash[8];  // flying droplets: x, y, z, radius
+uniform vec3 uInk;        // black film: front radius, amount, centre x
+uniform vec2 uRipple;     // shock ring on the film: radius, strength
+uniform sampler2D uLabelTex;
+${direct ? POST : ''}
+
+#define L 0.95
+#define R 0.50
+#define D 0.17
+#define RB 0.10
+
+const vec3 BMIN = vec3(-L - R - 0.36, -D - 0.03, -R - 0.42);
+const vec3 BMAX = vec3( L + R + 0.36, 1.25, R + 0.62);
+const vec3 KEYDIR = normalize(vec3(-0.42, 1.0, -0.40));
+const vec3 KEYCOL = vec3(1.0, 0.955, 0.895) * 1.25;
+const vec2 LBL_O = vec2(-L, R + 0.30);
+const vec2 LBL_I = vec2( L, R + 0.30);
+
+// crown of spikes: centre + three rings
+const float RR[4]  = float[4](0.0, 0.155, 0.275, 0.372);
+const float RN[4]  = float[4](1.0, 6.0, 12.0, 17.0);
+const float RH[4]  = float[4](0.66, 0.50, 0.335, 0.19);
+const float SB[4]  = float[4](0.13, 0.105, 0.08, 0.062);
+const float RL[4]  = float[4](0.0, 0.15, 0.33, 0.56);
+const float RO[4]  = float[4](0.0, 0.0, 0.26, 0.11);
+const vec2 HS[4]   = vec2[4](vec2(0.0, 1.0), vec2(0.5, 0.8660254), vec2(0.2588190, 0.9659258), vec2(0.1837495, 0.9829731));  // sin, cos of pi / RN
+
+float smin(float a, float b, float k) { float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25; }
+float smax(float a, float b, float k) { return -smin(-a, -b, k); }
+float hash11(float n) { return fract(sin(n * 127.1) * 43758.5453); }
+float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y);
+}
+
+vec2 boxHit(vec3 ro, vec3 rd) {
+  vec3 inv = 1.0 / rd;
+  vec3 t0 = (BMIN - ro) * inv, t1 = (BMAX - ro) * inv;
+  vec3 a = min(t0, t1), b = max(t0, t1);
+  return vec2(max(max(a.x, a.y), a.z), min(min(b.x, b.y), b.z));
+}
+
+// ─── solid: surface with a pill groove and two engraved marks ──────────────
+float sdTrack(vec2 p) { return length(vec2(max(abs(p.x) - L, 0.0), p.y)) - R; }
+float sdGroove(vec3 p) {
+  vec2 w = vec2(sdTrack(p.xz), -(p.y + D)) + RB;
+  return min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - RB;
+}
+float sdMarkO(vec2 q) { return abs(length(q - LBL_O) - 0.072) - 0.0135; }
+float sdMarkI(vec2 q) { vec2 d = q - LBL_I; return length(vec2(d.x, max(abs(d.y) - 0.064, 0.0))) - 0.0135; }
+float mapSolid(vec3 p) {
+  float s = smax(p.y, -sdGroove(p), 0.035);
+  float m = min(sdMarkO(p.xz), sdMarkI(p.xz));
+  if (m < 0.06) s = smax(s, -max(m, -(p.y + 0.014)), 0.005);
+  return s;
+}
+
+// ─── fluid ──────────────────────────────────────────────────────────────────
+float sdEll(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / max(k1, 1e-5);
+}
+float fluidBound(vec3 p) {
+  vec3 lo = vec3(uFBox.x, -D - 0.06, -uFBox.w);
+  vec3 hi = vec3(uFBox.y, uFBox.z, uFBox.w);
+  vec3 q = abs(p - 0.5 * (lo + hi)) - 0.5 * (hi - lo);
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+// kn: Lipschitz scale shared by a whole ring, so neighbouring sectors agree at their border
+float sdSpike(vec3 q, float h, float r0, vec2 lean, float kn) {
+  q.xz -= lean * clamp(q.y, 0.0, h);
+  float t = clamp(q.y / h, 0.0, 1.0);
+  float r = r0 * pow(1.0 - t, 1.55) + 0.0022;
+  float d = (length(q.xz) - r) * kn;
+  d = max(d, -q.y - 0.06);
+  // above the tip: distance to the tip point; a flat cap here lifts the blended surface into plateaus
+  return q.y > h ? max(d, kn * (length(vec2(length(q.xz), q.y - h)) - 0.0022)) : d;
+}
+// 'far' > 0: occlusion query, where a bound must never stand in for geometry.
+// 'cap': distance to the liquid body; a ring that provably stays farther than it can't change the surface
+float crown(vec3 p, float far, float cap) {
+  vec2 rel = p.xz - uCrown;
+  float bnd = length(vec2(max(length(rel) - 0.74, 0.0), max(p.y - uFBox.z, 0.0)));
+  if (far > 0.0) { if (bnd > far) return 1e5; }
+  else if (bnd > 0.06) return bnd;  // must exceed the smin radius in mapFluid, or the bound kinks the surface
+  float rx = uChain[1].z, ry = rx * uSquash;
+  float yc = -D + ry * 0.2;
+  float d = 1e5, ang = 10.0;  // 10: not computed yet
+  bool leaning = dot(uLean, uLean) > 1e-6;
+  float rho = length(rel), lean0 = length(uLean);
+  for (int i = 0; i < 4; i++) {
+    float hn = uRing[i];
+    if (hn < 0.003) continue;
+    float N = RN[i];
+    float sector = 6.2831853 / N;
+    // rings ride the dome: while the liquid is still stretched they sit closer in
+    float rad = RR[i] * min(rx / 0.376, 1.0);
+    float rr = rad / rx;
+    float by = yc + ry * sqrt(max(1.0 - rr * rr, 0.0)) - 0.035;
+    float r0 = SB[i] * mix(0.32, 1.0, clamp(hn * 1.4, 0.0, 1.0));
+    float s = min(1.55 * r0 / (0.887 * RH[i] * hn + 0.035), 4.5);  // steepest the ring's var * br allows
+    float la = RL[i] * clamp(hn, 0.0, 1.2) + lean0;
+    float kn = inversesqrt(1.0 + s * s + la * la);
+    // cull: the whole ring lives in an annulus; skip it when even its nearest point can't matter
+    float hmax = RH[i] * hn * 1.12 + 0.035;
+    float gap = max(abs(rho - rad) - (r0 + la * hmax + 0.045), max(p.y - by - hmax, by - 0.06 - p.y));
+    if (kn * gap > min(d, cap) + 0.08) continue;
+    // pick the sector in the same sheared frame the ring's spikes lean in
+    vec2 rs = rel - uLean * clamp(p.y - by, 0.0, RH[i] * hn + 0.035);
+    float id = 0.0;
+    if (i > 0) {
+      if (ang > 9.0 || leaning) ang = atan(rs.y, rs.x);  // without lean every ring shares one frame
+      id = floor((ang - RO[i]) / sector + 0.5);
+    }
+    float a = id * sector + RO[i];
+    vec2 dir = vec2(cos(a), sin(a));
+    // hard edges in the spike field show as creases in the blended liquid: round the sector
+    // fold always (seams in the settled skirt), and while spikes are low and buried also blend
+    // the rings and make neighbours identical
+    float low = 1.0 - smoothstep(0.3, 0.6, hn);
+    vec3 ps = p;
+    if (i > 0) {
+      float u = dot(rs, dir), v = dir.x * rs.y - dir.y * rs.x;  // along / across this spike's axis
+      vec2 hs = HS[i];
+      float x = u * hs.x - abs(v) * hs.y;                         // distance inside from the border
+      float e = min(0.035, max(u, 0.0) * hs.x);
+      if (x < e && e > 1e-4) ps.xz += (x * x / (2.0 * e) + 0.5 * e - x) * (dir * hs.x - vec2(-dir.y, dir.x) * sign(v) * hs.y);
+    }
+    vec2 bp = uCrown + dir * rad;
+    float seed = mod(id, N) + float(i) * 17.0;
+    float var = 1.0 + 0.18 * (hash11(seed) - 0.5) * (1.0 - low);
+    float br = 1.0 + 0.025 * sin(uTime * 2.2 + seed * 2.39) * (1.0 - low);
+    float h = RH[i] * hn * var * br + 0.035;
+    vec2 lean = dir * RL[i] * clamp(hn, 0.0, 1.2) + uLean;
+    d = smin(d, sdSpike(ps - vec3(bp.x, by, bp.y), h, r0, lean, kn), max(0.07 * low, 1e-4));
+  }
+  return d;
+}
+float sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2) {
+  vec3 ba = b - a;
+  float l2 = dot(ba, ba);
+  float rr = r1 - r2;
+  if (l2 < 1e-6 || rr * rr >= l2) return min(length(p - a) - r1, length(p - b) - r2);
+  float a2 = l2 - rr * rr;
+  float il2 = 1.0 / l2;
+  vec3 pa = p - a;
+  float y = dot(pa, ba);
+  float z = y - l2;
+  vec3 w = pa * l2 - ba * y;
+  float x2 = dot(w, w);
+  float y2 = y * y * l2;
+  float z2 = z * z * l2;
+  float k = sign(rr) * rr * rr * x2;
+  if (sign(z) * a2 * z2 > k) return sqrt(x2 + z2) * il2 - r2;
+  if (sign(y) * a2 * y2 < k) return sqrt(x2 + y2) * il2 - r1;
+  return (sqrt(x2 * a2 * il2) + y * rr) * il2 - r1;
+}
+float mapFluid(vec3 p, float far) {
+  float yc = -D + 0.2 * uChain[1].z * uSquash;
+  vec3 q = vec3(p.x, yc + (p.y - yc) / uSquash, p.z);
+  vec3 a = vec3(uChain[0].x, yc, uChain[0].y);
+  vec3 b = vec3(uChain[1].x, yc, uChain[1].y);
+  vec3 c = vec3(uChain[2].x, yc, uChain[2].y);
+  float d = smin(sdRoundCone(q, a, b, uChain[0].z, uChain[1].z), sdRoundCone(q, b, c, uChain[1].z, uChain[2].z), 0.14);
+  d *= min(uSquash, 1.0);
+  d -= uFlow.x * 0.0038 * (0.6 * sin(p.x * 17.0 - uFlow.y + p.z * 5.0) + 0.4 * sin(p.x * 29.0 - uFlow.y * 1.7 - p.z * 8.0));
+  for (int i = 0; i < 3; i++) {
+    vec4 e = uDrop[i];
+    if (e.z < 0.003) continue;
+    d = smin(d, sdEll(p - vec3(e.x, -D + e.w * 0.2, e.y), vec3(e.z, e.w, e.z)), uDropK[i]);
+  }
+  for (int i = 0; i < 8; i++) {
+    vec4 e = uSplash[i];
+    if (e.w < 0.004) continue;
+    d = smin(d, length(p - e.xyz) - e.w, 0.04);
+  }
+  if (uRing.x + uRing.y + uRing.z + uRing.w > 0.004) d = smin(d, crown(p, far, d), 0.055);
+  return d;
+}
+vec2 map(vec3 p) {
+  float s = mapSolid(p);
+  float fb = fluidBound(p);
+  float f = fb > 0.06 ? fb : mapFluid(p, 0.0);
+  return f < s ? vec2(f, 1.0) : vec2(s, 0.0);
+}
+float mapD(vec3 p) { return map(p).x; }
+// for shadows and occlusion the bounding box must never count as geometry:
+// past 'far' the fluid is too distant to matter, so it is left out entirely
+float mapOcc(vec3 p, float far) {
+  float s = mapSolid(p);
+  float fb = fluidBound(p);
+  return fb > far ? s : min(s, mapFluid(p, far));
+}
+
+vec3 calcNormal(vec3 p) {
+  const vec2 e = vec2(1.0, -1.0) * 0.0006;
+  return normalize(e.xyy * mapD(p + e.xyy) + e.yyx * mapD(p + e.yyx) + e.yxy * mapD(p + e.yxy) + e.xxx * mapD(p + e.xxx));
+}
+float calcAO(vec3 p, vec3 n) {
+  float occ = 0.0, sca = 1.0;
+  for (int i = 0; i < 4; i++) {
+    float h = 0.012 + 0.07 * float(i);
+    occ += (h - mapOcc(p + h * n, 0.26)) * sca;
+    sca *= 0.82;
+  }
+  return clamp(1.0 - 2.4 * occ, 0.0, 1.0);
+}
+float softShadow(vec3 ro, vec3 rd) {
+  vec2 tb = boxHit(ro, rd);
+  if (tb.y <= 0.0 || tb.x > tb.y) return 1.0;
+  // jittered start turns penumbra banding into fine noise the grain hides
+  float t = max(tb.x, 0.015) + 0.012 * hash12(gl_FragCoord.xy);
+  float res = 1.0, ph = 1e10;
+  for (int i = 0; i < 40; i++) {
+    if (t > tb.y) break;
+    float h = mapOcc(ro + rd * t, 0.2 + 0.11 * t);
+    float y = h < ph ? h * h / (2.0 * ph) : 0.0;  // h may jump where far geometry is skipped
+    float d = sqrt(max(h * h - y * y, 0.0));
+    res = min(res, 9.0 * d / max(t - y, 1e-4));
+    ph = h;
+    if (res < 0.003) break;
+    t += clamp(h * 0.85, 0.012, 0.2);
+  }
+  res = clamp(res, 0.0, 1.0);
+  return res * res * (3.0 - 2.0 * res);
+}
+
+// ─── light ──────────────────────────────────────────────────────────────────
+vec3 glowAt(float x) {
+  x = clamp(x, -L - R * 0.6, L + R * 0.6);
+  float e = uGlow.x;
+  float fill = 1.0 - smoothstep(e - 0.32, e + 0.32, x);
+  float fx = (x - e) / 0.22;
+  float front = exp(-fx * fx) * uGlow.z;
+  float shimmer = 1.0 + 0.05 * sin(uTime * 1.7 + x * 3.1) * sin(uTime * 0.9 - x * 1.3);
+  return uGlow.y * (uGlowCol * fill * shimmer + uHotCol * front);
+}
+vec3 spill(vec3 p, vec3 n, float d2) {
+  if (uGlow.y < 0.002) return vec3(0.0);
+  vec2 c = vec2(clamp(p.x, -L, L), 0.0);
+  vec2 v = p.xz - c;
+  float lv = length(v);
+  vec2 sxz = c + (lv > 1e-4 ? v / lv : vec2(0.0)) * min(lv, R - 0.14);
+  vec3 l = vec3(sxz.x, -D + 0.01, sxz.y) - p;
+  float dist = length(l);
+  float lam = max(dot(n, l / max(dist, 1e-4)), 0.0);
+  float fall = 1.0 / (1.0 + 26.0 * dist * dist);
+  float top = step(-0.003, p.y) * 0.42 * exp(-max(d2, 0.0) * 4.2);
+  return glowAt(p.x) * (lam * fall * 3.0 + top);
+}
+float panel(vec3 r, vec3 c, vec2 s, float soft) {
+  float k = dot(r, c);
+  if (k <= 0.0) return 0.0;
+  vec3 u = normalize(vec3(c.z, 0.0, -c.x));
+  vec3 v = cross(c, u);
+  vec2 q = abs(vec2(dot(r, u), dot(r, v)) / k);
+  vec2 e = 1.0 - smoothstep(s - soft, s + soft, q);
+  vec2 f = q / s;
+  return e.x * e.y * (1.0 - 0.32 * dot(f, f));
+}
+vec3 env(vec3 r) {
+  float dim = 1.0 - 0.35 * uOn;
+  vec3 col = mix(vec3(0.07, 0.068, 0.066), vec3(0.30, 0.305, 0.32), smoothstep(-0.15, 0.9, r.y)) * dim;
+  col += vec3(1.0, 0.98, 0.96) * 16.0 * dim * panel(r, normalize(vec3(-0.75, 0.22, 0.65)), vec2(0.035, 0.42), 0.02);
+  col += vec3(0.95, 0.97, 1.0) * 12.0 * dim * panel(r, normalize(vec3(0.8, 0.18, 0.6)), vec2(0.03, 0.42), 0.02);
+  col += vec3(1.0, 0.97, 0.92) * 24.0 * dim * panel(r, KEYDIR, vec2(0.5, 0.28), 0.12);
+  col += vec3(0.93, 0.96, 1.0) * 22.0 * dim * panel(r, normalize(vec3(1.0, 0.48, -0.12)), vec2(0.05, 0.62), 0.025);
+  col += vec3(1.0, 0.98, 0.95) * 13.0 * dim * panel(r, normalize(vec3(-0.95, 0.30, -0.55)), vec2(0.045, 0.5), 0.02);
+  col += vec3(1.0) * 1.3 * (1.0 - 0.85 * uInk.y) * panel(r, normalize(vec3(0.25, 0.42, 1.0)), vec2(0.9, 0.35), 0.35);
+  col += uGlowCol * uGlow.y * 0.35 * (1.0 - smoothstep(-0.35, 0.25, r.y));
+  // a long soft sweep behind the switch: only matters once the floor turns to wet black film
+  col += vec3(1.0, 0.97, 0.94) * 6.0 * uInk.y * panel(r, normalize(vec3(0.0, 0.48, -1.0)), vec2(1.6, 0.13), 0.22);
+  return col;
+}
+
+// ─── the black film that floods the surface when the magnet is on ───────────
+float inkField(vec2 q) {  // < 0 inside the film
+  float d = length(q - vec2(uInk.z, 0.0));
+  vec2 w = vec2(vnoise(q * 0.8 + 3.1), vnoise(q * 0.8 - 7.3)) - 0.5;
+  float n = vnoise(q * 1.7 + w * 2.4) * 0.65 + vnoise(q * 4.6 - w * 1.6) * 0.35;
+  return d + (n - 0.5) * (0.3 + 0.38 * min(d, 3.0)) - uInk.x;
+}
+vec3 inkSurf(vec3 p, vec3 n, vec3 rd, float f) {
+  if (abs(f) < 0.12) {  // meniscus: the film's edge bulges and catches light
+    const vec2 e = vec2(0.01, 0.0);
+    vec2 g = vec2(inkField(p.xz + e.xy) - inkField(p.xz - e.xy), inkField(p.xz + e.yx) - inkField(p.xz - e.yx)) / 0.02;
+    n = normalize(n + vec3(g.x, 0.0, g.y) * exp(-f * f / 0.0016) * 0.9);
+  }
+  if (uRipple.y > 0.01) {  // the eruption sends a ring racing across the wet film
+    vec2 v = p.xz - vec2(L, 0.0);
+    float dd = length(v), k = dd - uRipple.x;
+    n = normalize(n + vec3(v / max(dd, 1e-3), 0.0).xzy * uRipple.y * 0.5 * sin(k * 26.0) * exp(-k * k / 0.03));
+  }
+  float fr = 0.045 + 0.955 * pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 5.0);
+  vec3 r = reflect(rd, n);
+  return vec3(0.004, 0.0042, 0.005) + env(r) * fr * 0.42;
+}
+
+// engraved DARK MODE label: mask and its gradient (x, z)
+vec3 labelAt(vec3 p) {
+  vec2 luv = vec2((p.x + 0.6) / 1.2, (p.z - (R + 0.30)) / 0.15 + 0.5);
+  if (p.y < -0.004 || luv.x <= 0.0 || luv.x >= 1.0 || luv.y <= 0.0 || luv.y >= 1.0) return vec3(0.0);
+  return vec3(textureLod(uLabelTex, luv, 1.6).r,
+              textureLod(uLabelTex, luv + vec2(0.0025, 0.0), 1.6).r - textureLod(uLabelTex, luv - vec2(0.0025, 0.0), 1.6).r,
+              textureLod(uLabelTex, luv + vec2(0.0, 0.02), 1.6).r - textureLod(uLabelTex, luv - vec2(0.0, 0.02), 1.6).r);
+}
+vec3 shadeSolid(vec3 p, vec3 n, vec3 rd, bool hq) {
+  float d2 = sdTrack(p.xz);
+  float inkF = 1.0, inkM = 0.0;
+  if (uInk.y > 0.001 && p.y > -0.03) { inkF = inkField(p.xz); inkM = 1.0 - smoothstep(-0.012, 0.012, inkF); }
+  if (inkM >= 0.995) {  // fully under the film: only the wet black and what glows through it
+    vec3 ink = inkSurf(p, n, rd, inkF) + glowAt(p.x) * 0.22 * exp(-max(d2, 0.0) * 3.2);
+    ink += uGlowCol * 3.2 * uLabel * (1.0 - smoothstep(-0.004, 0.002, sdMarkI(p.xz))) * step(p.y, -0.004);
+    ink += uGlowCol * 2.4 * uLabel * labelAt(p).x;
+    float rg = (1.0 - smoothstep(0.005, 0.011, abs(d2 - 0.115))) * step(-0.002, p.y);
+    return mix(ink, vec3(0.55, 0.54, 0.52), rg * uFocus * 0.9);
+  }
+  vec3 alb = vec3(0.79, 0.765, 0.722);
+  alb *= 0.975 + 0.035 * vnoise(p.xz * 3.1) + 0.02 * (hash12(floor(p.xz * 900.0)) - 0.5);
+  float floorM = (1.0 - smoothstep(-D + 0.004, -D + 0.03, p.y)) * step(d2, 0.0);
+  vec3 em = glowAt(p.x);
+  float lit = clamp(dot(em, vec3(0.5)) * 1.6, 0.0, 1.0);
+  alb = mix(alb, mix(vec3(0.62, 0.625, 0.635), vec3(0.11, 0.105, 0.10), max(lit, uOn)), floorM);
+  float sh = hq ? softShadow(p + n * 0.004, KEYDIR) : 1.0;
+  float ao = hq ? calcAO(p, n) : 1.0;
+  float ndl = max(dot(n, KEYDIR), 0.0);
+  vec2 pc = p.xz - vec2(-0.25, -0.35);
+  float pool = 0.58 + 0.42 * exp(-dot(pc, pc) * 0.045);
+  float dim = 1.0 - 0.45 * uOn;
+  vec3 col = alb * KEYCOL * ndl * sh * pool * dim;
+  col += alb * mix(vec3(0.26, 0.25, 0.24), vec3(0.50, 0.52, 0.56), 0.5 + 0.5 * n.y) * ao * (1.0 - 0.4 * uOn);
+  col += alb * spill(p, n, d2) * mix(0.6, 1.0, ao);
+  // the light panel at the bottom of the groove, hottest under the magnet
+  float prof = mix(0.35, 1.0, 1.0 - smoothstep(-0.40, -0.10, d2));
+  float flow = 0.88 + 0.12 * vnoise(vec2(p.x * 3.0 - uTime * 0.8, p.z * 4.0 + uTime * 0.3));
+  float cdx = p.x - uCrown.x;
+  float core = uOn * exp(-cdx * cdx * 2.4) * prof * prof;
+  col += floorM * (em * prof * 2.2 + uHotCol * length(em) * core * 2.6) * flow;
+  // engraved I lights up when the magnet is on
+  float mi = sdMarkI(p.xz);
+  col += uGlowCol * 3.2 * uLabel * (1.0 - smoothstep(-0.004, 0.002, mi)) * step(p.y, -0.004);
+  col += uGlowCol * 0.30 * uLabel * exp(-max(mi, 0.0) * 55.0) * step(-0.004, p.y);
+  // engraved DARK MODE label: a shallow cut, lit along its edges, glowing once on
+  vec3 lab = labelAt(p);
+  float lm = lab.x;
+  if (lm > 0.0 || dot(lab.yz, lab.yz) > 0.0) {
+    vec2 lg = lab.yz;
+    col *= 1.0 - 0.5 * lm;
+    col += alb * KEYCOL * 0.35 * max(dot(lg, normalize(KEYDIR.xz)), 0.0) * dim;
+    col += uGlowCol * 2.4 * uLabel * lm;
+  }
+  // sheen
+  vec3 h = normalize(KEYDIR - rd);
+  col += KEYCOL * 0.045 * pow(max(dot(n, h), 0.0), 36.0) * sh * dim;
+  if (inkM > 0.0) {
+    vec3 ink = inkSurf(p, n, rd, inkF);
+    ink += glowAt(p.x) * 0.22 * exp(-max(d2, 0.0) * 3.2);  // the glow pooling on the wet black
+    ink += uGlowCol * 3.2 * uLabel * (1.0 - smoothstep(-0.004, 0.002, mi)) * step(p.y, -0.004);
+    ink += uGlowCol * 2.4 * uLabel * lm;
+    col = mix(col, ink, inkM);
+  }
+  // keyboard focus ring
+  float ring = (1.0 - smoothstep(0.005, 0.011, abs(d2 - 0.115))) * step(-0.002, p.y);
+  col = mix(col, mix(vec3(0.025, 0.024, 0.022), vec3(0.55, 0.54, 0.52), inkM), ring * uFocus * 0.9);
+  return col;
+}
+
+vec3 traceRefl(vec3 ro, vec3 rd) {
+  vec2 tb = boxHit(ro, rd);
+  float t = 0.004;
+  for (int i = 0; i < 26; i++) {
+    if (t > tb.y) break;
+    vec3 p = ro + rd * t;
+    vec2 h = map(p);
+    if (h.x < 0.003 + 0.004 * t) {
+      vec3 n = calcNormal(p);
+      if (h.y > 0.5) {
+        float f2 = 0.05 + 0.95 * pow(clamp(1.0 - dot(n, -rd), 0.0, 1.0), 5.0);
+        return env(reflect(rd, n)) * f2 + vec3(0.003);
+      }
+      return shadeSolid(p, n, rd, false);
+    }
+    t += max(h.x, 0.004);
+  }
+  if (rd.y < 0.0) {
+    vec3 pp = ro + rd * (-ro.y / rd.y);
+    return shadeSolid(pp, vec3(0.0, 1.0, 0.0), rd, false);
+  }
+  return env(rd);
+}
+
+vec3 shadeFluid(vec3 p, vec3 n, vec3 rd) {
+  float ndv = max(dot(n, -rd), 0.0);
+  float fr = 0.06 + 0.94 * pow(clamp(1.0 - ndv, 0.0, 1.0), 5.0);
+  vec3 rc = traceRefl(p + n * 0.006, reflect(rd, n));
+  float ao = calcAO(p, n);
+  vec3 col = vec3(0.0045, 0.0046, 0.0052) * (0.4 + ao);
+  col += rc * fr * (0.3 + 0.7 * ao);
+  return col;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uScale;
+  vec3 fw = normalize(uTa - uRo);
+  vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + uFocal * fw);
+  vec3 ro = uRo;
+
+  vec3 col;
+  bool hit = false;
+  float t = 0.0, mat = 0.0;
+  vec2 tb = boxHit(ro, rd);
+  if (tb.x < tb.y && tb.y > 0.0) {
+    t = max(tb.x, 0.0);
+    for (int i = 0; i < 150; i++) {
+      vec2 h = map(ro + rd * t);
+      if (abs(h.x) < 0.0003 * t) { hit = true; mat = h.y; break; }
+      t += h.x * 0.78;
+      if (t > tb.y) break;
+    }
+  }
+  if (hit) {
+    vec3 p = ro + rd * t;
+    vec3 n = calcNormal(p);
+    col = mat > 0.5 ? shadeFluid(p, n, rd) : shadeSolid(p, n, rd, true);
+  } else {
+    vec3 p = ro + rd * (-ro.y / rd.y);
+    col = shadeSolid(p, vec3(0.0, 1.0, 0.0), rd, true);
+  }
+${direct
+  ? '  fragColor = vec4(finish(col, gl_FragCoord.xy, uRes, uTime, uExpo, 0.3 + 0.3 * uOn), 1.0);'
+  : '  fragColor = vec4(col, 1.0);'}
+}`;
+
+const BRIGHT = `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform sampler2D uTex;
+uniform vec2 uInv;
+void main() {
+  vec3 c = texture(uTex, gl_FragCoord.xy * uInv).rgb;
+  float l = max(c.r, max(c.g, c.b));
+  float k = max(l - 0.9, 0.0);
+  k = k * k / (k + 0.6);
+  fragColor = vec4(c * k / max(l, 1e-4), 1.0);
+}`;
+
+const COMP = `#version 300 es
+precision highp float;
+out vec4 fragColor;
+uniform sampler2D uScene, uBloom;
+uniform vec2 uRes;
+uniform float uTime, uExpo, uBloomK, uOn, uCA;
+${POST}
+vec3 blurL(float lod, vec2 uv) {
+  vec2 o = 1.0 / vec2(textureSize(uBloom, int(lod)));
+  vec3 c = textureLod(uBloom, uv, lod).rgb * 4.0;
+  c += textureLod(uBloom, uv + vec2( o.x,  o.y), lod).rgb;
+  c += textureLod(uBloom, uv + vec2(-o.x,  o.y), lod).rgb;
+  c += textureLod(uBloom, uv + vec2( o.x, -o.y), lod).rgb;
+  c += textureLod(uBloom, uv + vec2(-o.x, -o.y), lod).rgb;
+  return c / 8.0;
+}
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = texelFetch(uScene, ivec2(gl_FragCoord.xy), 0).rgb;
+  if (uCA > 1e-4) {
+    vec2 o = (uv - 0.5) * uCA;
+    c.r = texture(uScene, uv + o).r;
+    c.b = texture(uScene, uv - o).b;
+  }
+  vec3 b = blurL(0.0, uv) * 0.22 + blurL(1.0, uv) * 0.26 + blurL(2.0, uv) * 0.26
+         + blurL(3.0, uv) * 0.24 + blurL(4.0, uv) * 0.22 + blurL(5.0, uv) * 0.18;
+  c += b * uBloomK;
+  fragColor = vec4(finish(c, gl_FragCoord.xy, uRes, uTime, uExpo, 0.3 + 0.3 * uOn), 1.0);
+}`;
+
+// ─── GL plumbing ────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const btn = document.getElementById('switch');
+const hint = document.getElementById('hint');
+const gl = canvas.getContext('webgl2', {
+  antialias: false, alpha: false, depth: false, stencil: false,
+  powerPreference: 'high-performance', preserveDrawingBuffer: DEBUG,
+});
+if (!gl) {
+  document.body.insertAdjacentHTML('beforeend', '<div class="fallback">This switch needs WebGL 2.</div>');
+  return;
+}
+const HDR = !!gl.getExtension('EXT_color_buffer_float');
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const name = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, '');
+    u[name] = gl.getUniformLocation(p, name);
+  }
+  return { p, u };
+}
+const sceneProg = program(SCENE(!HDR));
+const brightProg = HDR ? program(BRIGHT) : null;
+const compProg = HDR ? program(COMP) : null;
+gl.bindVertexArray(gl.createVertexArray());
+
+// the engraved label, drawn once into a texture
+const labelTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = 2048; c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#fff';
+  g.font = '600 118px ui-sans-serif, -apple-system, "SF Pro Display", system-ui, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  if ('letterSpacing' in g) g.letterSpacing = '40px';
+  g.fillText('DARK MODE', c.width / 2 + 20, c.height / 2 + 6);
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+})();
+
+let W = 0, H = 0, cssW = 0, cssH = 0, pr = 1, quality = 1;
+let sceneTex = null, sceneFbo = null, bloomTex = null, bloomFbo = null, bw = 0, bh = 0;
+
+function makeTex(w, h, mips) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  const levels = mips ? Math.floor(Math.log2(Math.max(w, h))) + 1 : 1;
+  gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA16F, w, h);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+function makeFbo(tex) {
+  const f = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return f;
+}
+function resize() {
+  cssW = innerWidth; cssH = innerHeight;
+  const maxPx = 3.0e6;
+  pr = Math.min(devicePixelRatio || 1, 2) * quality;
+  if (cssW * cssH * pr * pr > maxPx) pr = Math.sqrt(maxPx / (cssW * cssH));
+  const w = Math.max(1, Math.round(cssW * pr)), h = Math.max(1, Math.round(cssH * pr));
+  if (w === W && h === H) return;
+  W = w; H = h;
+  canvas.width = W; canvas.height = H;
+  if (HDR) {
+    [sceneTex, bloomTex].forEach(t => t && gl.deleteTexture(t));
+    [sceneFbo, bloomFbo].forEach(f => f && gl.deleteFramebuffer(f));
+    sceneTex = makeTex(W, H, false); sceneFbo = makeFbo(sceneTex);
+    bw = Math.max(1, W >> 1); bh = Math.max(1, H >> 1);
+    bloomTex = makeTex(bw, bh, true); bloomFbo = makeFbo(bloomTex);
+  }
+}
+let resizePending = false;
+addEventListener('resize', () => { resizePending = true; });
+
+// ─── camera (mirrors the shader) ────────────────────────────────────────────
+const v3 = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+const cam = { ro: [0, 0, 0], fw: [0, 0, -1], rt: [1, 0, 0], up: [0, 1, 0], focal: FOCAL };
+const layoutScale = () => Math.min(cssW * 1.12, cssH * 1.55) * 0.5;
+function updateCamera() {
+  cam.ro = [
+    TA[0] + S.par[0].x * 0.22,
+    TA[1] + Math.sin(ELEV) * DIST + S.par[1].x * 0.12,
+    TA[2] + Math.cos(ELEV) * DIST,
+  ];
+  cam.focal = FOCAL * (1 + S.zoom.x);
+  cam.fw = v3.norm(v3.sub(TA, cam.ro));
+  cam.rt = v3.norm(v3.cross(cam.fw, [0, 1, 0]));
+  cam.up = v3.cross(cam.rt, cam.fw);
+}
+function toScreen(p) {
+  const d = v3.sub(p, cam.ro);
+  const z = v3.dot(d, cam.fw), s = layoutScale();
+  return [cssW / 2 + v3.dot(d, cam.rt) / z * cam.focal * s, cssH / 2 - v3.dot(d, cam.up) / z * cam.focal * s];
+}
+function toGround(px, py) {
+  const s = layoutScale();
+  const ux = (px - cssW / 2) / s, uy = -(py - cssH / 2) / s;
+  const rd = v3.norm([
+    ux * cam.rt[0] + uy * cam.up[0] + cam.focal * cam.fw[0],
+    ux * cam.rt[1] + uy * cam.up[1] + cam.focal * cam.fw[1],
+    ux * cam.rt[2] + uy * cam.up[2] + cam.focal * cam.fw[2],
+  ]);
+  const t = rd[1] < -1e-4 ? -cam.ro[1] / rd[1] : 1e3;
+  return [cam.ro[0] + rd[0] * t, cam.ro[2] + rd[2] * t];
+}
+let btnRect = '';
+function placeButton() {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const x of [-L - R, L + R]) for (const z of [-R, R]) for (const y of [0, 0.7]) {
+    const [sx, sy] = toScreen([x, y, z]);
+    x0 = Math.min(x0, sx); y0 = Math.min(y0, sy); x1 = Math.max(x1, sx); y1 = Math.max(y1, sy);
+  }
+  const pad = 8;
+  const r = [x0 - pad, y0 - pad, x1 - x0 + pad * 2, y1 - y0 + pad * 2].map(Math.round);
+  const key = r.join(',');
+  if (key === btnRect) return;
+  btnRect = key;
+  Object.assign(btn.style, { left: r[0] + 'px', top: r[1] + 'px', width: r[2] + 'px', height: r[3] + 'px' });
+}
+
+// ─── simulation ─────────────────────────────────────────────────────────────
+const sp = (x = 0) => ({ x, v: 0 });
+const S = {
+  t: 0, on: false, drag: null, press: null,
+  mag: sp(-L), head: sp(-L), body: sp(-L), tail: sp(-L), dA: sp(-L), dB: sp(-L),
+  wob: sp(0), lean: [sp(0), sp(0)], ring: [sp(0), sp(0), sp(0), sp(0)],
+  edge: sp(-L - R - 0.4), front: 0, glowI: 0, flash: 0,
+  mood: sp(0), reach: sp(0), hover: sp(0), focus: sp(0), par: [sp(0), sp(0)],
+  zT: 0, zA: 0, zB: 0, flowAmt: 0, flowPh: 0,
+  cursor: { sx: 0, sy: 0, x: 0, z: 0, inside: false },
+  erupted: false, rOut: [0, 0, 0, 0], ink: 0, inkC: sp(L),
+  zoom: sp(0), ripR: 0, ripA: 0, splash: [], focusVisible: false, sepA: false, sepB: false, events: [],
+};
+function spring(s, target, w, z, dt) {
+  s.v += (-w * w * (s.x - target) - 2 * z * w * s.v) * dt;
+  s.x += s.v * dt;
+}
+
+const W_ = [27, 22, 18, 15], Z_ = [0.30, 0.34, 0.38, 0.42];
+
+// ─── splashes ───────────────────────────────────────────────────────────────
+// Flip it back while the liquid is still flying and its momentum throws droplets off the
+// leading edge. Each one is a ballistic body: gravity, a soft bounce, rolling friction on
+// the surface, the groove's walls, and the magnet pulling it home until it rejoins the bulk.
+const G = 22;
+const trackD = (x, z) => Math.hypot(Math.max(Math.abs(x) - L, 0), z) - R;
+function splash(dir, v) {
+  const s = clamp((v - 3) / 6, 0, 1);
+  const n = Math.min(8 - S.splash.length, Math.round(2 + 5 * s));
+  const x = S.head.x + dir * 0.3;
+  for (let i = 0; i < n; i++) {
+    const r = 0.026 + Math.random() * 0.04;
+    const fan = (i + 0.5) / n - 0.5;  // spread across the liquid's leading edge
+    S.splash.push({
+      x: x - dir * Math.random() * 0.08, y: 0.06 + Math.random() * 0.08, z: fan * 0.5, r, r0: r, age: 0, ground: false, absorb: false,
+      vx: dir * Math.min(v * (0.12 + Math.random() * 0.26), 2.4),
+      vy: (1.5 + Math.random() * 2.0) * (0.7 + 0.6 * s),
+      vz: fan * 3.2 + (Math.random() - 0.5) * 0.8,
+    });
+  }
+  if (n > 0) S.events.push(['splash', s, x]);
+}
+function stepSplash(dt) {
+  const P = S.splash;
+  for (let i = P.length - 1; i >= 0; i--) {
+    const p = P[i];
+    p.age += dt;
+    if (p.absorb) {  // flowing back into the bulk
+      p.r *= Math.exp(-dt * 14);
+      p.x += (S.body.x - p.x) * Math.min(dt * 10, 1); p.z *= Math.exp(-dt * 10);
+      if (p.r < 0.006) P.splice(i, 1);
+      continue;
+    }
+    // forces: gravity, the magnet (stronger once the drop sits on a surface), air and rolling drag
+    const hx = S.body.x - p.x, hz = -p.z, hd = Math.hypot(hx, hz) + 1e-3;
+    const pull = (p.ground ? 16 : 1.2) / (0.35 + hd);
+    p.vx += hx / hd * pull * dt; p.vz += hz / hd * pull * dt;
+    p.vy -= G * dt;
+    const drag = Math.exp(-dt * (p.ground ? 3.6 : 0.25));
+    p.vx *= drag; p.vz *= drag;
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+    // below the rim the groove's walls hold it in
+    let td = trackD(p.x, p.z);
+    if (p.y < 0 && td > -p.r) {
+      const gx = Math.sign(p.x) * Math.max(Math.abs(p.x) - L, 0), gz = p.z, gl = Math.hypot(gx, gz) || 1;
+      const nx = gx / gl, nz = gz / gl, push = td + p.r;
+      p.x -= nx * push; p.z -= nz * push;
+      const vn = p.vx * nx + p.vz * nz;
+      if (vn > 0) { p.vx -= 1.3 * vn * nx; p.vz -= 1.3 * vn * nz; }
+      td = -p.r;
+    }
+    // stay on the stage
+    const xm = L + R + 0.28, z0 = -R - 0.34, z1 = R + 0.54;
+    if (Math.abs(p.x) > xm) { p.x = Math.sign(p.x) * xm; p.vx *= -0.3; }
+    if (p.z < z0) { p.z = z0; p.vz *= -0.3; } else if (p.z > z1) { p.z = z1; p.vz *= -0.3; }
+    // floor: the groove's floor inside it, the surface outside; liquid barely bounces
+    const floorY = (td < -p.r * 0.5 ? -D : 0) + p.r * 0.55;
+    if (p.y < floorY) {
+      if (p.vy < -0.6) { p.vx *= 0.72; p.vz *= 0.72; }  // landing scuffs off some speed
+      if (p.vy < -2.4) { p.vy *= -0.26; S.events.push(['tick', p.r, p.x]); }
+      else { p.vy = 0; p.ground = true; }
+      p.y = floorY;
+    } else if (p.y > floorY + 0.02) p.ground = false;
+    // rejoin once it touches the bulk (or gives up after a while)
+    for (let k = 0; k < 3; k++) {
+      const cr = chain[k * 4 + 2], ry = cr * squash, cy = -D + 0.2 * ry;
+      const e = Math.hypot((p.x - chain[k * 4]) / cr, (p.y - cy) / ry, (p.z - chain[k * 4 + 1]) / cr);
+      if (e < 1 + p.r / cr * 0.6) { p.absorb = true; S.events.push(['plip', 1, p.x]); break; }
+    }
+    if (p.age > 6) p.absorb = true;
+  }
+}
+let BLOBS = null;
+function step(dt) {
+  BLOBS = BLOBS || [S.head, S.body, S.tail, S.dA, S.dB];
+  S.t += dt;
+  const target = S.drag ? S.drag.x : (S.on ? L : -L);
+  spring(S.mag, target, S.drag ? 34 : 24, 1.0, dt);
+  spring(S.head, S.mag.x, 26, 0.5, dt);
+  spring(S.body, S.mag.x, 17, 0.6, dt);
+  spring(S.tail, S.body.x, 12.5, 0.66, dt);
+  spring(S.dA, S.tail.x, 10, 0.55, dt);
+  spring(S.dB, S.dA.x, 8.6, 0.5, dt);
+
+  const lim = L + 0.035;
+  for (const b of BLOBS) {
+    if (Math.abs(b.x) > lim) {
+      const into = b.v * Math.sign(b.x);
+      if (b === S.head && into > 0.7) { S.wob.v += into * 0.9; S.events.push(['plop', into, b.x]); }
+      b.x = Math.sign(b.x) * lim;
+      if (into > 0) b.v *= -0.22;
+    }
+  }
+
+  stepSplash(dt);
+
+  const sepA = Math.abs(S.dA.x - S.tail.x), sepB = Math.abs(S.dB.x - S.dA.x);
+  S.zT = -0.05 * clamp(Math.abs(S.tail.x - S.body.x) / 0.5, 0, 1);
+  S.zA = 0.075 * clamp(sepA / 0.45, 0, 1);
+  S.zB = -0.065 * clamp(sepB / 0.45, 0, 1);
+  if (sepA > 0.3) S.sepA = true; else if (S.sepA && sepA < 0.06) { S.sepA = false; S.events.push(['plip', 0, S.dA.x]); }
+  if (sepB > 0.3) S.sepB = true; else if (S.sepB && sepB < 0.06) { S.sepB = false; S.events.push(['plip', 1, S.dB.x]); }
+
+  const speed = Math.abs(S.body.v);
+  S.flowAmt += (clamp(speed / 3, 0, 1) - S.flowAmt) * Math.min(dt * 10, 1);
+  S.flowPh += dt * 34 * Math.sign(S.body.v || 1);
+  spring(S.wob, -Math.min(speed * 0.04, 0.16), 30, 0.3, dt);
+
+  // magnetic field: strongest at the right-hand pole, weakened by motion
+  const cxm = (S.body.x + S.head.x) * 0.5;
+  const u = (cxm + L) / (2 * L);
+  const calm = 1 - Math.min(speed * 0.18, 0.75);
+  const near = S.reach.x;
+  const over = S.hover.x;
+  for (let i = 0; i < 4; i++) {
+    const f = sstep(0.86 + 0.03 * i, 0.985 + 0.005 * i, u) * calm * (1 + 0.1 * near);
+    spring(S.ring[i], f, W_[i], Z_[i], dt);
+    if (S.ring[i].x < 0) { S.ring[i].x = 0; S.ring[i].v = Math.max(S.ring[i].v, 0); }
+    // under a hovering cursor the bumps rise centre first, one ring at a time
+    S.rOut[i] = Math.max(S.ring[i].x, sstep(0.18 * i, 0.18 * i + 0.45, over) * (0.4 - 0.08 * i));
+  }
+  const F0 = sstep(0.86, 0.985, u) * calm;
+  if (!S.erupted && F0 > 0.5) {
+    S.erupted = true; S.flash = 1; S.events.push(['erupt', 0, S.body.x]);
+    if (S.on && !reduceMotion.matches) { S.zoom.v += 0.42; S.ripR = 0.45; S.ripA = 1; }
+  }
+  else if (S.erupted && F0 < 0.25) { S.erupted = false; S.events.push(['retract', 0, S.body.x]); }
+  // the film floods out from the crown, and drains back into the liquid the moment it is switched off
+  const flooding = S.erupted && (S.on || S.drag);
+  if (flooding) S.ink = Math.max(S.ink, 0.35) + (9.5 - Math.max(S.ink, 0.35)) * Math.min(dt * 1.7, 1);  // burst, then slows like thick liquid
+  else S.ink = Math.max(0, S.ink - dt * 13);
+  spring(S.inkC, flooding ? L : S.body.x, 7, 1.0, dt);
+
+  // spikes trail behind motion and lean toward the cursor
+  const cx = S.cursor.x - S.body.x, cz = S.cursor.z, cd = Math.hypot(cx, cz);
+  const pull = near * 0.34 * sstep(0.05, 0.35, cd) / Math.max(cd, 1e-3);
+  let lx = -S.body.v * 0.10 + cx * pull, lz = cz * pull;
+  const lm = Math.hypot(lx, lz);
+  if (lm > 0.45) { lx *= 0.45 / lm; lz *= 0.45 / lm; }
+  spring(S.lean[0], lx, 11, 0.32, dt);
+  spring(S.lean[1], lz, 11, 0.32, dt);
+
+  // the floor lights up behind the liquid as it travels
+  const uh = clamp((S.head.x + L) / (2 * L), 0, 1);
+  spring(S.edge, -L - R - 0.4 + uh * (2 * (L + R) + 0.8), 16, 0.85, dt);
+  S.glowI = sstep(0.0, 0.3, uh) * (1 + 0.55 * S.flash);
+  S.front += (Math.min(Math.abs(S.head.v) * 0.32, 1.25) - S.front) * Math.min(dt * 14, 1);
+  S.flash *= Math.exp(-dt * 3.2);
+  spring(S.mood, F0, 6, 1.0, dt);
+  spring(S.zoom, 0, 5.5, 0.72, dt);
+  S.ripR += dt * 4.6; S.ripA *= Math.exp(-dt * 2.1);
+
+  // cursor acts as a weak magnet
+  const want = S.cursor.inside && !S.drag && !reduceMotion.matches ? sstep(1.25, 0.45, cd) : 0;
+  spring(S.reach, want * (1 - Math.min(speed * 0.5, 1)), 8, 0.9, dt);
+  const wantOver = S.cursor.inside && !S.drag && !reduceMotion.matches ? sstep(0.85, 0.08, cd) * calm : 0;
+  spring(S.hover, wantOver, 6.5, 1.0, dt);
+
+  spring(S.focus, S.focusVisible ? 1 : 0, 18, 1.0, dt);
+  const px = reduceMotion.matches || !S.cursor.inside ? 0 : clamp(S.cursor.sx / cssW * 2 - 1, -1, 1);
+  const py = reduceMotion.matches || !S.cursor.inside ? 0 : clamp(S.cursor.sy / cssH * 2 - 1, -1, 1);
+  spring(S.par[0], px, 3.2, 1.0, dt);
+  spring(S.par[1], py, 3.2, 1.0, dt);
+}
+
+// every frame advances by exactly its own real duration, in equal substeps of at most 1/240 s,
+// so motion stays even whatever the display's refresh rate or a late frame
+function advance(dt) {
+  const n = Math.max(1, Math.ceil(dt * 240 - 1e-6)), h = dt / n;
+  for (let i = 0; i < n; i++) step(h);
+}
+
+// ─── uniforms ───────────────────────────────────────────────────────────────
+const chain = new Float32Array(12), drop = new Float32Array(12), dropK = new Float32Array([0.075, 0.06, 0.2]);
+const fbox = [0, 0, 0, 0], splashU = new Float32Array(32);
+let squash = 0.675;
+function shape() {
+  const sq = clamp(Math.abs(S.head.x - S.tail.x) / 1.3, 0, 1);
+  const heap = clamp(S.rOut[0], 0, 1.2);
+  const w = S.wob.x;
+  const xz = 0.40 * (1 - 0.06 * heap) * (1 - 0.45 * w);
+  squash = 0.675 * (1 - 0.14 * sq) * (1 + 0.14 * heap) * (1 + w) / ((1 - 0.06 * heap) * (1 - 0.45 * w));
+  chain[0] = S.tail.x; chain[1] = S.zT; chain[2] = xz * (1 - 0.56 * sq);
+  chain[4] = S.body.x; chain[5] = 0; chain[6] = xz * (1 - 0.40 * sq);
+  chain[8] = S.head.x; chain[9] = 0; chain[10] = xz * (1 - 0.06 * sq);
+  drop[0] = S.dA.x; drop[1] = S.zA; drop[2] = 0.125; drop[3] = 0.09;
+  drop[4] = S.dB.x; drop[5] = S.zB; drop[6] = 0.09; drop[7] = 0.065;
+  const r = S.reach.x;
+  const dx = S.cursor.x - S.body.x, dz = S.cursor.z, dd = Math.hypot(dx, dz);
+  const side = r * sstep(0.3, 0.6, dd);
+  if (side > 0.01) {
+    const k = 0.3 + 0.12 * side;
+    drop[8] = clamp(S.body.x + dx / dd * k, -L - R + 0.2, L + R - 0.2); drop[9] = clamp(dz / dd * k, -R + 0.2, R - 0.2);
+    drop[10] = 0.19 * side; drop[11] = 0.13 * side;
+  } else drop[10] = drop[11] = 0;
+
+  let x0 = Infinity, x1 = -Infinity, top = -D + 1.2 * xz * squash;
+  for (let i = 0; i < 3; i++) {
+    x0 = Math.min(x0, chain[i * 4] - chain[i * 4 + 2]); x1 = Math.max(x1, chain[i * 4] + chain[i * 4 + 2]);
+    if (drop[i * 4 + 2] < 0.003) continue;
+    x0 = Math.min(x0, drop[i * 4] - drop[i * 4 + 2]); x1 = Math.max(x1, drop[i * 4] + drop[i * 4 + 2]);
+  }
+  const rmax = Math.max(S.rOut[0], S.rOut[1], S.rOut[2], S.rOut[3]);
+  if (rmax > 0.003) {
+    const cc = (S.body.x + S.head.x) * 0.5;
+    x0 = Math.min(x0, cc - 0.78); x1 = Math.max(x1, cc + 0.78);
+    top += 0.74 * rmax + 0.06;
+  }
+  let zext = R + 0.22;
+  splashU.fill(0);
+  S.splash.forEach((q, i) => {
+    splashU[i * 4] = q.x; splashU[i * 4 + 1] = q.y; splashU[i * 4 + 2] = q.z; splashU[i * 4 + 3] = q.r;
+    x0 = Math.min(x0, q.x - q.r); x1 = Math.max(x1, q.x + q.r);
+    top = Math.max(top, q.y + q.r); zext = Math.max(zext, Math.abs(q.z) + q.r + 0.04);
+  });
+  fbox[0] = x0 - 0.08; fbox[1] = x1 + 0.08; fbox[2] = top + 0.08; fbox[3] = zext;
+}
+
+const EXPO = 0.66;
+const GLOW = [1.0, 0.21, 0.018], HOT = [1.0, 0.55, 0.16];
+
+function render() {
+  updateCamera();
+  placeButton();
+  shape();
+  const sc = sceneProg.u;
+  gl.useProgram(sceneProg.p);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, HDR ? sceneFbo : null);
+  gl.viewport(0, 0, W, H);
+  gl.uniform2f(sc.uRes, W, H);
+  gl.uniform1f(sc.uScale, layoutScale() * pr);
+  gl.uniform1f(sc.uFocal, cam.focal);
+  gl.uniform1f(sc.uTime, S.t);
+  gl.uniform1f(sc.uOn, S.mood.x);
+  gl.uniform1f(sc.uFocus, S.focus.x);
+  gl.uniform1f(sc.uLabel, S.mood.x);
+  if (sc.uExpo) gl.uniform1f(sc.uExpo, EXPO);
+  gl.uniform3fv(sc.uRo, cam.ro);
+  gl.uniform3fv(sc.uTa, TA);
+  gl.uniform4fv(sc.uChain, chain);
+  gl.uniform1f(sc.uSquash, squash);
+  gl.uniform4fv(sc.uDrop, drop);
+  gl.uniform1fv(sc.uDropK, dropK);
+  gl.uniform2f(sc.uFlow, S.flowAmt, S.flowPh);
+  gl.uniform4f(sc.uRing, S.rOut[0], S.rOut[1], S.rOut[2], S.rOut[3]);
+  gl.uniform3f(sc.uInk, S.ink, sstep(0.2, 3.0, S.ink), S.inkC.x);
+  gl.uniform2f(sc.uRipple, S.ripR, S.ripA * sstep(0.2, 2.5, S.ink));
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, labelTex);
+  gl.uniform1i(sc.uLabelTex, 2);
+  gl.uniform2f(sc.uCrown, (S.body.x + S.head.x) * 0.5, 0);
+  gl.uniform2f(sc.uLean, S.lean[0].x, S.lean[1].x);
+  gl.uniform4fv(sc.uFBox, fbox);
+  gl.uniform4fv(sc.uSplash, splashU);
+  gl.uniform3f(sc.uGlow, S.edge.x, S.glowI, S.front);
+  gl.uniform3fv(sc.uGlowCol, GLOW);
+  gl.uniform3fv(sc.uHotCol, HOT);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if (!HDR) return;
+
+  gl.useProgram(brightProg.p);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFbo);
+  gl.viewport(0, 0, bw, bh);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.uniform1i(brightProg.u.uTex, 0);
+  gl.uniform2f(brightProg.u.uInv, 1 / bw, 1 / bh);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindTexture(gl.TEXTURE_2D, bloomTex);
+  gl.generateMipmap(gl.TEXTURE_2D);
+
+  gl.useProgram(compProg.p);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, bloomTex);
+  gl.uniform1i(compProg.u.uScene, 0);
+  gl.uniform1i(compProg.u.uBloom, 1);
+  gl.uniform2f(compProg.u.uRes, W, H);
+  gl.uniform1f(compProg.u.uTime, S.t);
+  gl.uniform1f(compProg.u.uExpo, EXPO);
+  gl.uniform1f(compProg.u.uBloomK, 1.1 + 1.5 * S.flash);
+  gl.uniform1f(compProg.u.uCA, 0.012 * S.flash * S.flash);
+  gl.uniform1f(compProg.u.uOn, S.mood.x);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// ─── sound ──────────────────────────────────────────────────────────────────
+// Everything is synthesized. Voices go through a dry bus and a send into a generated
+// room (convolution reverb), then a glue compressor and a limiter. The liquid is made of
+// bubbles (a sine whose pitch rises as it closes, which is how real bubbles ring), the
+// magnet of a sub thump, a mains hum and a crackle of tiny filtered noise grains.
+const Au = { ctx: null, out: null, bus: null, verbIn: null, noise: null, flowG: null, flowF: null, flowP: null,
+  humG: null, humF: null, muted: false, bubbleDebt: 0, crackleDebt: 0 };
+function makeRoom(ctx, secs) {
+  const n = Math.floor(ctx.sampleRate * secs), ir = ctx.createBuffer(2, n, ctx.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const d = ir.getChannelData(c);
+    let lp = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / ctx.sampleRate;
+      const early = t < 0.07 && Math.random() < 0.004 ? (Math.random() - 0.5) * 3 : 0;  // a few early reflections
+      lp += ((Math.random() * 2 - 1) - lp) * (0.55 - 0.4 * Math.min(t / secs, 1));       // darker as it decays
+      d[i] = (lp + early) * Math.pow(1 - t / secs, 2.2) * Math.exp(-t * 2.6);
+    }
+  }
+  return ir;
+}
+function audioInit(offline) {
+  if (Au.ctx && !offline) { if (Au.ctx.state !== 'running') Au.ctx.resume(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC && !offline) return;
+  const ctx = offline || new AC({ latencyHint: 'interactive' });
+  const glue = ctx.createDynamicsCompressor();
+  glue.threshold.value = -20; glue.knee.value = 12; glue.ratio.value = 2.5; glue.attack.value = 0.006; glue.release.value = 0.18;
+  const limit = ctx.createDynamicsCompressor();
+  limit.threshold.value = -3; limit.knee.value = 0; limit.ratio.value = 20; limit.attack.value = 0.001; limit.release.value = 0.08;
+  const tone = ctx.createBiquadFilter(); tone.type = 'highshelf'; tone.frequency.value = 9000; tone.gain.value = -3;
+  const out = ctx.createGain(); out.gain.value = Au.muted ? 0 : 0.85;
+  const bus = ctx.createGain();
+  bus.connect(glue); glue.connect(tone); tone.connect(limit); limit.connect(out); out.connect(ctx.destination);
+  const verb = ctx.createConvolver(); verb.buffer = makeRoom(ctx, 2.2);
+  const verbIn = ctx.createGain(); verbIn.gain.value = 0.5;
+  const verbHP = ctx.createBiquadFilter(); verbHP.type = 'highpass'; verbHP.frequency.value = 220;
+  verbIn.connect(verbHP); verbHP.connect(verb); verb.connect(bus);
+  const len = ctx.sampleRate * 2, noise = ctx.createBuffer(1, len, ctx.sampleRate), ch = noise.getChannelData(0);
+  for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+  // the liquid's body: a soft, low, wet bed under the bubbles while it flows
+  const src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;
+  const bp = ctx.createBiquadFilter(); bp.type = 'lowpass'; bp.frequency.value = 300; bp.Q.value = 0.8;
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 70;
+  const g = ctx.createGain(); g.gain.value = 0;
+  const pan = ctx.createStereoPanner();
+  src.connect(bp); bp.connect(hp); hp.connect(g); g.connect(pan); pan.connect(bus); src.start();
+  // the magnet's hum while it is on: mains fundamental and a few harmonics, slowly breathing
+  const humF = ctx.createBiquadFilter(); humF.type = 'lowpass'; humF.frequency.value = 420; humF.Q.value = 0.7;
+  const humG = ctx.createGain(); humG.gain.value = 0;
+  const humP = ctx.createStereoPanner(); humP.pan.value = 0.35;
+  humF.connect(humG); humG.connect(humP); humP.connect(bus);
+  const humSend = ctx.createGain(); humSend.gain.value = 0.25; humP.connect(humSend); humSend.connect(verbIn);
+  [[82.41, 'sine', 0.5], [123.47, 'sine', 0.3], [164.81, 'sine', 0.18], [247.0, 'sine', 0.06]].forEach(([f, type, a]) => {
+    const o = ctx.createOscillator(); o.type = type; o.frequency.value = f;
+    const og = ctx.createGain(); og.gain.value = a; o.connect(og); og.connect(humF); o.start();
+  });
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 0.23;
+  const lfoG = ctx.createGain(); lfoG.gain.value = 90; lfo.connect(lfoG); lfoG.connect(humF.frequency); lfo.start();
+  Object.assign(Au, { ctx, out, bus, verbIn, noise, flowG: g, flowF: bp, flowP: pan, humG, humF });
+}
+const live = () => Au.ctx && Au.ctx.state === 'running' && !Au.muted;
+const panOf = (x) => clamp(x / 1.6, -0.85, 0.85);
+// one voice: a gain into a panner, dry to the bus with a send to the room
+function voice(pan, send) {
+  const c = Au.ctx, g = c.createGain(), p = c.createStereoPanner();
+  p.pan.value = clamp(pan, -1, 1);
+  g.connect(p); p.connect(Au.bus);
+  if (send > 0) { const s = c.createGain(); s.gain.value = send; p.connect(s); s.connect(Au.verbIn); }
+  return g;
+}
+function envelope(gain, t, attack, peak, decay) {
+  gain.setValueAtTime(0.0001, t);
+  gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t + attack);
+  gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+}
+// a bubble: its pitch rises as it closes; bigger means lower and longer
+function bubble(t, f, dur, amp, pan, send = 0.2) {
+  const c = Au.ctx, o = c.createOscillator(), v = voice(pan, send);
+  o.frequency.setValueAtTime(f, t);
+  o.frequency.exponentialRampToValueAtTime(f * (1.5 + Math.random() * 0.5), t + dur);
+  o.connect(v); envelope(v.gain, t, 0.002, amp, dur);
+  o.start(t); o.stop(t + dur + 0.05);
+}
+// a grain of filtered noise: crackle, sizzle, splat
+function grain(t, f, q, dur, amp, pan, send = 0.25) {
+  const c = Au.ctx, n = c.createBufferSource(), bp = c.createBiquadFilter(), v = voice(pan, send);
+  n.buffer = Au.noise; bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+  n.connect(bp); bp.connect(v); envelope(v.gain, t, 0.0015, amp, dur);
+  n.start(t, Math.random() * 1.8); n.stop(t + dur + 0.05);
+}
+function sweep(t, type, f0, f1, dur, amp, attack, pan, send = 0.3) {
+  const c = Au.ctx, n = c.createBufferSource(), f = c.createBiquadFilter(), v = voice(pan, send);
+  n.buffer = Au.noise; f.type = type; f.Q.value = 0.9;
+  f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  n.connect(f); f.connect(v); envelope(v.gain, t, attack, amp, dur - attack);
+  n.start(t, Math.random() * 1.5); n.stop(t + dur + 0.05);
+}
+function sub(t, f0, f1, dur, amp, attack, pan = 0) {
+  const c = Au.ctx, o = c.createOscillator(), v = voice(pan, 0.05);
+  o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  o.connect(v); envelope(v.gain, t, attack, amp, dur);
+  o.start(t); o.stop(t + attack + dur + 0.05);
+}
+const rnd = (a, b) => a + Math.random() * (b - a);
+const SFX = {
+  // every flip: the magnet catches the liquid
+  flip(on, x) {
+    const t = Au.ctx.currentTime, pan = panOf(x);
+    if (on) {  // a soft, rounded tap
+      grain(t, 1900, 0.7, 0.008, 0.07, pan, 0.15);
+      sub(t, 240, 190, 0.1, 0.13, 0.003, pan);
+      return;
+    }
+    grain(t, 4200, 1.2, 0.012, 0.22, pan, 0.1);
+    sub(t, 120, 70, 0.12, 0.3, 0.004, pan);
+    bubble(t + 0.01, rnd(160, 200), 0.11, 0.17, pan, 0.25);
+  },
+  // the crown rises and the dark comes in: a clean, calm chord that blooms in the room
+  erupt(_, x) {
+    const t = Au.ctx.currentTime, pan = panOf(x) * 0.4;
+    [[329.63, 0.07, 2.6], [493.88, 0.05, 2.2], [659.25, 0.042, 1.9], [987.77, 0.017, 1.4]].forEach(([f, a, d], i) => {
+      [-1, 1].forEach((side) => {  // each note a gently detuned pair, spread left and right
+        const o = Au.ctx.createOscillator(), v = voice(pan + side * 0.25, 0.7);
+        o.frequency.value = f * (1 + side * 0.0012);
+        o.connect(v);
+        v.gain.setValueAtTime(0.0001, t + i * 0.035);
+        v.gain.exponentialRampToValueAtTime(a, t + i * 0.035 + 0.06);
+        v.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.035 + d);
+        o.start(t + i * 0.035); o.stop(t + i * 0.035 + d + 0.05);
+      });
+    });
+    sweep(t + 0.05, 'lowpass', 500, 140, 2.2, 0.035, 0.6, 0, 0.6);  // the dark settling in, barely there
+    Au.humG.gain.setTargetAtTime(0.022, t + 0.4, 0.8);
+  },
+  // the spikes melt; the film is drawn back into the drop
+  retract(_, x) {
+    const t = Au.ctx.currentTime, pan = panOf(x);
+    for (let i = 0; i < 16; i++) grain(t + rnd(0, 0.22), rnd(1400, 4200) * (1 - i * 0.03), rnd(5, 10), rnd(0.008, 0.02), rnd(0.015, 0.045), pan + rnd(-0.3, 0.3), 0.3);
+    sweep(t, 'bandpass', 380, 2600, 0.42, 0.07, 0.3, pan, 0.4);  // reversed swell: the suck
+    bubble(t + 0.36, 130, 0.22, 0.16, pan, 0.3);                  // the gulp as it lands home
+    Au.humG.gain.setTargetAtTime(0.0001, t, 0.12);
+  },
+  plop(v, x) { bubble(Au.ctx.currentTime, rnd(140, 180), 0.16, Math.min(0.08 + v * 0.03, 0.22), panOf(x), 0.25); },
+  plip(i, x) { bubble(Au.ctx.currentTime, rnd(620, 980) + i * 120, 0.06, 0.05, panOf(x), 0.35); },
+  splash(s, x) {
+    const t = Au.ctx.currentTime, pan = panOf(x);
+    grain(t, 1800, 0.7, 0.06, 0.09 + 0.08 * s, pan, 0.3);
+    bubble(t, rnd(220, 280), 0.09, 0.12, pan, 0.25);
+    for (let i = 0; i < 3 + 4 * s; i++) bubble(t + rnd(0.005, 0.07), rnd(700, 1700), rnd(0.03, 0.06), rnd(0.03, 0.06), pan + rnd(-0.4, 0.4), 0.4);
+  },
+  tick(r, x) { bubble(Au.ctx.currentTime, 1400 + (0.066 - r) * 9000, 0.03, 0.035, panOf(x), 0.4); },
+};
+// continuous voices, driven by the simulation every frame
+function flushAudio(dt) {
+  if (!live()) { S.events.length = 0; return; }
+  for (const [type, a, x] of S.events) SFX[type](a, x);
+  S.events.length = 0;
+  const c = Au.ctx, now = c.currentTime;
+  const v = Math.abs(S.body.v) + 0.5 * Math.abs(S.head.v);
+  Au.flowG.gain.setTargetAtTime(Math.min(v * 0.03, 0.12), now, 0.04);
+  Au.flowF.frequency.setTargetAtTime(220 + v * 90, now, 0.05);
+  Au.flowP.pan.setTargetAtTime(panOf(S.body.x), now, 0.05);
+  // thick bubbling while it flows, more and smaller as it speeds up
+  Au.bubbleDebt += Math.min(v, 9) * 7 * dt;
+  while (Au.bubbleDebt > 1) {
+    Au.bubbleDebt -= 1;
+    const big = Math.random() < 0.35;
+    bubble(now + rnd(0, 0.016), big ? rnd(110, 190) : rnd(240, 560 + v * 30), big ? rnd(0.08, 0.14) : rnd(0.025, 0.06),
+      Math.min(0.025 + v * 0.008, 0.09) * (big ? 1.3 : 1), panOf(S.body.x + rnd(-0.4, 0.4)), 0.2);
+  }
+  // a hovering cursor stirs a faint magnetic crackle; the live crown keeps a few going
+  const stir = S.hover.x * 22;
+  Au.crackleDebt += stir * dt;
+  while (Au.crackleDebt > 1) {
+    Au.crackleDebt -= 1;
+    grain(now + rnd(0, 0.016), rnd(3000, 8500), rnd(8, 14), rnd(0.004, 0.012), rnd(0.008, 0.022) * (0.4 + S.hover.x), panOf(S.body.x + rnd(-0.3, 0.3)), 0.35);
+  }
+}
+function setMuted(m) {
+  Au.muted = m;
+  if (Au.ctx) Au.out.gain.setTargetAtTime(m ? 0 : 0.85, Au.ctx.currentTime, 0.02);
+}
+
+// ─── input ──────────────────────────────────────────────────────────────────
+function setOn(on) {
+  hint.classList.add('gone');
+  if (S.on === on) return;
+  S.on = on;
+  btn.setAttribute('aria-checked', String(on));
+  const dir = on ? 1 : -1, carried = -S.body.v * dir;  // momentum still flying the other way
+  S.events.push(['flip', on, S.head.x]);
+  if (!S.drag && carried > 3 && !reduceMotion.matches) splash(-dir, carried);
+  if (!S.drag) { S.head.v += on ? 4.2 : -4.2; S.wob.v -= 2.2; }
+}
+const rubber = (x) => {
+  const ex = Math.abs(x) - L;
+  return ex > 0 ? Math.sign(x) * (L + ex / (1 + ex * 6)) : x;
+};
+btn.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || S.press) return;
+  audioInit();
+  btn.setPointerCapture(e.pointerId);
+  const g = toGround(e.clientX, e.clientY);
+  S.press = { id: e.pointerId, sx: e.clientX, sy: e.clientY, off: S.mag.x - g[0], dragging: false, lx: g[0], lt: e.timeStamp, vel: 0 };
+  e.preventDefault();
+});
+btn.addEventListener('pointermove', (e) => {
+  const p = S.press;
+  if (!p || p.id !== e.pointerId) return;
+  const g = toGround(e.clientX, e.clientY);
+  if (!p.dragging && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 5) {
+    p.dragging = true;
+    btn.classList.add('dragging');
+  }
+  if (!p.dragging) return;
+  S.drag = { x: rubber(g[0] + p.off) };
+  const dt = (e.timeStamp - p.lt) / 1000;
+  if (dt > 0) { p.vel += ((g[0] - p.lx) / dt - p.vel) * 0.5; p.lx = g[0]; p.lt = e.timeStamp; }
+});
+function release(e, cancelled) {
+  const p = S.press;
+  if (!p || p.id !== e.pointerId) return;
+  S.press = null;
+  btn.classList.remove('dragging');
+  if (p.dragging) {
+    const stale = e.timeStamp - p.lt > 90;
+    let on = S.drag.x > 0;
+    if (!stale && Math.abs(p.vel) > 2.2) on = p.vel > 0;
+    S.drag = null;
+    setOn(on);
+    hint.classList.add('gone');
+  } else if (!cancelled) {
+    setOn(!S.on);
+  }
+}
+btn.addEventListener('pointerup', (e) => release(e, false));
+btn.addEventListener('pointercancel', (e) => release(e, true));
+
+let lastKeyToggle = -1e9;
+function keyToggle(e) {
+  if (e.repeat) { e.preventDefault(); return; }
+  e.preventDefault();
+  audioInit();
+  lastKeyToggle = e.timeStamp;
+  setOn(!S.on);
+}
+btn.addEventListener('keydown', (e) => {
+  if (e.key === ' ' || e.key === 'Enter') keyToggle(e);
+  else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { e.preventDefault(); audioInit(); setOn(true); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { e.preventDefault(); audioInit(); setOn(false); }
+});
+btn.addEventListener('keyup', (e) => { if (e.key === ' ') e.preventDefault(); });
+// assistive tech activation arrives as a click with no pointer
+btn.addEventListener('click', (e) => {
+  if (e.detail === 0 && e.timeStamp - lastKeyToggle > 600) { audioInit(); setOn(!S.on); }
+});
+addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'm' || e.key === 'M') { if (!e.repeat) { audioInit(); setMuted(!Au.muted); } return; }
+  if (e.target === btn) return;
+  const idle = !document.activeElement || document.activeElement === document.body;
+  if (idle && (e.key === ' ' || e.key === 'Enter')) keyToggle(e);
+});
+addEventListener('pointermove', (e) => {
+  S.cursor.sx = e.clientX; S.cursor.sy = e.clientY; S.cursor.inside = true;
+});
+document.documentElement.addEventListener('pointerleave', () => { S.cursor.inside = false; });
+addEventListener('blur', () => { S.cursor.inside = false; });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && Au.ctx) { Au.flowG.gain.setValueAtTime(0, Au.ctx.currentTime); Au.humG.gain.setValueAtTime(0, Au.ctx.currentTime); }
+  else if (!document.hidden && Au.ctx && S.erupted && S.on) Au.humG.gain.setTargetAtTime(0.022, Au.ctx.currentTime, 0.4);
+});
+
+// ─── loop ───────────────────────────────────────────────────────────────────
+let paused = false, last = performance.now(), ema = 16, frames = 0, sinceAdapt = 0, shown = false;
+let vsync = 16.7, slowFrames = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const raw = now - last;
+  const dt = Math.min(raw / 1000, 1 / 20);
+  last = now;
+  if (resizePending) { resizePending = false; resize(); }  // before drawing, so no cleared frame is ever shown
+  if (!paused) {
+    const g = toGround(S.cursor.sx, S.cursor.sy);
+    S.cursor.x = g[0]; S.cursor.z = g[1];
+    S.focusVisible = btn.matches(':focus-visible');
+    advance(dt);
+  }
+  render();
+  flushAudio(dt);
+  if (!shown) { shown = true; canvas.classList.add('ready'); }
+  // keep it smooth: lower resolution if the GPU can't keep up (judged only
+  // while the tab is in front, so background throttling never counts)
+  if (document.visibilityState === 'visible' && document.hasFocus() && raw < 250) {
+    frames++; sinceAdapt++;
+    ema += (raw - ema) * 0.05;
+    vsync = Math.min(Math.max(raw, 4), vsync + 0.02);  // shortest recent interval = the display's refresh
+  }
+  // resolution only ever steps down, and only after the GPU has clearly fallen behind for a
+  // while; stepping back up made it hunt, and every step is a visible change
+  slowFrames = ema > vsync * 1.3 ? slowFrames + 1 : 0;
+  if (!LOCK_RES && frames > 120 && sinceAdapt > 180 && slowFrames > 90 && quality > 0.7) {
+    quality = Math.max(0.7, quality * 0.9); sinceAdapt = 0; slowFrames = 0; resizePending = true;
+  }
+}
+resize();
+updateCamera();
+requestAnimationFrame(frame);
+
+// deterministic hooks for frame-by-frame inspection (?debug only)
+if (DEBUG) window.__ferro = {
+  pause() { paused = true; },
+  play() { paused = false; last = performance.now(); },
+  toggle() { setOn(!S.on); return S.on; },
+  set(on) { setOn(!!on); return S.on; },
+  // renders a sequence of sound events offline and reports levels: { peak, rms } in dBFS
+  async soundCheck(events, secs = 3) {
+    const keep = { ...Au }, oc = new OfflineAudioContext(2, 48000 * secs, 48000);
+    audioInit(oc);
+    const live0 = Au.ctx;
+    events.forEach(([at, type, a, x]) => oc.suspend(at).then(() => { SFX[type](a, x); oc.resume(); }));
+    const buf = await oc.startRendering();
+    Object.assign(Au, keep);
+    let peak = 0, sum = 0;
+    for (let c = 0; c < 2; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > peak) peak = v; sum += v * v; } }
+    const db = (v) => +(20 * Math.log10(Math.max(v, 1e-9))).toFixed(1);
+    return { peak: db(peak), rms: db(Math.sqrt(sum / (buf.length * 2))), ctx: !!live0 };
+  },
+  focusRing(v) { S.focus.x = v; render(); },
+  cursor(sx, sy) { S.cursor.sx = sx; S.cursor.sy = sy; S.cursor.inside = true; const g = toGround(sx, sy); S.cursor.x = g[0]; S.cursor.z = g[1]; },
+  step(ms) { advance(ms / 1000); render(); return this.info(); },
+  info() {
+    return {
+      on: S.on, t: +S.t.toFixed(3), hdr: HDR, audio: Au.ctx ? Au.ctx.state : 'none', muted: Au.muted, size: [W, H], pr: +pr.toFixed(2), quality: +quality.toFixed(2), ema: +ema.toFixed(1),
+      body: +S.body.x.toFixed(3), head: +S.head.x.toFixed(3), tail: +S.tail.x.toFixed(3),
+      rings: S.ring.map(r => +r.x.toFixed(3)), edge: +S.edge.x.toFixed(3), glow: +S.glowI.toFixed(3),
+      button: btn.getBoundingClientRect().toJSON(),
+    };
+  },
+};
+})();
+</script>
+</body>
+</html>
