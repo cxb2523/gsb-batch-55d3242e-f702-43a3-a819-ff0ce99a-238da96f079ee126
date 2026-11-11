@@ -97,7 +97,7 @@ export class Audio implements IAudio {
         `start (${start}) must be less than or equal to end (${end})`
       );
     }
-    if (this.transcript && !force && !start && !end) {
+    if (this.transcript && !force && start === undefined && end === undefined) {
       return;
     }
     const res = await this.#vhttp.get<TranscriptResponse>(
@@ -144,15 +144,25 @@ export class Audio implements IAudio {
 
   /**
    * Get plain text transcript for the audio
-   * @param start - Start time in seconds
-   * @param end - End time in seconds
+   * @param start - Start time in seconds (must be >= 0 and <= end)
+   * @param end - End time in seconds (must be >= 0 and >= start)
+   * @param segmenter - How to split the transcript into segments.
+   *   Must be one of `Segmenter.word` (default, one segment per word),
+   *   `Segmenter.sentence` (one segment per sentence), or
+   *   `Segmenter.time` (fixed-duration segments controlled by `length`)
+   * @param length - Duration in seconds for each segment when
+   *   segmenter is `Segmenter.time` (default 1)
+   * @throws {VideodbError} If segmenter is not a valid value, or if
+   *   start/end are negative or start > end
    * @returns Full transcript text as string
    */
   public getTranscriptText = async (
     start?: number,
-    end?: number
+    end?: number,
+    segmenter: string = Segmenter.word,
+    length: number = 1
   ): Promise<string> => {
-    await this._fetchTranscript(start, end);
+    await this._fetchTranscript(start, end, segmenter, length);
     return this.transcriptText || '';
   };
 

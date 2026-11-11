@@ -1324,22 +1324,48 @@ export class Video implements IVideo {
 
   /**
    * Get plain text transcript for the video
-   * @param start - Start time in seconds
-   * @param end - End time in seconds
+   * @param start - Start time in seconds (must be >= 0 and <= end)
+   * @param end - End time in seconds (must be >= 0 and >= start)
+   * @param segmenter - How to split the transcript into segments.
+   *   Must be one of `Segmenter.word` (default, one segment per word),
+   *   `Segmenter.sentence` (one segment per sentence), or
+   *   `Segmenter.time` (fixed-duration segments controlled by `length`)
+   * @param length - Duration in seconds for each segment when
+   *   segmenter is `Segmenter.time` (default 1)
+   * @throws {VideodbError} If segmenter is not a valid value, or if
+   *   start/end are negative or start > end
    * @returns Full transcript text as string
    */
   public getTranscriptText = async (
     start?: number,
-    end?: number
+    end?: number,
+    segmenter: string = Segmenter.word,
+    length: number = 1
   ): Promise<string> => {
+    if (!VALID_SEGMENTERS.has(segmenter)) {
+      throw new VideodbError(
+        `Invalid segmenter '${segmenter}'. Must be one of: ${[...VALID_SEGMENTERS].sort().join(', ')}`
+      );
+    }
+    if (start !== undefined && start < 0) {
+      throw new VideodbError(`start must be non-negative, got ${start}`);
+    }
+    if (end !== undefined && end < 0) {
+      throw new VideodbError(`end must be non-negative, got ${end}`);
+    }
+    if (start !== undefined && end !== undefined && start > end) {
+      throw new VideodbError(
+        `start (${start}) must be less than or equal to end (${end})`
+      );
+    }
     const res = await this.#vhttp.get<TranscriptResponse>(
       [video, this.id, transcription],
       {
         params: {
           start,
           end,
-          segmenter: Segmenter.word,
-          length: 1,
+          segmenter,
+          length,
         },
       }
     );
