@@ -1,0 +1,74 @@
+[
+  {
+    "week": "2026-W46",
+    "start": "2026-11-09",
+    "end": "2026-11-15",
+    "final": false,
+    "activeSources": [
+      "google",
+      "wikipedia"
+    ],
+    "top": [
+      "adana deprem",
+      "Cevad Prekazi",
+      "kandilli rasathanesi",
+      "Yapay zekâ",
+      "kuyt"
+    ],
+    "url": "hafta/2026-W46.html"
+  },
+  {
+    "week": "2026-W45",
+    "start": "2026-11-02",
+    "end": "2026-11-08",
+    "final": true,
+    "activeSources": [
+      "google",
+      "wikipedia"
+    ],
+    "top": [
+      "mustafa eskihellaç",
+      "Fatma Betül Sayan Kaya",
+      "kar alarmı",
+      "Ahmet Nazif Zorlu",
+      "akom"
+    ],
+    "url": "hafta/2026-W45.html"
+  },
+  {
+    "week": "2026-W44",
+    "start": "2026-10-26",
+    "end": "2026-11-01",
+    "final": true,
+    "activeSources": [
+      "google",
+      "wikipedia"
+    ],
+    "top": [
+      "fırtına",
+      "29 Ekim Cumhuriyet Bayramı",
+      "bursaspor (futbol takımı)",
+      "2026 İsrail yasama seçimi",
+      "öğle ezanı"
+    ],
+    "url": "hafta/2026-W44.html"
+  },
+  {
+    "week": "2026-W43",
+    "start": "2026-10-19",
+    "end": "2026-10-25",
+    "final": true,
+    "activeSources": [
+      "google",
+      "wikipedia"
+    ],
+    "top": [
+      "eyüpspor - kasımpaşa",
+      "Nev",
+      "ümraniyespor - sivasspor",
+      "2027 UEFA ülkeler sıralaması",
+      "fenerbahçe galatasaray"
+    ],
+    "url": "hafta/2026-W43.html"
+  }
+]
