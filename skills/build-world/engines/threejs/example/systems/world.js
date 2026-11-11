@@ -113,29 +113,39 @@ export class WorldSystem {
     this.props.instanceMatrix.needsUpdate = true;
     this.root.add(this.props);
 
-    // ---- practical lights + ballast -------------------------------------
+    // ---- street lamps + ballast -----------------------------------------
+    // Street lamps are ONE fixed collection owned by this system and parented
+    // to its root. Their `visible` flag never changes: at night they all light
+    // up, during the day they stay in the point-light count with intensity 0,
+    // so the shader permutation key is identical every frame of the cycle.
     this.lampSlots = Math.min(4, ctx.config.q.maxDynamicLights);
     this.lamps = [];
     for (let i = 0; i < this.lampSlots; i++) {
       const l = new THREE.PointLight(0xffb765, 0, 14, 2);
+      l.name = `street_lamp_${i}`;
       l.position.set(-6 + i * 5.5, 2.6, i % 2 ? 4 : -4);
       l.castShadow = false;
+      l.visible = true; // dimmed to 0, never hidden — see lib/lights.js
       this.root.add(l);
       this.lamps.push(l);
     }
-    // Slots the shader will ALWAYS see, whatever the cull decides.
+    // Slots the shader will ALWAYS see, whatever the cull decides. Start the
+    // count at the number of real lamps, not 0: the lamps are already visible,
+    // and prewarm must compile the same light-count permutation the first frame
+    // renders or it compiles again during play.
     this.ballast = new LightBallast(this.root, this.lampSlots, 2);
-    this.ballast.update(0);
+    this.ballast.update(this.lamps.length);
 
     console.info(`[world] ${this.colliders.length} colliders · ${COUNT} instanced props`);
   }
 
   update(dt, ctx) {
-    // Lamps on at night. Driven by the render system's time of day — a pure
-    // function of state, never of performance.now().
-    const hour = ctx.get('render').timeOfDay;
-    const night = hour < 6.5 || hour > 18.5 ? 1 : 0;
-    for (const l of this.lamps) l.intensity = night * 12;
+    // Lamps follow the render system's time of day — a pure function of state,
+    // never of performance.now(). Dusk ramps 0 -> 12 over 18.5..20, dawn ramps
+    // 12 -> 0 over 5..6.5; the rest of the cycle is fully on or fully off.
+    // Intensity 0 is the off state so the visible point-light count is constant.
+    const intensity = lampIntensityAt(ctx.get('render').timeOfDay);
+    for (const l of this.lamps) l.intensity = intensity;
   }
 
   /** In lateUpdate, after everything has moved: hold the visible point-light
@@ -159,6 +169,23 @@ export class WorldSystem {
     this.root.parent?.remove(this.root);
     this.own.disposeAll();
   }
+}
+
+/**
+ * Street-lamp brightness as a function of the hour only.
+ *
+ * Continuous at every boundary: 18.5 = 0 rising to 12 at 20, 12 at 5 falling
+ * to 0 at 6.5, 0 through the day and 12 through the night. No clock reads, so
+ * a capture at a given hour always produces the same lighting.
+ */
+export const MAX_LAMP_INTENSITY = 12;
+
+export function lampIntensityAt(hour) {
+  const h = ((hour % 24) + 24) % 24; // accept any hour value, including negative
+  const max = MAX_LAMP_INTENSITY;
+  if (h >= 18.5 && h <= 20) return (max * (h - 18.5)) / 1.5; // dusk
+  if (h >= 5 && h <= 6.5) return (max * (6.5 - h)) / 1.5; // dawn
+  return h > 20 || h < 5 ? max : 0;
 }
 
 /**

@@ -1,6 +1,37 @@
 import * as THREE from 'three';
 import { compileMeshes, Owned } from '../../lib/index.js';
 
+/** Half-size of the sun's orthographic shadow frustum, in world units. The kit's
+ *  default; scenes with a wider or tighter play area can override it with
+ *  `ctx.config.q.shadowExtent`. */
+export const DEFAULT_SHADOW_EXTENT = 30;
+
+/** Honours an explicit `q.shadowExtent`, otherwise keeps the old 30. */
+export function shadowExtentOf(q) {
+  return q?.shadowExtent ?? DEFAULT_SHADOW_EXTENT;
+}
+
+/** Texel edge in world units for the fitted shadow camera. Snap offsets must
+ *  use the same extent the frustum was fitted with, or edges crawl. */
+export function shadowTexelSize(q) {
+  return (2 * shadowExtentOf(q)) / q.shadowMapSize;
+}
+
+/** Depth bias for a map size: the same value that was right at 2048, scaled
+ *  inversely so a preset's map size does not change the acne/peter-panning
+ *  balance. */
+export function shadowBiasFor(q) {
+  return -0.0006 * (2048 / q.shadowMapSize);
+}
+
+/** Fit the sun's orthographic shadow camera to q.shadowExtent. */
+export function configureShadowCamera(sun, q) {
+  const ext = shadowExtentOf(q);
+  Object.assign(sun.shadow.camera, { left: -ext, right: ext, top: ext, bottom: -ext });
+  sun.shadow.camera.updateProjectionMatrix?.();
+  return ext;
+}
+
 /**
  * The render system owns the renderer and NOTHING ELSE owns it. Every other
  * subsystem reaches it through `ctx.get('render')` and uses the exposed API.
@@ -51,10 +82,9 @@ export class RenderSystem {
     this.sun.shadow.mapSize.set(q.shadowMapSize, q.shadowMapSize);
     this.sun.shadow.camera.near = 0.5;
     this.sun.shadow.camera.far = q.shadowDistance;
-    const ext = 30;
-    Object.assign(this.sun.shadow.camera, { left: -ext, right: ext, top: ext, bottom: -ext });
+    configureShadowCamera(this.sun, q);
     // A shadow bias that is right for one map size is wrong for another.
-    this.sun.shadow.bias = -0.0006 * (2048 / q.shadowMapSize);
+    this.sun.shadow.bias = shadowBiasFor(q);
     this.sun.shadow.normalBias = 0.02;
     ctx.scene.add(this.sun, this.sun.target);
 
@@ -117,7 +147,11 @@ export class RenderSystem {
     this.sun.target.position.set(cam.position.x, 0, cam.position.z);
     const dir = this._sunDir.copy(this.sun.position).normalize().multiplyScalar(60);
     this.sun.position.copy(this.sun.target.position).add(dir);
-    const texel = (2 * 30) / ctx.config.q.shadowMapSize;
+    // The same half-extent the orthographic frustum was fitted with. Deriving
+    // the texel from the frustum keeps the snap step consistent with the view
+    // volume: a hand-tuned scene can widen or tighten the shadow box through
+    // q.shadowExtent without stretching the snap grid.
+    const texel = shadowTexelSize(ctx.config.q);
     this.sun.target.position.x = Math.round(this.sun.target.position.x / texel) * texel;
     this.sun.target.position.z = Math.round(this.sun.target.position.z / texel) * texel;
     this.sun.target.updateMatrixWorld();

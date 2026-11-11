@@ -16,6 +16,8 @@
     "smoke": "node tools/smoke.mjs --events=weapon:fire,bullet:impact --expect=forward",
     "mobile": "node tools/mobilecheck.mjs --out=shots/mobile.png",
     "feeltest": "node example/feeltest.mjs",
+    "lighttest": "node example/lightingtest.mjs",
+    "test": "node example/lightingtest.mjs",
     "gate": "node tools/baseline.mjs --out=/tmp/kit-gate && node tools/imagediff.mjs --a=shots/base --b=/tmp/kit-gate"
   },
   "dependencies": {
