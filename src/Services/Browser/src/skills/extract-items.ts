@@ -345,29 +345,87 @@ export async function extractItems(page: CrawlPage): Promise<ExtractItemsResult>
   }
 }
 
+export interface ExtractItemsUrlFailure {
+  /** URL whose extraction failed. */
+  url: string;
+  /** Human-readable reason the URL failed. */
+  reason: string;
+  /** Alias for {@link reason}; convenient for callers that read `error`. */
+  error: string;
+  /** Alias for {@link reason}. */
+  message: string;
+}
+
 export interface ExtractItemsFromUrlsResult {
   count: number;
   records: Record<string, unknown>[];
-  failedUrls: string[];
+  failedUrls: ExtractItemsUrlFailure[];
 }
 
 const DEFAULT_CONCURRENCY = 5;
+const MAX_CONCURRENCY = 5;
 const MAX_URLS = 10;
+
+interface UrlOutcome {
+  index: number;
+  records: Record<string, unknown>[];
+  failure?: ExtractItemsUrlFailure;
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    const message = err.message.trim();
+    return message.length > 0 ? message : err.name.length > 0 ? err.name : 'unknown error';
+  }
+  if (typeof err === 'string' && err.trim().length > 0) return err.trim();
+  try {
+    const text = String(err);
+    return text.length > 0 && text !== '[object Object]' ? text : 'unknown error';
+  } catch {
+    return 'unknown error';
+  }
+}
+
+function failureFor(url: string, reason: string): ExtractItemsUrlFailure {
+  const failure = { url, reason } as ExtractItemsUrlFailure;
+  // Non-enumerable aliases keep the serialized payload compact ({url, reason}) while
+  // remaining readable for callers that use `error` / `message` naming.
+  Object.defineProperty(failure, 'error', { value: reason, enumerable: false });
+  Object.defineProperty(failure, 'message', { value: reason, enumerable: false });
+  return failure;
+}
+
+function resolveConcurrency(requested: unknown, urlCount: number): number {
+  if (urlCount <= 0) return 0;
+  const normalized =
+    requested === undefined
+      ? DEFAULT_CONCURRENCY
+      : typeof requested === 'number' && Number.isInteger(requested) && requested >= 1
+        ? requested
+        : MAX_CONCURRENCY;
+  return Math.min(normalized, MAX_CONCURRENCY, urlCount);
+}
 
 export async function extractItemsFromUrls(
   browser: BrowserClaw,
   urls: string[],
   opts?: { concurrency?: number },
 ): Promise<ExtractItemsFromUrlsResult> {
-  const deduped = Array.from(new Set(urls.filter((u) => typeof u === 'string' && u !== ''))).slice(0, MAX_URLS);
-  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? DEFAULT_CONCURRENCY, deduped.length));
-  const records: Record<string, unknown>[] = [];
-  const failedUrls: string[] = [];
+  // Drop empty / non-string inputs first, then dedupe while keeping the first-seen order.
+  // The order of `deduped` is also the order of the grouped records in the result.
+  const deduped = Array.from(new Set(urls.filter((u): u is string => typeof u === 'string' && u !== ''))).slice(
+    0,
+    MAX_URLS,
+  );
+  const concurrency = resolveConcurrency(opts?.concurrency, deduped.length);
+  const outcomes: UrlOutcome[] = [];
   let cursor = 0;
 
   const worker = async (): Promise<void> => {
     while (cursor < deduped.length) {
-      const url = deduped[cursor++];
+      const index = cursor;
+      const url = deduped[cursor];
+      cursor += 1;
       const t0 = Date.now();
       let tabId: string | undefined;
       try {
@@ -375,15 +433,17 @@ export async function extractItemsFromUrls(
         tabId = tab.id;
         await tab.waitFor({ timeMs: 500 });
         const result = await extractItems(tab);
-        const recordsWithUrl = result.records.map((r) => ({ sourceUrl: url, ...r }));
-        records.push(...recordsWithUrl);
+        // Keep sourceUrl authoritative even if the extracted record happens to contain one.
+        const recordsWithUrl = result.records.map((r) => ({ ...r, sourceUrl: url }));
+        outcomes.push({ index, records: recordsWithUrl });
         logger.info(
           { url, source: result.source, count: result.records.length, ms: Date.now() - t0 },
           'extract-items-url',
         );
       } catch (err) {
-        logger.warn({ url, err: err instanceof Error ? err.message : err }, 'extract-items-url failed');
-        failedUrls.push(url);
+        const reason = describeError(err);
+        logger.warn({ url, reason }, 'extract-items-url failed');
+        outcomes.push({ index, records: [], failure: failureFor(url, reason) });
       } finally {
         if (tabId !== undefined) {
           await browser.close(tabId).catch(() => undefined);
@@ -392,8 +452,13 @@ export async function extractItemsFromUrls(
     }
   };
 
-  const workers = Array.from({ length: concurrency }, () => worker());
-  await Promise.all(workers);
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  // Workers finish in arbitrary order; reassemble by input position so records are
+  // grouped by URL in first-seen order, keeping each page's internal extraction order.
+  outcomes.sort((a, b) => a.index - b.index);
+  const records = outcomes.flatMap((outcome) => outcome.records);
+  const failedUrls = outcomes.flatMap((outcome) => (outcome.failure === undefined ? [] : [outcome.failure]));
 
   return {
     count: records.length,
@@ -401,3 +466,5 @@ export async function extractItemsFromUrls(
     failedUrls,
   };
 }
+
+export { DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_URLS };
