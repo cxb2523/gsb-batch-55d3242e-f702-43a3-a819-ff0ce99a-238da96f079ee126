@@ -1,0 +1,686 @@
+/**
+ * Background process for the Zurich Housing Tool app. It serves the interface
+ * and the API on 127.0.0.1. The app starts it with port 0 and reads the
+ * chosen port from the first line it prints.
+ */
+import express from "express";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath, pathToFileURL } from "url";
+import { execFile } from "child_process";
+import {
+  DATA_DIR,
+  WGZIMMER_LISTINGS_FILE,
+  TRACKER_FILE,
+  PROFILE_FILE,
+  MAX_PRICE,
+  loadCachedListing,
+  SCAN_STATUS_FILE,
+  listingKey,
+  noteKey,
+  ensureDataDir,
+  readJson,
+} from "./lib.js";
+import { loadAllListings } from "./listings.js";
+import { scan as scanSources } from "./scan.js";
+import { fetchListings } from "./details.mjs";
+import {
+  sendWgzimmerApplication,
+  validateWgzimmerApplication,
+} from "./sources/wgzimmer-send.mjs";
+import {
+  sendFlatfoxApplication,
+  validateFlatfoxApplication,
+} from "./sources/flatfox-send.mjs";
+import {
+  checkFlatfoxSession,
+  loginFlatfox,
+  persistentFlatfoxLauncher,
+} from "./sources/flatfox-session.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = Number(process.argv[2] ?? 0);
+// The macOS app sets this to its bundled Foundation Models helper.
+const APPLE_LLM = process.env.ZHT_APPLE_LLM;
+
+app.use(express.static(path.join(__dirname, "..", "public")));
+app.use(express.json());
+
+// ── API: Get all listings ─────────────────────────────────────────────────
+
+app.get("/api/listings", (req, res) => {
+  res.json(loadAllListings());
+});
+
+// ── API: Get tracker ──────────────────────────────────────────────────────
+
+app.get("/api/tracker", (req, res) => {
+  if (fs.existsSync(TRACKER_FILE)) {
+    res.json(JSON.parse(fs.readFileSync(TRACKER_FILE, "utf8")));
+  } else {
+    res.json({ applied: [], shortlisted: [], rejected: [], excluded: [] });
+  }
+});
+
+// ── API: Trigger scan ─────────────────────────────────────────────────────
+
+let scanInProgress = false;
+
+// The detail pages are fetched one per second, after the scan has answered.
+const DETAILS_PER_SCAN = 60;
+let detailFetchInProgress = false;
+
+async function fetchWgzimmerDetailsInBackground() {
+  const urls = unfetchedWgzimmerUrls(DETAILS_PER_SCAN);
+  if (urls.length === 0) return;
+  detailFetchInProgress = true;
+  try {
+    await fetchListings(urls);
+  } catch (e) {
+    console.log(`Detail fetch failed: ${e.message}`);
+  } finally {
+    detailFetchInProgress = false;
+  }
+}
+
+/**
+ * wgzimmer listings carry no address until their detail page is fetched.
+ * Returns the cheapest untracked ones that have not been fetched yet.
+ */
+function unfetchedWgzimmerUrls(limit) {
+  const tracker = readJson(TRACKER_FILE, {});
+  const trackedKeys = new Set(
+    TRACKER_CATEGORIES.flatMap((category) => tracker[category] || []).map(
+      (entry) => listingKey(entry.url),
+    ),
+  );
+  const urls = readJson(WGZIMMER_LISTINGS_FILE, [])
+    .filter((l) => l.price && l.price <= MAX_PRICE)
+    .filter((l) => !loadCachedListing(l.url))
+    .filter((l) => !trackedKeys.has(listingKey(l.url)))
+    .sort((a, b) => a.price - b.price)
+    .map((l) => l.url);
+  return [...new Set(urls)].slice(0, limit);
+}
+
+app.post("/api/scan", async (req, res) => {
+  if (scanInProgress || detailFetchInProgress) {
+    return res.status(409).json({ error: "A scan is already running." });
+  }
+  scanInProgress = true;
+  try {
+    await scanSources();
+    fetchWgzimmerDetailsInBackground();
+    res.json({ ok: true, status: scanStatus() });
+  } catch (e) {
+    res.status(500).json({ error: e.message.substring(0, 100) });
+  } finally {
+    scanInProgress = false;
+  }
+});
+
+function scanStatus() {
+  const status = readJson(SCAN_STATUS_FILE, null);
+  return status && { ...status, fetchingDetails: detailFetchInProgress };
+}
+
+app.get("/api/scan-status", (req, res) => {
+  res.json(scanStatus());
+});
+
+// ── API: Drafting models available on this Mac ────────────────────────────
+
+app.get("/api/llm-providers", (req, res) => {
+  res.json(APPLE_LLM ? ["apple", "ollama", "api"] : ["ollama", "api"]);
+});
+
+// ── API: Drafting through an online service ───────────────────────────────
+
+const API_SERVICES = {
+  openai: {
+    url: "https://api.openai.com/v1/chat/completions",
+    defaultModel: "gpt-4.1-mini",
+  },
+  openrouter: {
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    defaultModel: "openai/gpt-4.1-mini",
+  },
+};
+const API_SETTINGS_FILE = path.join(DATA_DIR, "llm-api.json");
+
+function loadApiSettings() {
+  return readJson(API_SETTINGS_FILE, { service: "openai", apiKey: "", model: "" });
+}
+
+function publicApiSettings({ service, apiKey, model }) {
+  return {
+    service,
+    model: model || API_SERVICES[service].defaultModel,
+    keyEnding: apiKey ? apiKey.slice(-4) : null,
+    defaultModels: Object.fromEntries(
+      Object.entries(API_SERVICES).map(([name, s]) => [name, s.defaultModel]),
+    ),
+  };
+}
+
+app.get("/api/llm-api", (req, res) => {
+  res.json(publicApiSettings(loadApiSettings()));
+});
+
+app.post("/api/llm-api", (req, res) => {
+  const { service, apiKey, model } = req.body;
+  if (!API_SERVICES[service]) {
+    return res.status(400).json({ error: "Choose OpenAI or OpenRouter." });
+  }
+  const settings = loadApiSettings();
+  settings.service = service;
+  settings.model = String(model || "").trim();
+  if (typeof apiKey === "string") settings.apiKey = apiKey.trim();
+  ensureDataDir();
+  fs.writeFileSync(API_SETTINGS_FILE, JSON.stringify(settings, null, 2), {
+    mode: 0o600,
+  });
+  fs.chmodSync(API_SETTINGS_FILE, 0o600);
+  res.json(publicApiSettings(settings));
+});
+
+// ── API: Get sent applications with messages ──────────────────────────────
+
+app.get("/api/applications", (req, res) => {
+  const appDir = path.join(DATA_DIR, "applications");
+  if (!fs.existsSync(appDir)) return res.json([]);
+  const files = fs.readdirSync(appDir).filter((f) => f.endsWith(".md"));
+  const apps = files.map((f) => {
+    const content = fs.readFileSync(path.join(appDir, f), "utf8");
+    return { id: f.replace(".md", ""), content };
+  });
+  res.json(apps);
+});
+
+// ── API: Change the tracking status of a listing ─────────────────────────
+
+const TRACKER_CATEGORIES = ["applied", "shortlisted", "rejected", "excluded"];
+const TRACK_ACTIONS = {
+  apply: "applied",
+  shortlist: "shortlisted",
+  reject: "rejected",
+  exclude: "excluded",
+  untrack: null,
+};
+
+app.post("/api/track", (req, res) => {
+  const { url, action, address, price, reason } = req.body;
+  if (!url) return res.status(400).json({ error: "url required" });
+  if (!(action in TRACK_ACTIONS)) {
+    return res.status(400).json({ error: "unknown action" });
+  }
+  try {
+    const tracker = {
+      applied: [],
+      shortlisted: [],
+      rejected: [],
+      excluded: [],
+      notes: {},
+      ...readJson(TRACKER_FILE, {}),
+    };
+    const today = new Date().toISOString().split("T")[0];
+    const key = listingKey(url);
+
+    let entry = null;
+    for (const category of TRACKER_CATEGORIES) {
+      const idx = tracker[category].findIndex((e) => listingKey(e.url) === key);
+      if (idx > -1) entry = tracker[category].splice(idx, 1)[0];
+    }
+
+    const category = TRACK_ACTIONS[action];
+    if (category) {
+      entry = entry || {
+        url,
+        address: address || null,
+        price: price || null,
+        date: today,
+      };
+      if (action === "reject") entry.rejectedDate = today;
+      if (action === "exclude") entry.reason = reason || null;
+      tracker[category].push(entry);
+    }
+
+    fs.writeFileSync(TRACKER_FILE, JSON.stringify(tracker, null, 2));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── API: Notes ───────────────────────────────────────────────────────────
+
+app.post("/api/note", (req, res) => {
+  const { url, text } = req.body;
+  if (!url) return res.status(400).json({ error: "url required" });
+  try {
+    const tracker = { notes: {}, ...readJson(TRACKER_FILE, {}) };
+    if (text?.trim()) tracker.notes[noteKey(url)] = text.trim();
+    else delete tracker.notes[noteKey(url)];
+    fs.writeFileSync(TRACKER_FILE, JSON.stringify(tracker, null, 2));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── API: Full listing details ────────────────────────────────────────────
+
+const FETCHABLE_HOSTS = ["www.wgzimmer.ch", "wgzimmer.ch", "flatfox.ch"];
+
+function isFetchableUrl(url) {
+  try {
+    return FETCHABLE_HOSTS.includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+app.get("/api/listing-details", (req, res) => {
+  res.json(loadCachedListing(String(req.query.url || "")));
+});
+
+app.post("/api/fetch-details", async (req, res) => {
+  const { url } = req.body;
+  if (!url || !isFetchableUrl(url)) {
+    return res
+      .status(400)
+      .json({ error: "Details can be fetched for wgzimmer and flatfox only." });
+  }
+  if (scanInProgress || detailFetchInProgress) {
+    return res
+      .status(409)
+      .json({ error: "A scan or another fetch is already running." });
+  }
+  detailFetchInProgress = true;
+  try {
+    await fetchListings([url]);
+    const details = loadCachedListing(url);
+    if (!details) {
+      return res.status(502).json({ error: "The listing page gave no details." });
+    }
+    res.json({ details });
+  } catch (e) {
+    res.status(500).json({ error: e.message.substring(0, 100) });
+  } finally {
+    detailFetchInProgress = false;
+  }
+});
+
+// ── API: Applicant profile ───────────────────────────────────────────────
+
+const PROFILE_FIELDS = [
+  "name",
+  "email",
+  "phone",
+  "age",
+  "occupation",
+  "situation",
+  "futurePlans",
+  "hobbies",
+  "personality",
+  "nationality",
+  "languages",
+  "wgExperience",
+  "extras",
+];
+const FLATFOX_BROWSER_PROFILE_DIR = path.join(
+  DATA_DIR,
+  "flatfox-browser-profile",
+);
+
+app.get("/api/profile", (req, res) => {
+  res.json({ fields: PROFILE_FIELDS, profile: readJson(PROFILE_FILE, null) });
+});
+
+app.post("/api/profile", (req, res) => {
+  const profile = {};
+  for (const field of PROFILE_FIELDS) {
+    if (req.body[field] !== undefined && req.body[field] !== "") {
+      profile[field] = req.body[field];
+    }
+  }
+  try {
+    fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── API: Save an application message ─────────────────────────────────────
+
+app.post("/api/application", (req, res) => {
+  const { url, message } = req.body;
+  if (!url || !message) {
+    return res.status(400).json({ error: "url and message required" });
+  }
+  try {
+    const appDir = path.join(DATA_DIR, "applications");
+    fs.mkdirSync(appDir, { recursive: true });
+    const name = listingKey(url).replace(/[^a-zA-Z0-9-]/g, "_").slice(-80);
+    fs.writeFileSync(path.join(appDir, `${name}.md`), `${url}\n\n${message}\n`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── API: Send a WGZimmer application ─────────────────────────────────────
+
+const wgzimmerSendsInProgress = new Set();
+
+app.post("/api/send-wgzimmer", async (req, res) => {
+  const profile = readJson(PROFILE_FILE, null);
+  const application = {
+    url: req.body.url,
+    message: req.body.message,
+    name: profile?.name,
+    email: profile?.email,
+    phone: profile?.phone,
+  };
+
+  try {
+    validateWgzimmerApplication(application);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  const key = listingKey(application.url);
+  if (wgzimmerSendsInProgress.has(key)) {
+    return res
+      .status(409)
+      .json({ error: "A message to this listing is already being sent." });
+  }
+
+  wgzimmerSendsInProgress.add(key);
+  try {
+    const result = await sendWgzimmerApplication(application);
+    res.json(result);
+  } catch (e) {
+    res.status(502).json({ error: e.message.substring(0, 300) });
+  } finally {
+    wgzimmerSendsInProgress.delete(key);
+  }
+});
+
+// ── API: Send a Flatfox contact request ──────────────────────────────────
+
+const flatfoxSendsInProgress = new Set();
+let flatfoxBrowserBusy = false;
+let flatfoxConnected = null;
+
+app.get("/api/flatfox-session", async (req, res) => {
+  if (flatfoxBrowserBusy) {
+    return res.json({ connected: flatfoxConnected === true, busy: true });
+  }
+
+  flatfoxBrowserBusy = true;
+  try {
+    const status = await checkFlatfoxSession(FLATFOX_BROWSER_PROFILE_DIR);
+    flatfoxConnected = status.connected;
+    res.json(status);
+  } catch (e) {
+    res.status(502).json({ error: e.message.substring(0, 300) });
+  } finally {
+    flatfoxBrowserBusy = false;
+  }
+});
+
+app.post("/api/flatfox-session/login", async (req, res) => {
+  if (flatfoxBrowserBusy) {
+    return res.status(409).json({
+      error: "Flatfox is already being opened or used by another request.",
+    });
+  }
+
+  flatfoxBrowserBusy = true;
+  try {
+    ensureDataDir();
+    const status = await loginFlatfox(FLATFOX_BROWSER_PROFILE_DIR);
+    flatfoxConnected = status.connected;
+    res.json(status);
+  } catch (e) {
+    res.status(502).json({ error: e.message.substring(0, 300) });
+  } finally {
+    flatfoxBrowserBusy = false;
+  }
+});
+
+app.post("/api/send-flatfox", async (req, res) => {
+  const profile = readJson(PROFILE_FILE, null);
+  const application = {
+    url: req.body.url,
+    message: req.body.message,
+    name: profile?.name,
+    email: profile?.email,
+    phone: profile?.phone,
+  };
+
+  try {
+    validateFlatfoxApplication(application);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  const key = listingKey(application.url);
+  if (flatfoxSendsInProgress.has(key)) {
+    return res
+      .status(409)
+      .json({ error: "A message to this listing is already being sent." });
+  }
+  if (flatfoxBrowserBusy) {
+    return res.status(409).json({
+      error: "Finish the Flatfox login or session check before sending.",
+    });
+  }
+
+  flatfoxSendsInProgress.add(key);
+  flatfoxBrowserBusy = true;
+  try {
+    ensureDataDir();
+    await sendFlatfoxApplication(
+      application,
+      persistentFlatfoxLauncher(FLATFOX_BROWSER_PROFILE_DIR),
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: e.message.substring(0, 300) });
+  } finally {
+    flatfoxSendsInProgress.delete(key);
+    flatfoxBrowserBusy = false;
+  }
+});
+
+// ── API: Generate application message with a local model ──────────────────
+
+const OLLAMA_URL = "http://localhost:11434";
+const DEFAULT_OLLAMA_MODEL = "llama3.2";
+
+/**
+ * The default model when it is installed, otherwise the smallest installed
+ * model. Returns null when none is installed.
+ */
+async function chooseOllamaModel() {
+  const resp = await fetch(`${OLLAMA_URL}/api/tags`);
+  const { models } = await resp.json();
+  const match = models.find(
+    (m) =>
+      m.name === DEFAULT_OLLAMA_MODEL ||
+      m.name === `${DEFAULT_OLLAMA_MODEL}:latest`,
+  );
+  if (match) return match.name;
+  const bySize = [...models].sort((a, b) => a.size - b.size);
+  return bySize[0]?.name || null;
+}
+
+app.post("/api/generate", async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "url required" });
+
+  // Load user profile
+  if (!fs.existsSync(PROFILE_FILE)) {
+    return res.status(400).json({
+      error:
+        "No profile yet. Fill in the Profile tab first.",
+    });
+  }
+  const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, "utf8"));
+  // Contact details are for the contact form and stay out of the prompt.
+  const { email, phone, ...promptProfile } = profile;
+
+  const listing = loadCachedListing(url);
+  if (!listing) {
+    return res
+      .status(400)
+      .json({ error: "Listing not fetched yet. Fetch it first." });
+  }
+
+  const listingDesc = [
+    listing.description || "",
+    listing.room || "",
+    listing.lookingFor || "",
+    listing.weAre || "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const isGerman =
+    /[äöüß]|Zürich|Strasse|Wohnung/i.test(listingDesc) &&
+    !/english version|ENG|For English/i.test(listingDesc.substring(0, 200));
+
+  const prompt = `You are writing a short, friendly WG (shared flat) application message. Write from the perspective of the applicant based on their profile below. The message should be tailored to the specific listing. Be genuine, not generic. Keep it under 200 words.
+
+${isGerman ? "The listing is in German. Write the message in German first, then add a note '(Übersetzung mit Hilfe eines Übersetzungsdienstes. Englische Originalversion unten.)' and include the English version below." : "The listing is in English. Write in English only."}
+
+${profile.languages && /german|deutsch/i.test(profile.languages) ? "" : "If writing in German, mention that you can read/follow German but need to speak English day-to-day."}
+
+APPLICANT PROFILE:
+${JSON.stringify(promptProfile, null, 2)}
+
+LISTING:
+${listingDesc.substring(0, 2000)}
+
+Write the application message now. Do not include a subject line. Start with a greeting.`;
+
+  const provider = req.body.provider || "ollama";
+  const generate =
+    { apple: generateWithApple, api: generateWithApi }[provider] ||
+    generateWithOllama;
+  try {
+    res.json(await generate(prompt));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+async function generateWithOllama(prompt) {
+  let model;
+  try {
+    model = await chooseOllamaModel();
+  } catch {
+    throw new Error("Could not connect to Ollama. Start it with: ollama serve");
+  }
+  if (!model) {
+    throw new Error(
+      `Ollama has no model installed. Run: ollama pull ${DEFAULT_OLLAMA_MODEL}`,
+    );
+  }
+  let ollamaRes;
+  try {
+    ollamaRes = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt, stream: false }),
+    });
+  } catch (e) {
+    throw new Error(`Ollama request failed. ${e.message}`);
+  }
+  if (!ollamaRes.ok) {
+    throw new Error(`Ollama returned an error for model ${model}.`);
+  }
+  const result = await ollamaRes.json();
+  return { message: result.response, model };
+}
+
+const API_TIMEOUT_MS = 120000;
+
+async function generateWithApi(prompt) {
+  const { service, apiKey, model } = loadApiSettings();
+  const { url, defaultModel } = API_SERVICES[service];
+  if (!apiKey) {
+    throw new Error("Add an API key under Drafting in the settings first.");
+  }
+  const chosenModel = model || defaultModel;
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: chosenModel,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new Error(`Could not reach ${serviceName(service)}. ${e.message}`);
+  }
+  const body = await resp.json().catch(() => ({}));
+  if (resp.status === 401) {
+    throw new Error(`${serviceName(service)} rejected the API key.`);
+  }
+  if (!resp.ok) {
+    const detail = body.error?.message || `HTTP ${resp.status}`;
+    throw new Error(`${serviceName(service)} returned an error. ${detail}`);
+  }
+  const message = body.choices?.[0]?.message?.content?.trim();
+  if (!message) throw new Error(`${serviceName(service)} returned no text.`);
+  return { message, model: chosenModel };
+}
+
+function serviceName(service) {
+  return service === "openrouter" ? "OpenRouter" : "OpenAI";
+}
+
+const APPLE_TIMEOUT_MS = 180000;
+
+function generateWithApple(prompt) {
+  if (!APPLE_LLM) {
+    return Promise.reject(new Error("Apple Intelligence is available in the macOS app only."));
+  }
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      APPLE_LLM,
+      { timeout: APPLE_TIMEOUT_MS },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr.trim() || `Apple Intelligence failed. ${error.message}`));
+        } else {
+          resolve({ message: stdout.trim(), model: "Apple Intelligence" });
+        }
+      },
+    );
+    child.stdin.end(prompt);
+  });
+}
+
+export { app };
+
+const startedDirectly =
+  Boolean(process.argv[1]) &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (startedDirectly) {
+  const server = app.listen(PORT, "127.0.0.1", () => {
+    console.log(`Dashboard at http://127.0.0.1:${server.address().port}/`);
+  });
+}

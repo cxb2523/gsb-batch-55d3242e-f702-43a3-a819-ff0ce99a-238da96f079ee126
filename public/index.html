@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zurich housing tool</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+    />
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script>
+      (() => {
+        const choice = localStorage.getItem("zurich-housing-theme") || "system";
+        const dark =
+          choice === "dark" ||
+          (choice === "system" &&
+            matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1 class="logo" aria-label="Zurich housing tool">
+        <svg class="logo-mark" viewBox="0 0 28 28" aria-hidden="true">
+          <defs>
+            <clipPath id="logo-house">
+              <path d="M2 12.5 14 2l12 10.5V26H2Z" />
+            </clipPath>
+          </defs>
+          <g clip-path="url(#logo-house)">
+            <rect class="logo-mark-light" width="28" height="28" />
+            <path class="logo-mark-blue" d="M0 0 28 28H0Z" />
+          </g>
+          <path class="logo-mark-outline" d="M2 12.5 14 2l12 10.5V26H2Z" />
+        </svg>
+        <span class="logo-text" aria-hidden="true"
+          >z<span class="logo-u">u<i></i><i></i></span>rich<span
+            class="logo-rest"
+            >housing tool</span
+          ></span
+        >
+      </h1>
+      <p class="summary">
+        <span data-i18n="by">by</span>
+        <a href="https://joshuaswanson.github.io" target="_blank" rel="noopener"
+          >Joshua Swanson</a
+        >
+      </p>
+      <div class="scan">
+        <span class="scan-status" id="scan-status" role="status"></span>
+        <button class="button button-primary" id="scan-button" data-i18n="scan">
+          Scan for listings
+        </button>
+        <a
+          class="button button-report"
+          href="https://github.com/joshuaswanson/zurich-housing-tool/issues"
+          target="_blank"
+          rel="noopener"
+          data-i18n="report_issue"
+          >Report an issue</a
+        >
+        <details class="settings" id="settings">
+          <summary
+            class="button icon-button"
+            aria-label="Settings"
+            data-i18n-aria-label="settings"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+              />
+            </svg>
+          </summary>
+          <div class="settings-menu">
+            <div class="settings-row" role="radiogroup" aria-labelledby="language-label">
+              <span id="language-label" data-i18n="language">Language</span>
+              <span class="segmented">
+                <label>
+                  <input type="radio" name="language" value="en" />
+                  <span>English</span>
+                </label>
+                <label>
+                  <input type="radio" name="language" value="de" />
+                  <span>Deutsch</span>
+                </label>
+              </span>
+            </div>
+            <div class="settings-row" role="radiogroup" aria-labelledby="theme-label">
+              <span id="theme-label" data-i18n="theme">Theme</span>
+              <span class="segmented">
+                <label>
+                  <input type="radio" name="theme" value="system" />
+                  <span data-i18n="theme_system">System</span>
+                </label>
+                <label>
+                  <input type="radio" name="theme" value="light" />
+                  <span data-i18n="theme_light">Light</span>
+                </label>
+                <label>
+                  <input type="radio" name="theme" value="dark" />
+                  <span data-i18n="theme_dark">Dark</span>
+                </label>
+              </span>
+            </div>
+            <div
+              class="settings-row"
+              id="llm-setting"
+              role="radiogroup"
+              aria-labelledby="llm-label"
+              hidden
+            >
+              <span id="llm-label" data-i18n="llm">Drafting</span>
+              <span class="segmented">
+                <label>
+                  <input type="radio" name="llm" value="apple" />
+                  <span>Apple</span>
+                </label>
+                <label>
+                  <input type="radio" name="llm" value="ollama" />
+                  <span>Ollama</span>
+                </label>
+                <label>
+                  <input type="radio" name="llm" value="api" />
+                  <span>API</span>
+                </label>
+              </span>
+            </div>
+            <form class="api-settings" id="api-settings" hidden>
+              <label class="api-field">
+                <span data-i18n="api_service">Service</span>
+                <select id="api-service">
+                  <option value="openai">OpenAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                </select>
+              </label>
+              <label class="api-field">
+                <span data-i18n="api_key">API key</span>
+                <input type="password" id="api-key" class="text-input" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="api-field">
+                <span data-i18n="api_model">Model</span>
+                <input type="text" id="api-model" class="text-input" autocomplete="off" spellcheck="false" />
+              </label>
+              <p class="api-note" data-i18n="api_note">The service receives your profile and the listing to write each message.</p>
+              <div class="api-actions">
+                <span class="api-status" id="api-status" role="status"></span>
+                <button type="submit" class="button" data-i18n="api_save">Save</button>
+              </div>
+            </form>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <div class="layout">
+      <section class="map-pane" aria-label="Map of listings" data-i18n-aria-label="map_label">
+        <div id="map"></div>
+        <div class="legend">
+          <span class="source"
+            ><i class="dot dot-target"></i
+            ><select
+              id="target-select"
+              aria-label="Measure distances from"
+              data-i18n-aria-label="target_label"
+            ></select
+          ></span>
+          <span class="source"><i class="dot dot-wgzimmer"></i>wgzimmer.ch</span>
+          <span class="source"><i class="dot dot-flatfox"></i>flatfox.ch</span>
+          <span class="source"><i class="dot dot-ronorp"></i>ronorp.net</span>
+          <span class="source"><i class="dot dot-students"></i>students.ch</span>
+          <span class="source"
+            ><i class="dot dot-approximate"></i
+            ><span data-i18n="legend_approximate">postcode only</span></span
+          >
+        </div>
+      </section>
+
+      <main class="content">
+        <div class="tabs" role="tablist">
+          <button
+            class="tab"
+            type="button"
+            role="tab"
+            id="tab-listings"
+            aria-controls="panel-listings"
+            aria-selected="true"
+          >
+            <span data-i18n="tab_listings">Listings</span> <span class="tab-count" id="tab-listings-count"></span>
+          </button>
+          <button
+            class="tab"
+            type="button"
+            role="tab"
+            id="tab-applications"
+            aria-controls="panel-applications"
+            aria-selected="false"
+            tabindex="-1"
+          >
+            <span data-i18n="tab_applications">Applications</span>
+            <span class="tab-count" id="tab-applications-count"></span>
+          </button>
+          <button
+            class="tab"
+            type="button"
+            role="tab"
+            id="tab-excluded"
+            aria-controls="panel-excluded"
+            aria-selected="false"
+            tabindex="-1"
+          >
+            <span data-i18n="tab_excluded">Excluded</span>
+            <span class="tab-count" id="tab-excluded-count"></span>
+          </button>
+          <button
+            class="tab"
+            type="button"
+            role="tab"
+            id="tab-profile"
+            aria-controls="panel-profile"
+            aria-selected="false"
+            tabindex="-1"
+          >
+            <span data-i18n="tab_profile">Profile</span>
+          </button>
+        </div>
+
+        <section
+          class="tab-panel"
+          role="tabpanel"
+          id="panel-listings"
+          aria-labelledby="tab-listings"
+        >
+        <form class="filters" id="filters">
+          <label class="filter filter-search">
+            <span data-i18n="search">Search</span>
+            <input
+              type="search"
+              id="f-keyword"
+              placeholder="Seefeld, Kreis 8, balcony"
+              data-i18n-placeholder="search_placeholder"
+            />
+          </label>
+          <label class="filter">
+            <span data-i18n="max_rent">Max rent</span>
+            <input
+              type="range"
+              id="f-price"
+              min="500"
+              max="3000"
+              step="50"
+              value="2000"
+            />
+            <output id="f-price-val"></output>
+          </label>
+          <label class="filter">
+            <span data-i18n="max_distance">Max distance</span>
+            <input
+              type="range"
+              id="f-dist"
+              min="0.5"
+              max="5"
+              step="0.1"
+              value="5"
+            />
+            <output id="f-dist-val"></output>
+          </label>
+          <button
+            class="button"
+            type="button"
+            id="more-filters-toggle"
+            aria-expanded="false"
+            aria-controls="more-filters"
+          >
+            <span data-i18n="more_filters">More filters</span>
+            <span class="tab-count" id="more-filters-count"></span>
+          </button>
+          <div class="more-filters" id="more-filters" hidden>
+          <div class="filter-group" role="group" aria-labelledby="show-label">
+            <span class="filter-group-label" id="show-label" data-i18n="show">Show</span>
+            <label class="filter">
+              <input type="checkbox" role="switch" id="f-tracked" />
+              <span data-i18n="f_tracked">Tracked</span>
+            </label>
+            <label class="filter">
+              <input type="checkbox" role="switch" id="f-gender" />
+              <span data-i18n="f_gender">Gender-restricted</span>
+            </label>
+            <label class="filter">
+              <input type="checkbox" role="switch" id="f-student" />
+              <span data-i18n="f_student">WOKO and JUWO</span>
+            </label>
+            <label class="filter">
+              <input type="checkbox" role="switch" id="f-short" />
+              <span data-i18n="f_short">Short sublets</span>
+            </label>
+            <label class="filter">
+              <input type="checkbox" role="switch" id="f-bulk" />
+              <span data-i18n="f_bulk">Bulk posters</span>
+            </label>
+            <label class="filter">
+              <input type="checkbox" role="switch" id="f-flats" />
+              <span data-i18n="f_flats">Whole flats</span>
+            </label>
+          </div>
+          <div class="filter-group" role="group" aria-labelledby="only-label">
+            <span class="filter-group-label" id="only-label" data-i18n="only">Only</span>
+            <label class="filter">
+              <input type="checkbox" role="switch" id="f-permanent" />
+              <span data-i18n="f_permanent">Permanent</span>
+            </label>
+            <label class="filter">
+              <span data-i18n="first_seen">First seen</span>
+              <select id="f-new">
+                <option value="0" data-i18n="new_any">any time</option>
+                <option value="24" data-i18n="new_24">in the last 24 hours</option>
+                <option value="48" data-i18n="new_48">in the last 48 hours</option>
+                                <option value="168" data-i18n="new_168">in the last 7 days</option>
+              </select>
+            </label>
+          </div>
+          </div>
+        </form>
+
+        <p class="section-note" id="listings-note"></p>
+        <div class="table-scroll">
+          <table id="listings-table">
+            <thead>
+              <tr>
+                <th data-sort="price" aria-sort="ascending">
+                  <button class="sort-button" type="button"><span data-i18n="col_rent">Rent (CHF)</span></button>
+                </th>
+                <th data-sort="distance">
+                  <button class="sort-button" type="button"><span data-i18n="col_distance">Distance</span></button>
+                </th>
+                <th><span data-i18n="col_address">Address</span></th>
+                <th data-sort="available">
+                  <button class="sort-button" type="button"><span data-i18n="col_available">Available</span></button>
+                </th>
+                <th data-sort="source">
+                  <button class="sort-button" type="button"><span data-i18n="col_source">Source</span></button>
+                </th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="listings-body"></tbody>
+          </table>
+        </div>
+        <button class="button show-more" type="button" id="show-more" hidden></button>
+        <p class="empty" id="listings-empty" hidden></p>
+
+        </section>
+
+        <section
+          class="tab-panel"
+          role="tabpanel"
+          id="panel-applications"
+          aria-labelledby="tab-applications"
+          hidden
+        >
+        <div id="applied-list"></div>
+        </section>
+
+        <section
+          class="tab-panel"
+          role="tabpanel"
+          id="panel-excluded"
+          aria-labelledby="tab-excluded"
+          hidden
+        >
+          <div id="excluded-list"></div>
+        </section>
+
+        <section
+          class="tab-panel"
+          role="tabpanel"
+          id="panel-profile"
+          aria-labelledby="tab-profile"
+          hidden
+        >
+          <p class="section-note" data-i18n="profile_intro">
+            These details are used by the LLM to draft application messages.
+          </p>
+          <div class="account-connection">
+            <div>
+              <strong data-i18n="flatfox_account">Flatfox account</strong>
+              <p class="secondary" id="flatfox-session-status" role="status">
+                Checking connection…
+              </p>
+            </div>
+            <button class="button" id="flatfox-login" type="button" disabled>
+              <span data-i18n="flatfox_connect">Connect Flatfox</span>
+            </button>
+          </div>
+          <form class="profile-form" id="profile-form">
+            <div id="profile-fields"></div>
+            <div class="row-actions">
+              <button class="button button-primary" data-i18n="save_profile">
+                Save profile
+              </button>
+              <span class="secondary" id="profile-status" role="status"></span>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="message-dialog">
+      <h2 id="dialog-title"></h2>
+      <pre id="dialog-body"></pre>
+      <textarea id="dialog-editor" aria-labelledby="dialog-title" hidden></textarea>
+      <p class="secondary dialog-hint" id="dialog-hint" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-primary" id="dialog-send" type="button" hidden></button>
+        <button class="button" id="dialog-applied" type="button" hidden></button>
+        <button class="button" id="dialog-save" type="button" hidden></button>
+        <button class="button" id="dialog-copy" type="button">
+          <span data-i18n="copy_message">Copy message</span>
+        </button>
+        <form method="dialog">
+          <button class="button"><span data-i18n="close">Close</span></button>
+        </form>
+      </div>
+    </dialog>
+
+    <script src="strings.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
