@@ -12,6 +12,9 @@ const T = {
   ctx: null, master: null, limiter: null, analyser: null, dry: null, verb: null, wet: null,
   settings: { volume: 0.7, transpose: 0, space: 0.22, muted: false, hover: true, theme: "default", duck: 1, localize: 0 },
   _scale: 1, _cool: {}, _noise: null, _unlocked: false, _bus: null, _sendBus: null,
+  /* randomness source. Math.random in live playback (per-performance humanization);
+     offline renders swap in a seeded PRNG so every export is bit-for-bit repeatable. */
+  _rng: Math.random,
 
   applyGain() {
     if (!this.ctx) return;
@@ -56,7 +59,7 @@ const T = {
     for (let ch = 0; ch < 2; ch++) {
       const d = buf.getChannelData(ch);
       for (let i = 0; i < len; i++) {
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        d[i] = (this._rng() * 2 - 1) * Math.pow(1 - i / len, decay);
       }
     }
     return buf;
@@ -67,7 +70,7 @@ const T = {
     const rate = this.ctx.sampleRate, len = rate;
     const buf = this.ctx.createBuffer(1, len, rate);
     const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    for (let i = 0; i < len; i++) d[i] = this._rng() * 2 - 1;
     this._noise = buf;
     return buf;
   },
@@ -773,8 +776,12 @@ function renderSpecOffline(spec) {
   const rate = 44100;
   const off = new OfflineAudioContext(2, Math.ceil(rate * 2.8), rate);
   /* temporarily point the engine at the offline graph; scheduling is synchronous */
-  const saved = { ctx: T.ctx, dry: T.dry, verb: T.verb, wet: T.wet, master: T.master, noise: T._noise };
+  const saved = { ctx: T.ctx, dry: T.dry, verb: T.verb, wet: T.wet, master: T.master, noise: T._noise, rng: T._rng };
   T.ctx = off; T._noise = null;
+  /* exports must be repeatable: a fixed seed drives the reverb tail and noise
+     grains, and _scale stays at 1 so no humanization drift enters the render. */
+  T._rng = mulberry32(0xF01E7);
+  T._scale = 1;
   T.master = off.createGain(); T.master.gain.value = 1;
   const lim = off.createDynamicsCompressor();
   lim.threshold.value = -10; lim.knee.value = 4; lim.ratio.value = 12;
@@ -787,7 +794,7 @@ function renderSpecOffline(spec) {
   try { runSpec(spec, 0.03); }
   finally {
     T.ctx = saved.ctx; T.dry = saved.dry; T.verb = saved.verb;
-    T.wet = saved.wet; T.master = saved.master; T._noise = saved.noise;
+    T.wet = saved.wet; T.master = saved.master; T._noise = saved.noise; T._rng = saved.rng;
   }
   return off.startRendering();
 }
@@ -822,44 +829,65 @@ export async function toWavSpec(spec) {
   return encodeWav(trimAndNormalize(buf), 44100);
 }
 
-/** Render all 28 cues into one audio sprite: a single WAV Blob plus a map of
-    { name: { start, duration } } offsets in seconds. gap defaults to 50ms. */
+/** Render all 28 cues into one audio sprite: a single 16-bit 44.1kHz stereo WAV
+    Blob plus a map of { name: { start, duration } } offsets in seconds.
+
+    The map is derived from the same sample counts used to write the WAV, so every
+    start is the cue's true byte-accurate start in the file and duration is its true
+    sample count / 44100. gap is the silence between cues, in seconds, rounded to a
+    whole sample (default 0.05); negative or non-numeric gaps are treated as 0, which
+    places cues back-to-back. No silence is appended after the final cue. Exports
+    honor the current theme and space setting and skip humanization, so identical
+    settings always yield an identical-length WAV and offset table. */
 export async function toSprite(gap) {
-  const g = gap != null ? gap : 0.05;
   const rate = 44100;
-  const parts = [], map = {};
+  /* missing (null/undefined) keeps the 50ms default; anything else that is not a
+     finite non-negative number collapses to 0 - never a negative offset or overlap */
+  const gapSeconds = gap == null ? 0.05 : gap;
+  const gapFrames = Number.isFinite(gapSeconds) && gapSeconds > 0
+    ? Math.round(gapSeconds * rate) : 0;
+  const names = Object.keys(CUES);
+  const parts = [];
+  const map = {};
+  /* account in integer frames first: the offsets written into the map and the
+     offsets used while splicing share one source of truth */
+  const frameStarts = [];
   let cursor = 0;
-  for (const name of Object.keys(CUES)) {
+  for (const name of names) {
     const buf = await renderSpecOffline(effectiveSpec(name));
     const t = trimAndNormalize(buf);
-    map[name] = { start: +cursor.toFixed(4), duration: +(t.length / rate).toFixed(4) };
+    frameStarts.push(cursor);
+    map[name] = { start: cursor / rate, duration: t.length / rate };
     parts.push(t);
-    cursor += t.length / rate + g;
+    cursor += t.length + gapFrames;
   }
-  const total = Math.ceil(cursor * rate);
+  /* the final gap was never written: pull it back out of the running total */
+  const total = cursor - gapFrames;
   const left = new Float32Array(total), right = new Float32Array(total);
-  let o = 0;
   for (let i = 0; i < parts.length; i++) {
-    left.set(parts[i].left, o);
-    right.set(parts[i].right, o);
-    o += parts[i].length + Math.round(g * rate);
+    left.set(parts[i].left, frameStarts[i]);
+    right.set(parts[i].right, frameStarts[i]);
   }
   return { blob: encodeWav({ left, right, length: total }, rate), map };
 }
 
 function trimAndNormalize(buf) {
-  const Lc = buf.getChannelData(0), R = buf.getChannelData(1);
-  let end = 0, peak = 0;
+  const Lc = buf.getChannelData(0), Rc = buf.getChannelData(1);
+  let start = Lc.length, end = 0, peak = 0;
   for (let i = 0; i < Lc.length; i++) {
-    const m = Math.max(Math.abs(Lc[i]), Math.abs(R[i]));
+    const m = Math.max(Math.abs(Lc[i]), Math.abs(Rc[i]));
     if (m > peak) peak = m;
-    if (m > 0.002) end = i;
+    if (m > 0.002) { end = i; if (start === Lc.length) start = i; }
   }
-  const len = Math.min(Lc.length, end + Math.floor(buf.sampleRate * 0.08));
+  /* nothing above the threshold: keep the whole render rather than empty output */
+  if (start === Lc.length) start = 0;
+  /* trim both ends so a sprite segment's first sample is really the cue's first
+     sample; keep an 80ms tail for the reverb to ring out */
+  const len = Math.min(Lc.length - start, end - start + 1 + Math.floor(buf.sampleRate * 0.08));
   const scale = peak > 0 ? 0.891 / peak : 1; /* about -1 dBFS */
   return {
-    left: Float32Array.prototype.slice.call(Lc, 0, len).map((v) => v * scale),
-    right: Float32Array.prototype.slice.call(R, 0, len).map((v) => v * scale),
+    left: Float32Array.prototype.slice.call(Lc, start, start + len).map((v) => v * scale),
+    right: Float32Array.prototype.slice.call(Rc, start, start + len).map((v) => v * scale),
     length: len,
   };
 }

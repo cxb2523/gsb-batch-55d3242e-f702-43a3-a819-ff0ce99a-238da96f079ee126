@@ -173,7 +173,14 @@ export declare function toBufferSpec(spec: Spec): Promise<AudioBuffer | null>;
 /** Render a custom spec to a 16-bit 44.1 kHz stereo WAV Blob (normalized first). */
 export declare function toWavSpec(spec: Spec): Promise<Blob | null>;
 
-/** Render all 28 cues into one audio sprite: a WAV Blob plus { name: { start, duration } } offsets in seconds. */
+/** Render all 28 cues into one audio sprite: a 16-bit 44.1kHz stereo WAV Blob plus
+    a map of per-cue offsets in seconds.
+    `start` is the cue's true start time in the WAV (whole-sample aligned);
+    `duration` is its true sample count divided by 44100. `gap` sets the silence
+    inserted between cues (default 0.05s), rounded to a whole sample; negative or
+    non-numeric values are treated as 0 (cues back-to-back). No silence is appended
+    after the last cue. Deterministic: same theme/space settings always produce the
+    same WAV length and offset table, with no humanization drift. */
 export declare function toSprite(gap?: number): Promise<{ blob: Blob; map: Record<CueName, { start: number; duration: number }> }>;
 
 /** Resume/create the AudioContext. Call from a user gesture, or let play()/bind() handle it. */

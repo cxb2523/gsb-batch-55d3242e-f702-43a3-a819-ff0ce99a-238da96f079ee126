@@ -137,7 +137,7 @@ import { play, bind, set, get, toWav, unlock, getAnalyser, on, cues, families, t
 - **`playSpec(spec, { id?, pitch?, volume?, pan?, pos? })`** — play a custom spec; it is validated and clamped first.
 - **`toWavSpec(spec)` / `toBufferSpec(spec)`** — offline-render a custom spec.
 - **`normalizeSpec(spec)`** — the validator itself, for checking untrusted specs (max 8 layers, all params clamped).
-- **`toSprite(gap?)`** — all 28 cues in one WAV plus a `{ name: { start, duration } }` offset map, for game engines and audio-sprite players.
+- **`toSprite(gap?)`** — all 28 cues in one 16-bit 44.1 kHz stereo WAV plus a `{ name: { start, duration } }` offset map, for game engines and audio-sprite players. See [Audio sprite](#audio-sprite) for the exact offset and `gap` semantics.
 - **`toWav(name)`** — `Promise<Blob>`: offline-render a cue to 16-bit 44.1 kHz stereo WAV, honoring transpose, space, and theme. Exports are deterministic (no humanization drift).
 - **`unlock()`** — resume/create the AudioContext from a user gesture.
 - **`getAnalyser()`** — the engine's `AnalyserNode` for scopes and meters, or `null` before unlock.
@@ -194,6 +194,46 @@ if (layer.kind === "tone") layer.f = 880;
 ```
 
 Or use the visual [Cue Designer on the demo](https://usefoley.dev/#designer) — edit with live playback, then export .wav/.json or share the design as a link.
+
+## Audio sprite
+
+`toSprite(gap?)` renders all 28 cues into **one** 16-bit 44.1 kHz stereo WAV, so a
+game engine or sprite player loads a single file and slices it by an offset table:
+
+```js
+import { toSprite } from "@foleyjs/core";
+
+const { blob, map } = await toSprite();      // 50ms gaps by default
+// map.ping -> { start: 3.12408..., duration: 0.49170... }
+```
+
+For every cue, the map holds two values measured against the actual samples written
+into the WAV — the table and the file are computed from the same integer sample
+counts, never from accumulated floating-point seconds:
+
+- **`start`** — the cue's true start time in the WAV, in seconds. It is whole-sample
+  aligned (`start * 44100` is an exact integer frame offset), so a player seeking to
+  `start` lands exactly on the cue's first sample, never on the previous cue's tail.
+- **`duration`** — the cue's true length: its rendered sample count divided by 44100.
+  The next cue starts at `start + duration + gap`, so a player reading
+  `[start, start + duration)` gets the cue and nothing else.
+
+`gap` is the silence inserted **between** cues, in seconds. It is rounded to a whole
+number of samples before being written, and the same rounded value drives the offset
+table:
+
+- omitted or `null`/`undefined` — defaults to **0.05** (50 ms);
+- `0` — cues are back-to-back, with no silence between them;
+- negative or non-numeric (`NaN`, strings, `Infinity`, …) — treated as `0`, so a
+  negative offset or overlapping cue is impossible;
+- no silence is ever appended **after the final cue** — the WAV ends on the last
+  cue's last sample.
+
+Exports honor the current theme and `space` (reverb) setting but never apply the
+live humanization drift, and their randomness is seeded. Two exports with the same
+settings therefore produce a WAV of the same length and an identical offset table
+(cue lengths change when the theme or `space` changes, so re-export after changing
+either).
 
 ## Sound sets
 

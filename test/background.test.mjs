@@ -8,7 +8,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const read = (p) => readFileSync(join(root, p), "utf8");
+/* normalize CRLF so the line-anchored regexes below match on every checkout */
+const read = (p) => readFileSync(join(root, p), "utf8").replace(/\r\n/g, "\n");
 const src = read("src/foley.js");
 
 test("loop repetitions are gated on tab visibility, not just mute", () => {

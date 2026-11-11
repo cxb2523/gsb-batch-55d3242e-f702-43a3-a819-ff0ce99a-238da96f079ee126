@@ -24,14 +24,17 @@ const DTS = [
 ];
 
 test("the type definitions compile, and every @ts-expect-error still errors", () => {
-  const tsc = join(root, "node_modules", ".bin", "tsc");
+  /* the .bin/tsc shim has no executable extension, so Windows needs its .cmd
+     shim run through a shell; the type check itself is unchanged. */
+  const win = process.platform === "win32";
+  const bin = join(root, "node_modules", ".bin", win ? "tsc.cmd" : "tsc");
   try {
-    execFileSync(tsc, [
+    execFileSync(bin, [
       "--noEmit", "--strict",
       "--moduleResolution", "bundler", "--module", "esnext",
       "--target", "es2022", "--lib", "es2022,dom",
       join(root, "types", "consumer.ts"),   /* outside test/, which node --test walks */
-    ], { encoding: "utf8", stdio: "pipe" });
+    ], { encoding: "utf8", stdio: "pipe", shell: win });
   } catch (e) {
     assert.fail("tsc rejected the public types:\n" + (e.stdout || "") + (e.stderr || ""));
   }
