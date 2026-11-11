@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>曲面画廊 · 滚轮行为验证</title>
+<link rel="stylesheet" href="effect.css">
+<style>
+  body { font-family: ui-monospace, Consolas, "Courier New", monospace; margin: 24px; background: #f4f4f2; color: #17181a; }
+  h1 { font-size: 20px; }
+  .note { color: #6a6963; font-size: 13px; }
+  #stage { height: 420px; }
+  #summary { font-size: 17px; font-weight: 700; margin: 18px 0 8px; }
+  #summary.ok { color: #137333; }
+  #summary.bad { color: #b3261e; }
+  ol { padding-left: 26px; }
+  li { margin: 4px 0; font-size: 13px; }
+  li.pass { color: #137333; }
+  li.fail { color: #b3261e; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>曲面画廊滚轮行为验证（合成 wheel 事件，离线运行）</h1>
+<p class="note">
+  测试全自动执行，约需 8 秒。运行期间请保持本标签页可见（折叠动画依赖 requestAnimationFrame），不要手动滚动页面。<br>
+  覆盖：折叠推进与夹紧、端点惯性吞并（≤250ms 连续手势）、手势中断后 100px 外推放行、动画未追上不放行、
+  反向推回接管并清零、暂停不响应、reset 归零、两端对称、destroy 后恢复页面滚动。
+</p>
+<div id="stage"></div>
+<div id="summary">运行中…</div>
+<ol id="results"></ol>
+<script src="three.min.js"></script>
+<script src="effect.js"></script>
+<script>
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const resultsEl = document.getElementById('results');
+  const summaryEl = document.getElementById('summary');
+  let pass = 0,
+    fail = 0;
+  function assert(name, cond, detail) {
+    if (cond) pass++;
+    else fail++;
+    const li = document.createElement('li');
+    li.className = cond ? 'pass' : 'fail';
+    li.textContent = (cond ? '✓ ' : '✗ ') + name + (detail ? ' — ' + detail : '');
+    resultsEl.append(li);
+    console.log((cond ? 'PASS ' : 'FAIL ') + name, detail || '');
+    summaryEl.textContent = '运行中… 通过 ' + pass + ' / ' + (pass + fail);
+    return cond;
+  }
+
+  const stage = document.getElementById('stage');
+  // 强制非 reduced-motion，保证“动画未追上”这条路径真实存在动画滞后。
+  const fx = mountCurvedGallery(stage, { reducedMotion: false });
+  const viewport = stage.querySelector('.arc-viewport');
+  const S = () => fx.status();
+  // 派发合成滚轮事件，返回默认行为是否被画廊阻止（true = 画廊吞掉，false = 页面可滚动）。
+  function wheel(deltaY) {
+    const event = new WheelEvent('wheel', { deltaY, cancelable: true, bubbles: true });
+    viewport.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+  async function waitFor(fn, timeout) {
+    const t0 = performance.now();
+    while (performance.now() - t0 < (timeout || 6000)) {
+      if (fn(S())) return true;
+      await sleep(50);
+    }
+    return false;
+  }
+  // 等待显示进度与目标进度都抵达 p（|差值| <= 0.01）。
+  const settleTo = (p) => waitFor((s) => Math.abs(s.progress - p) <= 0.01 && Math.abs(s.targetProgress - p) <= 0.01);
+
+  try {
+    // ---- 初始状态 ----
+    let s = S();
+    assert(
+      '01 初始：折叠进度、外推计数、手势锁均为初始值',
+      s.targetProgress === 0 && s.progress === 0 && s.wheel.pushed === 0 && s.wheel.held === false,
+      JSON.stringify(s.wheel),
+    );
+
+    // ---- 负向：deltaY = 0 ----
+    assert('02 deltaY=0 的滚轮不阻止默认行为、不改变进度', wheel(0) === false && S().targetProgress === 0);
+
+    // ---- 折叠推进（1800px = 一次完整折叠）----
+    assert(
+      '03 未到端点：滚轮阻止默认滚动并推进折叠（180px → 0.1）',
+      wheel(180) === true && Math.abs(S().targetProgress - 0.1) < 1e-6,
+      'targetProgress=' + S().targetProgress,
+    );
+
+    // ---- 进度夹紧到 [0,1] ----
+    wheel(1800);
+    assert('04 进度夹在 [0,1]：累计超过 1800px 后 targetProgress === 1', S().targetProgress === 1);
+
+    // ---- 同一次连续手势到达端点后继续吞掉惯性 ----
+    const held = [wheel(120), wheel(120), wheel(120)];
+    assert(
+      '05 到达端点后，同一次连续手势（间隔≤250ms）继续阻止默认行为',
+      held.every(Boolean) && S().wheel.held === true,
+      'prevented=' + held.join(','),
+    );
+
+    // ---- 手势中断 + 动画未追上：外推不放行且不计数 ----
+    await sleep(300); // 手势中断（>250ms），但 1800px 的折叠动画（rate 7）此时必然未追上
+    s = S();
+    const unsettled = Math.abs(s.progress - s.targetProgress) > 0.01;
+    const r6 = wheel(120);
+    assert(
+      '06 动画未追上目标（差值>0.01）时，任何外推不放行且不计数',
+      unsettled && r6 === true && S().wheel.pushed === 0,
+      'unsettled=' + unsettled + ' prevented=' + r6 + ' pushed=' + S().wheel.pushed,
+    );
+
+    // ---- 手势中断后，外推未满 100px 不放行 ----
+    assert('07a 折叠动画最终追上目标进度（settle 到 1）', await settleTo(1));
+    await sleep(300); // 手势中断
+    const r7a = wheel(40),
+      p7a = S().wheel.pushed,
+      r7b = wheel(50),
+      p7b = S().wheel.pushed;
+    assert(
+      '07b 手势中断后，外推累计未满 100px 仍阻止页面滚动',
+      r7a === true && r7b === true && p7a === 40 && p7b === 90,
+      'pushed ' + p7a + ' → ' + p7b,
+    );
+
+    // ---- 推满 100px 后放行 ----
+    const r8a = wheel(20), // 累计到 110，这一下仍被吞
+      r8b = wheel(20); // 已推满，放行页面滚动
+    assert('08 外推推满 100px 后允许页面滚动', r8a === true && r8b === false, 'crossing=' + r8a + ' next=' + r8b);
+
+    // ---- 反向推回：立即接管折叠并清零外推 ----
+    const r9 = wheel(-180);
+    s = S();
+    assert(
+      '09 反向推回立即重新接管折叠，并清零已累计的外推距离',
+      r9 === true && Math.abs(s.targetProgress - 0.9) < 1e-6 && s.wheel.pushed === 0,
+      'targetProgress=' + s.targetProgress + ' pushed=' + s.wheel.pushed,
+    );
+
+    // ---- 重新折叠到端点 ----
+    wheel(180);
+    assert('10 反向接管后可再折叠到端点（targetProgress === 1）', S().targetProgress === 1);
+
+    // ---- 暂停：滚轮完全不响应 ----
+    fx.setPaused(true);
+    const tpBefore = S().targetProgress;
+    const r11 = wheel(200);
+    assert('11 暂停状态下滚轮完全不响应（不阻止、不推进）', r11 === false && S().targetProgress === tpBefore);
+    fx.setPaused(false);
+
+    // ---- 先累积 60px 外推，供 reset 检验 ----
+    assert('12a 再次 settle 到端点', await settleTo(1));
+    await sleep(300);
+    wheel(60);
+    assert('12b 外推计数已累积 60px', S().wheel.pushed === 60, 'pushed=' + S().wheel.pushed);
+
+    // ---- reset：进度、偏移、外推计数全部归零 ----
+    fx.reset();
+    s = S();
+    assert('13a reset 立即清零外推计数与手势锁', s.wheel.pushed === 0 && s.wheel.held === false, JSON.stringify(s.wheel));
+    assert(
+      '13b reset 后折叠进度与偏移回到初始值',
+      (await settleTo(0)) && Math.abs(S().offset) <= 0.01,
+      'progress=' + S().progress + ' offset=' + S().offset,
+    );
+
+    // ---- reset 后外推计数从零开始（行为复核：若未清零，60+60≥100 会被直接放行）----
+    wheel(1800);
+    assert('14a 重置后可重新折叠到端点', S().targetProgress === 1 && (await settleTo(1)));
+    await sleep(300);
+    const r14 = wheel(60);
+    assert('14b 重置后外推计数从零开始（60px 不放行）', r14 === true && S().wheel.pushed === 60, 'pushed=' + S().wheel.pushed);
+
+    // ---- 下端（进度 0）对称路径 ----
+    assert('15a 反向折回下端（targetProgress === 0）', wheel(-1800) === true && S().targetProgress === 0 && (await settleTo(0)));
+    await sleep(300);
+    const r15a = wheel(-40),
+      r15b = wheel(-50),
+      r15c = wheel(-20), // 累计 110，仍吞
+      r15d = wheel(-20); // 放行
+    assert(
+      '15b 下端对称：外推推满 100px 才放行页面滚动',
+      r15a === true && r15b === true && r15c === true && r15d === false,
+      [r15a, r15b, r15c, r15d].join(','),
+    );
+
+    // ---- destroy：不再监听滚轮，页面滚动恢复 ----
+    fx.destroy();
+    const r16 = wheel(200);
+    assert(
+      '16 销毁后不再监听滚轮，页面滚动恢复正常',
+      r16 === false && stage.querySelector('.arc-viewport') === null && S().destroyed === true,
+      'prevented=' + r16,
+    );
+  } catch (error) {
+    assert('测试执行出现异常', false, String((error && error.stack) || error));
+  }
+
+  summaryEl.textContent =
+    (fail === 0 ? '全部通过 ' : '未全部通过 ') + pass + '/' + (pass + fail) + (fail ? '（失败 ' + fail + ' 条）' : '');
+  summaryEl.className = fail === 0 ? 'ok' : 'bad';
+  window.__verify = { pass, fail };
+})();
+</script>
+</body>
+</html>

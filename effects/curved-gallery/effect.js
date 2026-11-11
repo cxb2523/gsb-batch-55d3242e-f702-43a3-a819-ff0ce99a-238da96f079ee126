@@ -680,6 +680,19 @@
       let pushed = 0,
         pushDir = 0,
         pushAt = -Infinity;
+      // reset()/replay() must return the wheel bookkeeping to its initial state too: no held gesture,
+      // no accumulated outward push.
+      const resetWheel = () => {
+        wheelAt = -Infinity;
+        held = false;
+        pushed = 0;
+        pushDir = 0;
+        pushAt = -Infinity;
+      };
+      // Exposed for the verification page: whether a continuous gesture is held and how far the user
+      // has already pushed past the end.
+      const innerStatus = api.status;
+      api.status = () => Object.assign(innerStatus(), { wheel: { held, pushed } });
       api.listen(
         viewport,
         'wheel',
@@ -749,9 +762,11 @@
       api.on('replay', () => {
         back = null;
         swipe = null;
+        resetWheel();
       });
       api.restore = () => {
         swipe = null;
+        resetWheel();
         if (drag) {
           const id = drag.id;
           if (id !== -1 && viewport.hasPointerCapture(id)) viewport.releasePointerCapture(id);
@@ -1045,6 +1060,7 @@
       },
       setParams: inst.setParams,
       setPaused: inst.setPaused,
+      status: inst.status,
       reset() {
         inst.setParams(inst.defaults);
         if (inst.restore) inst.restore();
