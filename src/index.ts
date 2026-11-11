@@ -25,7 +25,7 @@ import type {} from "@deepseek-ai/dsh-skill";
 // and this is the constructor that stamps the identity and source tags it requires.
 import { createUserMessage, type ContextFormed } from "@deepseek-ai/dsh-llm";
 import { AI_STREAM_PATH, ASSET_PREFIX, CANVAS_READ_PATH, CARD_ERROR_PATH, EXEC_PATH, FS_PATH, WASM_PATH, WEB_SEARCH_PATH } from "./contract-assets.ts";
-import { CANVAS_DIR, canvasChildPath, canvasIdOf, canvasPath, isCanvasId } from "./contract.ts";
+import { CANVAS_DIR, canvasChildDir, canvasChildPath, canvasIdOf, canvasPath, isCanvasId } from "./contract.ts";
 import { CardFailures, CARD_FAILURE_CONTEXT, CARD_FAILURE_CONTEXT_ORDER, WAKE_SUMMARY, WAKE_TEXT } from "./card-failure.ts";
 import { inlinePrompt, PROMPT_SECTION_NAME, PROMPT_SECTION_ORDER, type Capabilities } from "./prompt.ts";
 import { skillEntry, skillPath, skillResourceBase, SKILL_DESCRIPTION, SKILL_NAME } from "./skill.ts";
@@ -209,7 +209,10 @@ export async function serveCanvas(liveWorkspaces: () => ReadonlySet<string>, req
   const child = url.searchParams.get("child");
   if (child !== null) {
     const path = canvasChildPath(id, child, url.searchParams.get("from") ?? undefined);
-    if (path === null) return void res.writeHead(400).end();
+    // The contract already confines the result; this restates the invariant at the read,
+    // because the next line turns it into a filesystem call. A path that is not below this
+    // canvas's own directory is refused before anything outside it can be opened.
+    if (path === null || !path.startsWith(`${canvasChildDir(id)}/`)) return void res.writeHead(400).end();
     // A specifier carries no extension, so the server is what decides which file it names —
     // and the client needs to know, because the compiler picks its syntax from the extension.
     for (const suffix of [".tsx", ".ts", "/index.tsx", "/index.ts", ""]) {

@@ -54,30 +54,53 @@ export const canvasChildDir = (id: string) => `${CANVAS_DIR}/${id}`;
  * children — because **a relative specifier is relative to its importer, not to the canvas
  * root**. The entry writes `./<id>/board`; a child of that entry writes `./types` for its
  * sibling, and resolving both against the canvases directory sends the second one nowhere.
- * Measured on a real split: the model produced 7 files whose cross-imports are all sibling
- * form, and every one of them resolved to null before `from` existed.
  *
- * Every segment goes through the same exclusion test as an id, and the result must stay
- * inside `canvasChildDir(id)` — `..` is rejected outright rather than normalised, so there
- * is no arithmetic that could walk out.
+ * The two bases are the only legal ones:
+ *   - beside the entry (no `from`, or `from` naming `canvasPath(id)`): `./<id>/<name>` resolves
+ *     to `<id>/<name>` inside the canvas's private directory;
+ *   - beside a child (`from` naming a file under `canvasChildDir(id)`): `./<name>` resolves to
+ *     the sibling in the same directory, and nested referrers keep their subdirectory.
+ *
+ * A specifier must therefore be an explicit `./` relative path. `..`, `.`, empty segments,
+ * absolute paths and Windows separators are rejected outright rather than normalised, so no
+ * arithmetic can walk out of the canvas. `from` is attacker-controlled too, so it is held to
+ * the same shape: a traversal or a path naming another canvas resolves to null, never to a
+ * sibling directory of the canvas.
  *
  * Returns null for anything outside that shape rather than throwing: the caller is a route
  * answering an arbitrary page, and a bad specifier is a 400, not a crash.
  */
 export function canvasChildPath(id: string, specifier: string, from?: string): string | null {
   if (!isCanvasId(id)) return null;
-  const segments = specifier.replace(/^\.\//, "").split("/");
-  if (segments.length === 0 || !segments.every(isCanvasId)) return null;
+
+  // `import "types"` is a bare module name, not a relative path: only `./…` names a sibling.
+  // `.` and `..` are not file names, and an empty segment is `//` or a trailing slash.
+  if (!specifier.startsWith("./")) return null;
+  const segments = specifier.slice(2).split("/");
+  if (!segments.every(isCanvasId)) return null;
   const root = canvasChildDir(id);
-  // No `from`, or one naming the entry file: the specifier is written beside the canvas, so
-  // it must open with the id. With a `from` inside the child directory, it is written beside
-  // that file instead and the id never appears.
-  const within = from === undefined ? null : from.replace(/\\/g, "/").split(`${root}/`)[1];
-  if (within === undefined || within === null) {
+
+  // The referrer is either the entry file or a file inside the child directory. Tool arguments
+  // can carry an absolute prefix, so the contract path is taken from its trailing portion; an
+  // unterminated `…/<id>/` (just the directory, or another canvas) names no referrer at all.
+  const referrer = from === undefined ? null : from.replace(/\\/g, "/").replace(/^\.\//, "");
+  const at = referrer === null ? -1 : referrer.lastIndexOf(`${CANVAS_DIR}/`);
+  const within = referrer === null ? null : at === -1 ? referrer : referrer.slice(at + CANVAS_DIR.length + 1);
+
+  // No referrer, or the entry file itself: the specifier is written beside the canvas, so it
+  // must open with the id. This is also what keeps `./other/board` from naming another canvas.
+  if (within === null || within === `${id}${CANVAS_SUFFIX}`) {
     if (segments.length < 2 || segments[0] !== id) return null;
     return `${root}/${segments.slice(1).join("/")}`;
   }
-  const dir = within.split("/").slice(0, -1);
+
+  // Beside a child: the id is the directory, and the rest of `from` locates the importer. A
+  // segment that is empty, `.` or `..` would move the base out of the canvas, so reject it
+  // before slicing off the file name — `from` is a query parameter, not trusted input.
+  if (!within.startsWith(`${id}/`)) return null;
+  const importer = within.slice(id.length + 1).split("/");
+  if (!importer.every((segment) => segment !== "" && segment !== "." && segment !== "..")) return null;
+  const dir = importer.slice(0, -1);
   return [root, ...dir, ...segments].join("/");
 }
 

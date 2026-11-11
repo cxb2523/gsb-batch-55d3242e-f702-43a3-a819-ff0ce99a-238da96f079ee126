@@ -7,7 +7,7 @@
  * path is under the contract at all. Removing either widens what a route will read.
  */
 import { expect, test } from "bun:test";
-import { CANVAS_DIR, canvasChildDir, canvasChildPath, owningCanvasIdOf } from "../src/contract.ts";
+import { CANVAS_DIR, canvasChildDir, canvasChildPath, canvasPath, isCanvasId, owningCanvasIdOf } from "../src/contract.ts";
 
 const id = "deck";
 
@@ -25,11 +25,39 @@ test("a specifier beside a child file resolves as a sibling", () => {
   expect(canvasChildPath(id, "./types", `${canvasChildDir(id)}/nested/board.tsx`)).toBe(`${canvasChildDir(id)}/nested/types`);
 });
 
+// The entry is the other base. Named explicitly it must behave exactly like the omitted form,
+// and it must not be mistaken for a child file that merely happens to start with the id.
+test("the entry file is a base whether named or omitted", () => {
+  expect(canvasChildPath(id, "./deck/board", undefined)).toBe(`${canvasChildDir(id)}/board`);
+  expect(canvasChildPath(id, "./deck/board", canvasPath(id))).toBe(`${canvasChildDir(id)}/board`);
+  expect(canvasChildPath(id, "./deck/board", "deck.ui4a.tsx")).toBe(`${canvasChildDir(id)}/board`);
+  // The bare id names the child directory, not a file inside it.
+  expect(canvasChildPath(id, "./deck", canvasPath(id))).toBeNull();
+});
+
+// Every form that is not a plain `./` relative path is refused before any arithmetic happens.
+test("absolute, bare, empty and backslash specifiers are refused", () => {
+  for (const specifier of ["/etc/passwd", "../../secret", "types", "./", ".", "./deck//board", "./deck/board/", "./deck/../secret", "C:/w/x", String.raw`.\types`, String.raw`C:\w\x`]) {
+    expect(canvasChildPath(id, specifier, canvasPath(id))).toBeNull();
+  }
+});
+
+// A Chinese canvas id is a path segment too: the exclusion is separators and dots, not ASCII.
+test("a Chinese id resolves for both bases", () => {
+  const chinese = "背单词";
+  expect(isCanvasId(chinese)).toBe(true);
+  expect(canvasChildPath(chinese, `./${chinese}/types`)).toBe(`${CANVAS_DIR}/${chinese}/types`);
+  expect(canvasChildPath(chinese, "./types", `${CANVAS_DIR}/${chinese}/board.tsx`)).toBe(`${CANVAS_DIR}/${chinese}/types`);
+});
+
 // `..` is rejected outright rather than normalised, so there is no arithmetic to defeat.
 test("traversal is rejected rather than normalised", () => {
   expect(canvasChildPath(id, "./deck/../../secret")).toBeNull();
   expect(canvasChildPath(id, "./deck/..", `${canvasChildDir(id)}/board.tsx`)).toBeNull();
   expect(canvasChildPath("../etc", "./x")).toBeNull();
+  // `from` is a query parameter too, so its own segments get the same treatment.
+  expect(canvasChildPath(id, "./types", `${canvasChildDir(id)}/../secret`)).toBeNull();
+  expect(canvasChildPath(id, "./types", `${canvasChildDir(id)}/nested/../../secret`)).toBeNull();
 });
 
 test("a path outside the canvases directory owns no canvas", () => {
