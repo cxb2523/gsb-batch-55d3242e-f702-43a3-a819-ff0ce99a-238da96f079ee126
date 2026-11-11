@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 import { Header } from './components/Header';
 import { PlantSvg } from './components/PlantSvg';
@@ -71,6 +71,10 @@ const STAGES = [
   }
 ];
 
+const STAGE_DELAY_MS = 350;
+const MODAL_DELAY_MS = 400;
+const RIPPLE_DELAY_MS = 650;
+
 export function App() {
   const [currentStage, setCurrentStage] = useState(0);
   const [showModal, setShowModal] = useState(false);
@@ -79,43 +83,108 @@ export function App() {
   const [showRipple, setShowRipple] = useState(false);
   const [triggerBurst, setTriggerBurst] = useState(false);
 
+  // Refs mirror the committed state so event handlers can make a synchronous
+  // decision even before React has re-rendered the next frame.
+  const currentStageRef = useRef(0);
+  const showModalRef = useRef(false);
+  const bloomSunflowerRef = useRef(false);
+
+  // True while a delayed stage/modal transition is queued. Any further
+  // watering during that window is ignored.
+  const transitioningRef = useRef(false);
+
+  // Every pending timeout is tracked so it can be cancelled on reset and on
+  // unmount; a cancelled callback must never mutate state.
+  const pendingTimersRef = useRef(new Set());
+
+  const clearPendingTimers = useCallback(() => {
+    pendingTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+    pendingTimersRef.current.clear();
+  }, []);
+
+  const scheduleTimeout = useCallback((callback, delay) => {
+    const timerId = setTimeout(() => {
+      pendingTimersRef.current.delete(timerId);
+      callback();
+    }, delay);
+    pendingTimersRef.current.add(timerId);
+  }, []);
+
+  useEffect(() => clearPendingTimers, [clearPendingTimers]);
+
   const stage = STAGES[currentStage];
 
+  const resetToInitialStage = () => {
+    // Drop every queued callback first: a stale stage/modal/ripple transition
+    // from before the bloom must not touch the fresh state.
+    clearPendingTimers();
+    transitioningRef.current = false;
+
+    currentStageRef.current = 0;
+    setCurrentStage(0);
+
+    showModalRef.current = false;
+    setShowModal(false);
+
+    bloomSunflowerRef.current = false;
+    setBloomSunflower(false);
+
+    setTriggerBurst(false);
+  };
+
   const handleWater = () => {
+    // Ignore clicks while a stage change is pending or while the final card
+    // is open. One valid watering maps to exactly one state transition.
+    if (transitioningRef.current || showModalRef.current) {
+      return;
+    }
+
     audioSynth.playWaterSound();
 
     // Trigger water drop animation
-    const newKey = Date.now();
-    setDropsKey(newKey);
+    setDropsKey(Date.now());
     setShowRipple(false);
-    setTimeout(() => setShowRipple(true), 650);
 
-    if (bloomSunflower) {
-      setCurrentStage(0);
-      setBloomSunflower(false);
-      setShowModal(false);
-      setTriggerBurst(false);
+    if (bloomSunflowerRef.current) {
+      resetToInitialStage();
+      // The reset click still gets its own ripple feedback.
+      scheduleTimeout(() => setShowRipple(true), RIPPLE_DELAY_MS);
       return;
     }
 
-    if (stage.triggersModal) {
-      setTimeout(() => {
+    scheduleTimeout(() => setShowRipple(true), RIPPLE_DELAY_MS);
+
+    if (STAGES[currentStageRef.current].triggersModal) {
+      transitioningRef.current = true;
+      scheduleTimeout(() => {
+        transitioningRef.current = false;
+        showModalRef.current = true;
         setShowModal(true);
-      }, 400);
+      }, MODAL_DELAY_MS);
       return;
     }
 
-    if (currentStage < STAGES.length - 1) {
-      const nextStage = currentStage + 1;
-      setTimeout(() => {
+    if (currentStageRef.current < STAGES.length - 1) {
+      const nextStage = currentStageRef.current + 1;
+      transitioningRef.current = true;
+      scheduleTimeout(() => {
+        currentStageRef.current = nextStage;
         setCurrentStage(nextStage);
+        transitioningRef.current = false;
         audioSynth.playGrowSound(nextStage);
-      }, 350);
+      }, STAGE_DELAY_MS);
     }
   };
 
   const handleRevealFlower = () => {
+    // Only the visible final card can reveal the flower, and only once.
+    if (!showModalRef.current || bloomSunflowerRef.current) {
+      return;
+    }
+
+    showModalRef.current = false;
     setShowModal(false);
+    bloomSunflowerRef.current = true;
     setBloomSunflower(true);
     setTriggerBurst(true);
     audioSynth.playFanfareSound();

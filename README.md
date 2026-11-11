@@ -77,6 +77,26 @@
 
 ---
 
+## 🧪 Pruebas automatizadas
+
+La cadena de avance del riego está cubierta con **Vitest + React Testing Library** (`src/App.test.jsx`). Los tests usan temporizadores falsos y verifican:
+
+- Avance normal etapa por etapa (0 → 5), con tallo, hojas, frases, botón y emoji sincronizados, y la tarjeta final apareciendo a los 400 ms.
+- Los clics repetidos dentro de la ventana de 350 ms (o de 400 ms de la tarjeta) se ignoran: una sola pulsación produce un solo cambio de estado.
+- Tras la floración, «Floreció» vuelve inmediatamente a la etapa 0, cierra la tarjeta y limpia las marcas de floración y de explosión de partículas; un riego posterior vuelve a avanzar normalmente.
+- Los temporizadores pendientes se cancelan al desmontar el componente y no modifican el estado.
+
+Comando:
+
+```bash
+npm install
+npm test
+```
+
+Resultado esperado: `Test Files 1 passed (1)` y `Tests 5 passed (5)`. Para desarrollo, `npm run test:watch` deja Vitest observando los cambios.
+
+---
+
 ## 🎨 ¿Cómo personalizarlo?
 
 Puedes personalizar los textos y mensajes para adaptarlos a tu persona especial:
