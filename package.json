@@ -1,0 +1,53 @@
+{
+  "name": "aniso",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start",
+    "lint": "next lint",
+    "analyze": "cross-env ANALYZE=true next build",
+    "analyze:server": "cross-env BUNDLE_ANALYZE=server next build",
+    "analyze:browser": "cross-env BUNDLE_ANALYZE=browser next build"
+  },
+  "dependencies": {
+    "@radix-ui/react-accordion": "^1.2.4",
+    "@radix-ui/react-select": "^2.1.7",
+    "@react-spring/rafz": "^9.7.5",
+    "@react-spring/web": "^9.7.5",
+    "@react-three/drei": "^10.0.6",
+    "@react-three/fiber": "^9.1.2",
+    "@react-three/postprocessing": "^3.0.4",
+    "babel-plugin-react-compiler": "^19.0.0-beta-ebf51a3-20250411",
+    "clsx": "^2.1.1",
+    "cross-env": "^7.0.3",
+    "debounce": "^2.2.0",
+    "embla-carousel-autoplay": "^8.6.0",
+    "embla-carousel-react": "^8.6.0",
+    "glslify-loader": "^2.0.0",
+    "hamo": "^1.0.0-dev.6",
+    "lefthook": "^1.11.10",
+    "leva": "^0.10.0",
+    "lint-staged": "^15.5.1",
+    "next": "15.5.19",
+    "postprocessing": "^6.37.2",
+    "raw-loader": "^4.0.2",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-use": "^17.6.0",
+    "resize-observer-polyfill": "^1.5.1",
+    "sass": "^1.86.3",
+    "stats.js": "^0.17.0",
+    "three": "^0.175.0",
+    "tunnel-rat": "^0.1.2",
+    "use-dark-mode": "^2.3.1",
+    "uuid": "^11.1.0",
+    "zustand": "5.0.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@next/bundle-analyzer": "^15.3.0",
+    "@svgr/webpack": "^8.1.0"
+  }
+}

@@ -1,0 +1,18 @@
+@import 'styles/_functions';
+
+.hero {
+  height: 100vh;
+}
+
+.disclaimer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  color: var(--white);
+  padding: mobile-vw(20px);
+
+  .text {
+    max-width: 300px;
+  }
+}

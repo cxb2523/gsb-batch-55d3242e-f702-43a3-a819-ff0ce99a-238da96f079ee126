@@ -1,0 +1,35 @@
+.instruction {
+  position: absolute;
+  z-index: 2;
+  color: white;
+  text-align: left;
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.dropzone {
+  // pointer-events: none;
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  right: 0;
+}
+
+.ascii {
+  display: flex;
+  height: 100vh;
+}
+
+.canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  transition: padding-left 600ms var(--ease-out-expo);
+
+  &.open {
+    padding-left: 312px;
+  }
+}
