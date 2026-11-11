@@ -28,6 +28,7 @@ export interface GameCopy {
   customizeDescription: string;
   daily: string;
   dailyDetails: string;
+  dailyExpiredNotice: string;
   dailyTagline: string;
   exitGameDescription: string;
   exitGameTitle: string;
@@ -128,6 +129,8 @@ export const GAME_COPY: Record<GameLanguage, GameCopy> = {
     daily: 'Daily Challenge',
     dailyDetails:
       "Use today's seeded opening board and reach 1,000 points to complete the challenge.",
+    dailyExpiredNotice:
+      "Yesterday's challenge has ended. A new board has been generated for today.",
     dailyTagline: 'Daily board · Goal 1,000',
     exitGameDescription: 'Your current board and progress will be lost.',
     exitGameTitle: 'Exit this game?',
@@ -230,6 +233,7 @@ export const GAME_COPY: Record<GameLanguage, GameCopy> = {
     daily: '每日挑战',
     dailyDetails:
       '使用日期种子生成今天固定的开局棋盘，达到 1000 分则挑战成功。',
+    dailyExpiredNotice: '昨日挑战已结束，今日棋盘已重新生成。',
     dailyTagline: '每日棋盘 · 目标 1000 分',
     exitGameDescription: '当前棋盘和本局进度将会丢失。',
     exitGameTitle: '退出本局游戏？',

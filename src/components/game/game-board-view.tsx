@@ -1,5 +1,6 @@
 import {
   IconArrowLeft,
+  IconCalendarCancel,
   IconHandFinger,
   IconSettings,
 } from '@tabler/icons-react';
@@ -44,6 +45,7 @@ interface DragState {
 interface GameBoardViewProps {
   clearEffect: GameClearEffect | null;
   copy: GameCopy;
+  dailyExpiredNotice: string | null;
   gameOver: boolean;
   hintsEnabled: boolean;
   mode: GameMode;
@@ -79,6 +81,7 @@ function joinClasses(...values: Array<string | false | null | undefined>) {
 export function GameBoardView({
   clearEffect,
   copy,
+  dailyExpiredNotice,
   gameOver,
   hintsEnabled,
   mode,
@@ -216,6 +219,16 @@ export function GameBoardView({
           <IconSettings aria-hidden="true" />
         </Link>
       </header>
+
+      {dailyExpiredNotice && (
+        <output
+          className="daily-expired-notice"
+          data-testid="daily-expired-notice"
+        >
+          <IconCalendarCancel aria-hidden="true" />
+          <span>{dailyExpiredNotice}</span>
+        </output>
+      )}
 
       <div className="board-meta">
         <output

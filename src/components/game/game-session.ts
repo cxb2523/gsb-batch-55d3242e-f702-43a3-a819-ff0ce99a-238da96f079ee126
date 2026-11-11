@@ -17,6 +17,27 @@ export interface ActiveGameSession {
   version: 4;
 }
 
+/**
+ * Outcome of inspecting the persisted active-game session:
+ *
+ * - `restored`: a structurally valid session for today, safe to resume.
+ * - `daily-expired`: a structurally valid daily session for a previous day;
+ *   it must be discarded and a fresh daily board generated for today.
+ * - `invalid`: the stored payload fails structural validation (corrupt
+ *   board, wrong piece count, wrong field types, ...); discarded silently.
+ * - `none`: nothing usable was stored.
+ */
+export type ActiveGameSessionStatus =
+  | 'restored'
+  | 'daily-expired'
+  | 'invalid'
+  | 'none';
+
+export interface ActiveGameSessionResult {
+  session: ActiveGameSession | null;
+  status: ActiveGameSessionStatus;
+}
+
 export const ACTIVE_GAME_SESSION_KEY = 'block-blast-active-game';
 
 const BLOCK_COLORS = new Set<GameBlockColor>([
@@ -69,9 +90,13 @@ function isPiece(value: unknown): value is GamePiece | null {
   );
 }
 
-function isActiveGameSession(
-  value: unknown,
-  currentDailyDate: string
+/**
+ * Validates every field except the daily-date match. A session that passes
+ * this check is a well-formed game; the date is a separate, user-visible
+ * concern so an expired daily board can be distinguished from a corrupt one.
+ */
+function isStructurallyValidActiveGameSession(
+  value: unknown
 ): value is ActiveGameSession {
   if (!value || typeof value !== 'object') return false;
   const session = value as Partial<ActiveGameSession>;
@@ -79,7 +104,7 @@ function isActiveGameSession(
     session.version === 4 &&
     isGameMode(session.mode) &&
     (session.mode === 'daily'
-      ? session.dailyDate === currentDailyDate
+      ? typeof session.dailyDate === 'string'
       : session.dailyDate === null) &&
     isBoard(session.board) &&
     Array.isArray(session.pieces) &&
@@ -96,21 +121,46 @@ function isActiveGameSession(
   );
 }
 
-export function readActiveGameSession(
-  currentDailyDate: string
-): ActiveGameSession | null {
+function readStoredSession(): unknown | null {
   try {
     const stored = window.sessionStorage.getItem(ACTIVE_GAME_SESSION_KEY);
     if (!stored) return null;
-    const parsed: unknown = JSON.parse(stored);
-    if (isActiveGameSession(parsed, currentDailyDate)) {
-      return parsed;
-    }
-    window.sessionStorage.removeItem(ACTIVE_GAME_SESSION_KEY);
+    return JSON.parse(stored) as unknown;
   } catch {
     // Invalid or unavailable session storage should not block the game.
+    return null;
   }
-  return null;
+}
+
+export function resolveActiveGameSession(
+  currentDailyDate: string
+): ActiveGameSessionResult {
+  const parsed = readStoredSession();
+  if (parsed === null) {
+    return { session: null, status: 'none' };
+  }
+
+  if (!isStructurallyValidActiveGameSession(parsed)) {
+    clearActiveGameSession();
+    return { session: null, status: 'invalid' };
+  }
+
+  if (
+    parsed.mode === 'daily' &&
+    parsed.dailyDate !== null &&
+    parsed.dailyDate !== currentDailyDate
+  ) {
+    clearActiveGameSession();
+    return { session: null, status: 'daily-expired' };
+  }
+
+  return { session: parsed, status: 'restored' };
+}
+
+export function readActiveGameSession(
+  currentDailyDate: string
+): ActiveGameSession | null {
+  return resolveActiveGameSession(currentDailyDate).session;
 }
 
 export function writeActiveGameSession(session: ActiveGameSession) {

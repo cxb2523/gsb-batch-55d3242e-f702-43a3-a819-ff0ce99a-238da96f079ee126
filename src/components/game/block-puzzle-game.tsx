@@ -33,7 +33,7 @@ import { GameMenu } from '@/components/game/game-menu';
 import { useGamePreferences } from '@/components/game/game-preferences';
 import {
   clearActiveGameSession,
-  readActiveGameSession,
+  resolveActiveGameSession,
   writeActiveGameSession,
 } from '@/components/game/game-session';
 import {
@@ -101,6 +101,7 @@ export function BlockPuzzleGame({ routeMode }: { routeMode?: GameMode } = {}) {
   const [isSessionReady, setIsSessionReady] = useState(false);
   const [, setScoreHistory] = useState<ScoreRecord[]>([]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [showDailyExpiredNotice, setShowDailyExpiredNotice] = useState(false);
   const dailyDateRef = useRef<string | null>(null);
   const clearEffectIdRef = useRef(0);
   const clearEffectTimerRef = useRef<number | null>(null);
@@ -153,11 +154,14 @@ export function BlockPuzzleGame({ routeMode }: { routeMode?: GameMode } = {}) {
 
   useEffect(() => {
     const today = getLocalDateKey();
-    const activeSession = readActiveGameSession(today);
+    const { session: activeSession, status: sessionStatus } =
+      resolveActiveGameSession(today);
+    const isDailyExpired = sessionStatus === 'daily-expired';
 
     if (routeMode === undefined) {
       setScreen('menu');
       setIsSessionReady(true);
+      setShowDailyExpiredNotice(false);
       if (activeSession) {
         void navigate({
           to: '/play/$mode',
@@ -194,6 +198,9 @@ export function BlockPuzzleGame({ routeMode }: { routeMode?: GameMode } = {}) {
       setChallengeComplete(false);
     }
 
+    // Only a well-formed daily session from a previous date surfaces the
+    // cross-day notice; corrupt saves and classic games never show it.
+    setShowDailyExpiredNotice(isDailyExpired && routeMode === 'daily');
     setExitConfirmationOpen(false);
     setClearEffect(null);
     setScreen('game');
@@ -338,6 +345,10 @@ export function BlockPuzzleGame({ routeMode }: { routeMode?: GameMode } = {}) {
         return false;
       }
 
+      // The cross-day notice only appears once: the first successful move
+      // starts the new board, so the player no longer needs the explanation.
+      setShowDailyExpiredNotice(false);
+
       const {
         clear,
         earned,
@@ -431,6 +442,7 @@ export function BlockPuzzleGame({ routeMode }: { routeMode?: GameMode } = {}) {
   const restartGame = useCallback(() => {
     isReturningHomeRef.current = false;
     dismissClearEffect();
+    setShowDailyExpiredNotice(false);
     const dailyDate = mode === 'daily' ? getLocalDateKey() : null;
     dailyDateRef.current = dailyDate;
     setRound(createGameRound(mode, dailyDate ?? getLocalDateKey()));
@@ -447,6 +459,7 @@ export function BlockPuzzleGame({ routeMode }: { routeMode?: GameMode } = {}) {
     dismissClearEffect();
     clearActiveGameSession();
     dailyDateRef.current = null;
+    setShowDailyExpiredNotice(false);
     setChallengeComplete(false);
     setGameOver(false);
     setExitConfirmationOpen(false);
@@ -514,6 +527,9 @@ export function BlockPuzzleGame({ routeMode }: { routeMode?: GameMode } = {}) {
       <GameBoardView
         clearEffect={clearEffect}
         copy={copy}
+        dailyExpiredNotice={
+          showDailyExpiredNotice ? copy.dailyExpiredNotice : null
+        }
         gameOver={gameOver}
         hintsEnabled={preferences.hints}
         mode={mode}
