@@ -670,12 +670,18 @@ function makeFbo(tex) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return f;
 }
+// prospective drawing size for a given quality, without touching GL state
+function dimsFor(q) {
+  const maxPx = 3.0e6;
+  let p = Math.min(devicePixelRatio || 1, 2) * q;
+  if (cssW * cssH * p * p > maxPx) p = Math.sqrt(maxPx / (cssW * cssH));
+  return { pr: p, w: Math.max(1, Math.round(cssW * p)), h: Math.max(1, Math.round(cssH * p)) };
+}
 function resize() {
   cssW = innerWidth; cssH = innerHeight;
-  const maxPx = 3.0e6;
-  pr = Math.min(devicePixelRatio || 1, 2) * quality;
-  if (cssW * cssH * pr * pr > maxPx) pr = Math.sqrt(maxPx / (cssW * cssH));
-  const w = Math.max(1, Math.round(cssW * pr)), h = Math.max(1, Math.round(cssH * pr));
+  const d = dimsFor(quality);
+  pr = d.pr;
+  const w = d.w, h = d.h;
   if (w === W && h === H) return;
   W = w; H = h;
   canvas.width = W; canvas.height = H;
@@ -1319,18 +1325,67 @@ addEventListener('pointermove', (e) => {
 });
 document.documentElement.addEventListener('pointerleave', () => { S.cursor.inside = false; });
 addEventListener('blur', () => { S.cursor.inside = false; });
+// wall-clock time spent hidden (or in an un-rendered gap) that never advances the simulation.
+// Settled either here or by the frame loop's safety net, never both: the first path to see
+// the interval clears hiddenAt.
+let hiddenAt = 0, bgDiscarded = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && Au.ctx) { Au.flowG.gain.setValueAtTime(0, Au.ctx.currentTime); Au.humG.gain.setValueAtTime(0, Au.ctx.currentTime); }
-  else if (!document.hidden && Au.ctx && S.erupted && S.on) Au.humG.gain.setTargetAtTime(0.022, Au.ctx.currentTime, 0.4);
+  if (document.hidden) {
+    hiddenAt = performance.now();
+    if (Au.ctx) { Au.flowG.gain.setValueAtTime(0, Au.ctx.currentTime); Au.humG.gain.setValueAtTime(0, Au.ctx.currentTime); }
+  } else {
+    if (hiddenAt) {
+      bgDiscarded += (performance.now() - hiddenAt) / 1000;
+      hiddenAt = 0;
+    }
+    // the next rAF must look like an ordinary frame: the hidden interval is dropped entirely,
+    // so the simulation resumes exactly where it left off instead of leaping forward
+    last = performance.now();
+    if (Au.ctx && S.erupted && S.on) Au.humG.gain.setTargetAtTime(0.022, Au.ctx.currentTime, 0.4);
+  }
 });
 
 // ─── loop ───────────────────────────────────────────────────────────────────
 let paused = false, last = performance.now(), ema = 16, frames = 0, sinceAdapt = 0, shown = false;
-let vsync = 16.7, slowFrames = 0;
+let vsync = 16.7, slowFrames = 0, fastFrames = 0, adapt = 'none';
+
+const FRAME_CAP = 1 / 20;        // a single frame may advance the sim by at most this
+const BG_GAP_MS = 250;           // rAF gaps longer than this were spent not rendering
+const QUALITY_MIN = 0.7, QUALITY_MAX = 1;
+const DROP_HOLD = 90, RAISE_HOLD = 240, ADAPT_COOLDOWN = 180;  // frames
+
+// move one quality step, but only if it actually changes the drawing size (the 3 Mpx cap can
+// make a nominal step a no-op); the swap itself waits for the next frame's resize()
+function stepQuality(up) {
+  const q = clamp(+(up ? quality / 0.9 : quality * 0.9).toFixed(3), QUALITY_MIN, QUALITY_MAX);
+  if (q === quality) return false;
+  const d = dimsFor(q);
+  if (d.w === W && d.h === H) return false;
+  quality = q;
+  resizePending = true;
+  adapt = up ? 'up' : 'down';
+  sinceAdapt = 0; slowFrames = 0; fastFrames = 0;
+  return true;
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
-  const raw = now - last;
-  const dt = Math.min(raw / 1000, 1 / 20);
+  let raw = now - last;
+  // Safety net for any hidden interval visibilitychange missed: settle the whole gap against
+  // hiddenAt, otherwise treat the oversized interval as an un-rendered (background) period.
+  if (raw > BG_GAP_MS && !paused) {
+    if (hiddenAt) {
+      bgDiscarded += Math.min(raw, now - hiddenAt) / 1000;
+      hiddenAt = 0;
+    } else {
+      bgDiscarded += (raw - BG_GAP_MS) / 1000;
+    }
+    raw = BG_GAP_MS;  // resume gently instead of feeding the whole gap into the sim
+  }
+  // One frame can advance at most FRAME_CAP. The remainder above the cap is deliberately
+  // dropped here — it is never carried into the next frame, so a truncated frame cannot cause
+  // a second jump on the frame that follows.
+  const dt = Math.min(raw / 1000, FRAME_CAP);
   last = now;
   if (resizePending) { resizePending = false; resize(); }  // before drawing, so no cleared frame is ever shown
   if (!paused) {
@@ -1342,19 +1397,24 @@ function frame(now) {
   render();
   flushAudio(dt);
   if (!shown) { shown = true; canvas.classList.add('ready'); }
-  // keep it smooth: lower resolution if the GPU can't keep up (judged only
-  // while the tab is in front, so background throttling never counts)
-  if (document.visibilityState === 'visible' && document.hasFocus() && raw < 250) {
+  // Adaptation is judged only while the tab is in front, so background throttling never counts.
+  if (document.visibilityState === 'visible' && document.hasFocus() && raw < BG_GAP_MS) {
     frames++; sinceAdapt++;
     ema += (raw - ema) * 0.05;
-    vsync = Math.min(Math.max(raw, 4), vsync + 0.02);  // shortest recent interval = the display's refresh
+    // the display's refresh is the *fastest* interval we ever see: only a shorter observation
+    // may lower it. Letting slow frames raise it would drift the baseline toward the slow frame
+    // time itself and eventually read chronic load as "fast" (the hysteresis would then hunt
+    // upward under steady load). Initial 16.7 covers displays up to 60 Hz; 120/144 Hz pulls it
+    // down on the very first frames.
+    vsync = Math.min(vsync, raw);
   }
-  // resolution only ever steps down, and only after the GPU has clearly fallen behind for a
-  // while; stepping back up made it hunt, and every step is a visible change
+  // Hysteresis: the "too slow" and "fast enough" bands never overlap, which keeps the quality
+  // from hunting when the frame time sits near the refresh rate.
   slowFrames = ema > vsync * 1.3 ? slowFrames + 1 : 0;
-  if (!LOCK_RES && frames > 120 && sinceAdapt > 180 && slowFrames > 90 && quality > 0.7) {
-    quality = Math.max(0.7, quality * 0.9); sinceAdapt = 0; slowFrames = 0; resizePending = true;
-  }
+  fastFrames = ema < vsync * 1.05 ? fastFrames + 1 : 0;
+  if (LOCK_RES || frames <= 120 || sinceAdapt <= ADAPT_COOLDOWN) return;
+  if (slowFrames > DROP_HOLD && quality > QUALITY_MIN) stepQuality(false);       // step down promptly
+  else if (fastFrames > RAISE_HOLD && quality < QUALITY_MAX) stepQuality(true);  // climb back one level at a time
 }
 resize();
 updateCamera();
@@ -1385,6 +1445,7 @@ if (DEBUG) window.__ferro = {
   info() {
     return {
       on: S.on, t: +S.t.toFixed(3), hdr: HDR, audio: Au.ctx ? Au.ctx.state : 'none', muted: Au.muted, size: [W, H], pr: +pr.toFixed(2), quality: +quality.toFixed(2), ema: +ema.toFixed(1),
+      lockedRes: LOCK_RES, adapt, bgDiscarded: +bgDiscarded.toFixed(3),
       body: +S.body.x.toFixed(3), head: +S.head.x.toFixed(3), tail: +S.tail.x.toFixed(3),
       rings: S.ring.map(r => +r.x.toFixed(3)), edge: +S.edge.x.toFixed(3), glow: +S.glowI.toFixed(3),
       button: btn.getBoundingClientRect().toJSON(),
