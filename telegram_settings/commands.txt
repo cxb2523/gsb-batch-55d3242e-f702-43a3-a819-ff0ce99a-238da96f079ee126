@@ -1,0 +1,5 @@
+help - show the help message
+settings - change mode and captions
+dl - <links> or reply to a message with links: download now
+video - <links> or reply to a message with links: download YouTube as video
+privacy - privacy policy and disclaimer
