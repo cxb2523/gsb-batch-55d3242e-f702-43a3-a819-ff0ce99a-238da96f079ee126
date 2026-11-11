@@ -1,0 +1,25 @@
+[project]
+name = "tokopedia-scraper"
+version = "0.1.0"
+description = "Standalone Tokopedia catalog & product search scraper for Python."
+readme = "README.md"
+requires-python = ">=3.14.7"
+keywords = ["tokopedia", "tokopedia-scraper", "ecommerce-scraper", "indonesia", "indoscraping", "scraping", "tokopedia-com"]
+dependencies = [
+    "indoscraping-core",
+    "setuptools",
+    "beautifulsoup4>=4.15.0",
+    "pandas>=3.0.5",
+    "selenium>=4.47.0",
+    "undetected-chromedriver>=3.5.5",
+]
+
+[project.scripts]
+tokopedia-scraper = "tokopedia_scraper.cli:main"
+
+[project.entry-points."indoscraping.scrapers"]
+tokopedia = "tokopedia_scraper.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.12.6"]
+build-backend = "uv_build"

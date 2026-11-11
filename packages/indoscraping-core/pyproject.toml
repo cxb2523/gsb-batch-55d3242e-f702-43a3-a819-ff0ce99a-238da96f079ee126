@@ -1,0 +1,18 @@
+[project]
+name = "indoscraping-core"
+version = "0.1.0"
+description = "Core engine, anti-bot utilities, data quality, and schemas for IndoScraping."
+readme = "README.md"
+requires-python = ">=3.14.7"
+dependencies = [
+    "curl-cffi>=0.16.2",
+    "fake-useragent>=2.2.0",
+    "httpx[http2]>=0.28.1",
+    "pandas>=3.0.5",
+    "pydantic>=2.13.4",
+    "rich>=15.0.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.12.6"]
+build-backend = "uv_build"
