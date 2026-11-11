@@ -28,6 +28,9 @@ look.views;
 // [ { view: 'three-quarter', theta: 35, phi: 78, imageUrl: 'https://…/a.png' },
 //   { view: 'front', … }, { view: 'side', … }, { view: 'back', … } ]
 
+look.completeness; // 'complete' when every requested angle rendered, 'partial' otherwise
+look.missingViews; // [ { view: 'top', error: 'render timed out' } ] when partial
+
 look.notes;
 // [ '12,400 triangles, a normal real-time budget for a hero prop or character.' ]
 
@@ -63,7 +66,7 @@ async function critique(glbUrl, intent) {
 }
 ```
 
-`toMessageContent` shapes a look into multimodal chat content: one labelled text block per angle followed by the image itself. It passes image URLs by default; `{ fetchImages: true }` inlines base64 for APIs that will not fetch a URL themselves.
+`toMessageContent` shapes a look into multimodal chat content: one labelled text block per angle followed by the image itself. On a partial look it first inserts a paragraph naming every missing angle and its reason, so the model does not mistake the surviving frames for an exhaustive view. It passes image URLs by default; `{ fetchImages: true }` inlines base64 for APIs that will not fetch a URL themselves, and an image that fails to download raises a `SeeError` (`code: 'image_fetch_failed'`) rather than being silently dropped.
 
 ## Pick your angles
 
@@ -96,7 +99,7 @@ try {
 }
 ```
 
-`invalid_url`, `render_failed`, `rate_limited`, `timeout`, `unreachable`. A partially-rendered turntable is **not** an error: you get the frames that worked plus `look.missingViews` naming the angles that did not, because three good views beat a failure.
+`invalid_url`, `render_failed`, `rate_limited`, `timeout`, `unreachable`. Every `SeeError` also carries `baseUrl` (the deployment that was called) and `status` (the HTTP status, or `null` when no response was received — an `invalid_url` is raised before any network call). A partially-rendered turntable is **not** an error: you get the frames that worked, `look.completeness === 'partial'` and `look.missingViews` naming each angle that failed and why, because three good views beat a failure. Unknown angle names are ignored, and the verdict only covers angles actually requested and recognised by the service; `stats: false` never counts as incompleteness.
 
 ## Options
 

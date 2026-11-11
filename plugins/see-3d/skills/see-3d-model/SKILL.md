@@ -25,14 +25,15 @@ const look = await see('https://example.com/robot.glb', {
   size: 512,
 });
 look.views;        // [{ view, theta, phi, imageUrl }, ...]
-look.missingViews; // angles that failed to render (a partial turntable is not an error)
+look.completeness; // 'complete' (every requested angle rendered) or 'partial'
+look.missingViews; // [{ view, error }] for angles that failed on a partial look
 look.notes;        // plain-language reading of the geometry
 look.stats;        // { vertices, triangles, materials, textures, animations, ... }
 look.viewerUrl;    // spin it in a browser
 look.arUrl;        // place it in a room from a phone
 ```
 
-`toMessageContent(look, { fetchImages: true })` shapes a look into multimodal chat content (one text label plus one image per angle). `fetchImages: true` inlines base64 for APIs that will not fetch URLs.
+`toMessageContent(look, { fetchImages: true })` shapes a look into multimodal chat content (one text label plus one image per angle). On a partial look it inserts a paragraph naming each missing angle and reason before the frames. `fetchImages: true` inlines base64 for APIs that will not fetch URLs; a failed image download raises a `SeeError` with code `image_fetch_failed` instead of skipping the frame.
 
 ## Options
 
@@ -47,7 +48,7 @@ look.arUrl;        // place it in a room from a phone
 
 ## Errors
 
-`SeeError` carries `code`: `invalid_url`, `render_failed`, `rate_limited` (wait `err.retryAfter` seconds), `timeout`, `unreachable`.
+`SeeError` carries `code`: `invalid_url`, `render_failed`, `rate_limited` (wait `err.retryAfter` seconds), `timeout`, `unreachable`, plus `image_fetch_failed` from `toMessageContent` when a frame cannot be downloaded. Every error also exposes `err.baseUrl` (the deployment, or image URL, that failed) and `err.status` (HTTP status, or `null` when nothing was exchanged — `invalid_url` is raised before any network call). A partial turntable is not an error: check `look.completeness` and read `look.missingViews` for each missing angle and reason.
 
 ## What to look for
 
