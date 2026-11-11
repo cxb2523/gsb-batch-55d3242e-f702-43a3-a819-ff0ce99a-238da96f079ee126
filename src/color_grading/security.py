@@ -5,8 +5,10 @@
 - With allowed_input_roots set, the resolved input must live under one of them (PATH_NOT_ALLOWED otherwise).
 - LUTs are resolved through a *separate* allowed-roots policy (allowed_lut_roots): a caller that may read an input
   under /footage should not thereby be able to name any file on the machine as a ".cube" LUT. When
-  allowed_lut_roots is not set it falls back to allowed_input_roots (never "any file" by accident once inputs are
-  confined; both unset means any readable regular file, like a CLI user would expect).
+  allowed_lut_roots is not set (None) it falls back to allowed_input_roots (never "any file" by accident once
+  inputs are confined; both unset means any readable regular file, like a CLI user would expect). An explicitly
+  *empty* allowed_lut_roots list is not "unset": it means there is no usable LUT root, so every LUT is refused --
+  an empty list must never silently widen into the input roots or into "any file".
 - Every write (outputs, work directory) must resolve inside `workspace`; ".." segments, absolute paths outside and
   symlinked directories pointing outside are refused.
 - An output may never be an input (no in-place processing), may not exist unless overwrite is requested, and its
@@ -74,13 +76,16 @@ class PathPolicy:
         for r in self.allowed_input_roots or []:
             if not r.is_dir():
                 raise ColorError("PATH_NOT_ALLOWED", f"allowed input root is not a directory: {r}", {"reason": "root_not_directory"})
-        if allowed_lut_roots:
-            self.allowed_lut_roots: Optional[List[Path]] = [Path(r).resolve() for r in allowed_lut_roots]
+        if allowed_lut_roots is None:
+            # not set: confine LUTs to the input roots (or, when those are unset too, leave LUTs unrestricted)
+            self.allowed_lut_roots = self.allowed_input_roots
+        else:
+            # an explicitly empty list means "no usable LUT root": resolve_lut refuses every LUT rather than
+            # falling back to the input roots or to "any readable file"
+            self.allowed_lut_roots = [Path(r).resolve() for r in allowed_lut_roots]
             for r in self.allowed_lut_roots:
                 if not r.is_dir():
                     raise ColorError("PATH_NOT_ALLOWED", f"allowed LUT root is not a directory: {r}", {"reason": "root_not_directory"})
-        else:
-            self.allowed_lut_roots = self.allowed_input_roots
 
     # ---- inputs (video)
     def resolve_input(self, path: object, what: str = "input") -> Path:

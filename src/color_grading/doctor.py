@@ -159,10 +159,11 @@ def doctor_report(ffmpeg_skill_dir: Optional[str] = None, workspace: Optional[st
         policy = PathPolicy(workspace, allowed_input, allowed_lut)
         checks["path_policy"] = {"status": "ok", "workspace": str(policy.workspace),
                                  "allowed_input_roots": [str(r) for r in policy.allowed_input_roots] if policy.allowed_input_roots else None,
-                                 "allowed_lut_roots": [str(r) for r in policy.allowed_lut_roots] if policy.allowed_lut_roots else None,
+                                 "allowed_lut_roots": [str(r) for r in policy.allowed_lut_roots] if policy.allowed_lut_roots is not None else None,
                                  "work_dir": str(policy.workspace / ".color-grading"),
                                  "input_rule": "regular files (symlinks resolved)" + (" under allowed input roots" if policy.allowed_input_roots else ""),
-                                 "lut_rule": "regular .cube files (symlinks resolved)" + (" under allowed LUT roots" if policy.allowed_lut_roots else ""),
+                                 "lut_rule": "regular .cube files (symlinks resolved)" + (" under allowed LUT roots" if policy.allowed_lut_roots
+                                                                                          else (" (no usable LUT root: every LUT is refused)" if policy.allowed_lut_roots is not None else "")),
                                  "output_rule": "inside the workspace, never an input, never an existing file unless overwrite, container must match the source"}
     except ColorError as e:
         checks["path_policy"] = {"status": "fail", "detail": e.message}
