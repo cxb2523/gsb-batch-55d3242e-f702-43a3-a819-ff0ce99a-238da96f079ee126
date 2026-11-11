@@ -168,6 +168,196 @@ test("GTVBAONode switches compact AO and debug render targets", () => {
   node.dispose();
 });
 
+test("GTVBAONode realigns both render targets immediately when debug mode switches", () => {
+  const node = createTestGtvbaoNode();
+  const internals = getGtvbaoRenderTargetInternals(node);
+
+  node.resolutionScale = 0.5;
+  node.setSize(320, 180);
+
+  // The targets are already aligned for ordinary AO.
+  assert.equal(internals._aoRenderTarget.width, 160);
+  assert.equal(internals._aoRenderTarget.height, 90);
+  assert.equal(internals._debugRenderTarget.width, 1);
+  assert.equal(internals._debugRenderTarget.height, 1);
+
+  // No setSize() between the switch and the assertions: the debug target must
+  // already match the AO resolution derived from the current drawing buffer.
+  node.debugMode.value = 2;
+
+  assert.equal(internals._debugRenderTarget.width, 160);
+  assert.equal(internals._debugRenderTarget.height, 90);
+  assert.equal(internals._aoRenderTarget.width, 1);
+  assert.equal(internals._aoRenderTarget.height, 1);
+
+  // Raw AO (mode 1) is also a debug view and must realign without an intervening
+  // setSize(); the shader itself is unchanged for this transition.
+  node.debugMode.value = 1;
+
+  assert.equal(internals._debugRenderTarget.width, 160);
+  assert.equal(internals._debugRenderTarget.height, 90);
+  assert.equal(internals._aoRenderTarget.width, 1);
+  assert.equal(internals._aoRenderTarget.height, 1);
+
+  // Switching back to ordinary AO restores the full AO target and shrinks the
+  // debug target, again without waiting for the next frame's setSize().
+  node.debugMode.value = 0;
+
+  assert.equal(internals._aoRenderTarget.width, 160);
+  assert.equal(internals._aoRenderTarget.height, 90);
+  assert.equal(internals._debugRenderTarget.width, 1);
+  assert.equal(internals._debugRenderTarget.height, 1);
+
+  // The next setSize() with identical inputs must not resize anything: the
+  // switch already brought the cached target identity up to date.
+  const aoCalls = spyOnRenderTargetSetSize(internals._aoRenderTarget);
+  const debugCalls = spyOnRenderTargetSetSize(internals._debugRenderTarget);
+  node.setSize(320, 180);
+
+  assert.equal(aoCalls.length, 0);
+  assert.equal(debugCalls.length, 0);
+
+  aoCalls.restore();
+  debugCalls.restore();
+  node.dispose();
+});
+
+test("GTVBAONode realigns render targets when a batched debug switch flushes", () => {
+  const node = createTestGtvbaoNode();
+  const internals = getGtvbaoRenderTargetInternals(node);
+
+  node.resolutionScale = 0.5;
+  node.setSize(400, 200);
+
+  node.batchVariantChanges(() => {
+    node.debugMode.value = 2;
+    node.debugMode.value = 4;
+  });
+
+  assert.equal(node.debugMode.value, 4);
+  assert.equal(internals._debugRenderTarget.width, 200);
+  assert.equal(internals._debugRenderTarget.height, 100);
+  assert.equal(internals._aoRenderTarget.width, 1);
+  assert.equal(internals._aoRenderTarget.height, 1);
+
+  // Batched switches back to ordinary AO realign on flush as well.
+  node.batchVariantChanges(() => {
+    node.debugMode.value = 0;
+  });
+
+  assert.equal(internals._aoRenderTarget.width, 200);
+  assert.equal(internals._aoRenderTarget.height, 100);
+  assert.equal(internals._debugRenderTarget.width, 1);
+  assert.equal(internals._debugRenderTarget.height, 1);
+
+  node.dispose();
+});
+
+test("GTVBAONode keeps at least a 1x1 active target after an immediate debug switch", () => {
+  const node = createTestGtvbaoNode();
+  const internals = getGtvbaoRenderTargetInternals(node);
+
+  node.resolutionScale = 0.0001;
+  node.setSize(2, 2);
+
+  assert.equal(internals._aoRenderTarget.width, 1);
+  assert.equal(internals._aoRenderTarget.height, 1);
+
+  node.debugMode.value = 3;
+
+  assert.equal(internals._debugRenderTarget.width, 1);
+  assert.equal(internals._debugRenderTarget.height, 1);
+  assert.equal(internals._aoRenderTarget.width, 1);
+  assert.equal(internals._aoRenderTarget.height, 1);
+
+  node.dispose();
+});
+
+test("GTVBAONode setSize is idempotent while size, projection and active target stay fixed", () => {
+  const node = createTestGtvbaoNode();
+  const internals = getGtvbaoRenderTargetInternals(node);
+  const resolution = (node as unknown as { _resolution: { value: { x: number; y: number; set(x: number, y: number): void } } })._resolution;
+  const halfProjScale = (node as unknown as { _halfProjScale: { value: number } })._halfProjScale;
+
+  node.resolutionScale = 0.5;
+  node.setSize(320, 180);
+
+  const aoCalls = spyOnRenderTargetSetSize(internals._aoRenderTarget);
+  const debugCalls = spyOnRenderTargetSetSize(internals._debugRenderTarget);
+  const resolutionSets = spyOnVector2Set(resolution.value);
+  const halfProjBefore = halfProjScale.value;
+
+  node.setSize(320, 180);
+  node.setSize(320, 180);
+
+  assert.equal(aoCalls.length, 0);
+  assert.equal(debugCalls.length, 0);
+  assert.equal(resolutionSets.length, 0);
+  assert.equal(halfProjScale.value, halfProjBefore);
+
+  // After switching the active target, repeated setSize() calls at the same
+  // drawing buffer likewise must not re-set either target or the uniforms.
+  node.debugMode.value = 2;
+  aoCalls.length = 0;
+  debugCalls.length = 0;
+  resolutionSets.length = 0;
+
+  node.setSize(320, 180);
+  node.setSize(320, 180);
+
+  assert.equal(internals._debugRenderTarget.width, 160);
+  assert.equal(internals._debugRenderTarget.height, 90);
+  assert.equal(aoCalls.length, 0);
+  assert.equal(debugCalls.length, 0);
+  assert.equal(resolutionSets.length, 0);
+  assert.equal(halfProjScale.value, halfProjBefore);
+
+  aoCalls.restore();
+  debugCalls.restore();
+  resolutionSets.restore();
+  node.dispose();
+});
+
+test("GTVBAONode clamps out-of-range debug modes to the variant limits with one notification", () => {
+  const node = createTestGtvbaoNode();
+  let notifications = 0;
+  node.setVariantChangeCallback(() => {
+    notifications += 1;
+  });
+
+  node.setSize(32, 32);
+
+  node.debugMode.value = 99;
+  assert.equal(node.debugMode.value, 5);
+  assert.equal(notifications, 1);
+
+  // Values above the upper limit clamp to the highest debug mode.
+  node.debugMode.value = 1000;
+  assert.equal(node.debugMode.value, 5);
+  assert.equal(notifications, 1);
+
+  // Negative and non-finite values fall back to the lower limit (ordinary AO).
+  node.debugMode.value = -5;
+  assert.equal(node.debugMode.value, 0);
+  assert.equal(notifications, 2);
+
+  node.debugMode.value = Number.NaN;
+  assert.equal(node.debugMode.value, 0);
+  assert.equal(notifications, 2);
+
+  // Non-finite values fall back to the lower limit rather than clamping upward.
+  node.debugMode.value = Number.POSITIVE_INFINITY;
+  assert.equal(node.debugMode.value, 0);
+  assert.equal(notifications, 2);
+
+  // Fractional inputs are rounded to an integer mode before clamping.
+  node.debugMode.value = 2.6;
+  assert.equal(node.debugMode.value, 3);
+  assert.equal(notifications, 3);
+
+  node.dispose();
+});
+
 test("GTVBAONode releases depth kernels on depth-mode changes and disposal", () => {
   const node = createTestGtvbaoNode();
   const { _depthPrefilter: prefilter } = node as unknown as {
@@ -235,13 +425,43 @@ function getGtvbaoRenderTargetInternals(node: GTVBAONode) {
   return node as unknown as {
     _aoRenderTarget: {
       height: number;
+      setSize(width: number, height: number): void;
       texture: { format: number; magFilter: number; minFilter: number };
       width: number;
     };
     _debugRenderTarget: {
       height: number;
+      setSize(width: number, height: number): void;
       texture: { format: number };
       width: number;
     };
   };
+}
+
+function spyOnRenderTargetSetSize(target: { setSize(width: number, height: number): void }) {
+  const original = target.setSize.bind(target);
+  const calls: Array<{ width: number; height: number }> = [];
+  target.setSize = (width: number, height: number) => {
+    calls.push({ width, height });
+    original(width, height);
+  };
+  return Object.assign(calls, {
+    restore() {
+      target.setSize = original;
+    },
+  });
+}
+
+function spyOnVector2Set(vector: { set(x: number, y: number): void }) {
+  const original = vector.set.bind(vector);
+  const calls: Array<{ x: number; y: number }> = [];
+  vector.set = (x: number, y: number) => {
+    calls.push({ x, y });
+    original(x, y);
+  };
+  return Object.assign(calls, {
+    restore() {
+      vector.set = original;
+    },
+  });
 }

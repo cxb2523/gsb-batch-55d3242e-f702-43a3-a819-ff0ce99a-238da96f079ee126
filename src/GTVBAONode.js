@@ -92,7 +92,7 @@ class GTVBAONode extends GTVBAONodeBase {
 		// GTVBAODenoiseNode sizes itself from this texture, so denoising intentionally
 		// runs at AO resolution (its radius is in AO texels) before the bilinear upscale.
 		this._textureNode = passTexture( this, this._getActiveRenderTarget().texture );
-		this._lastSize = { aoWidth: 0, aoHeight: 0, projectionScale: - 1, targetIsDebug: null };
+		this._lastSize = { bufferWidth: 0, bufferHeight: 0, aoWidth: 0, aoHeight: 0, projectionScale: - 1, targetIsDebug: null };
 	}
 	setVariantChangeCallback( callback ) {
 		this._onVariantChange = callback;
@@ -107,6 +107,7 @@ class GTVBAONode extends GTVBAONodeBase {
 				const rebuild = this._batchedVariantRebuild;
 				this._batchedVariantNotify = false;
 				this._batchedVariantRebuild = false;
+				this._realignRenderTargets();
 				this._markVariantDirty( rebuild );
 			}
 		}
@@ -120,6 +121,10 @@ class GTVBAONode extends GTVBAONodeBase {
 			this._batchedVariantRebuild ||= rebuildMaterial;
 			return;
 		}
+		// A debug-mode change swaps the active render target; resize both targets
+		// to the current drawing buffer immediately instead of waiting for the next
+		// frame, so the first render after the switch never samples a stale size.
+		this._realignRenderTargets();
 		if ( rebuildMaterial ) {
 			this.needsUpdate = true;
 			this._refreshMaterialFragmentNode();
@@ -136,6 +141,24 @@ class GTVBAONode extends GTVBAONodeBase {
 	}
 	_getActiveRenderTarget() {
 		return isGtvbaoDebugEnabled( this.debugMode.value ) ? this._debugRenderTarget : this._aoRenderTarget;
+	}
+	// Sizes the active target to the AO resolution derived from the latest
+	// setSize() drawing buffer and resolutionScale, and shrinks the inactive
+	// target to 1x1. A no-op until setSize() has run, and only reallocates when
+	// the active target actually changed (debug <-> ordinary AO); uniforms stay
+	// untouched because their resolution/projection values are unchanged.
+	_realignRenderTargets() {
+		const last = this._lastSize;
+		if ( last.bufferWidth === 0 && last.bufferHeight === 0 ) return;
+		const targetIsDebug = this._getActiveRenderTarget() === this._debugRenderTarget;
+		if ( last.targetIsDebug === targetIsDebug ) return;
+		last.targetIsDebug = targetIsDebug;
+		const activeRenderTarget = targetIsDebug ? this._debugRenderTarget : this._aoRenderTarget;
+		const inactiveRenderTarget = targetIsDebug ? this._aoRenderTarget : this._debugRenderTarget;
+		if ( activeRenderTarget.width !== last.aoWidth || activeRenderTarget.height !== last.aoHeight ) {
+			activeRenderTarget.setSize( last.aoWidth, last.aoHeight );
+		}
+		if ( inactiveRenderTarget.width !== 1 || inactiveRenderTarget.height !== 1 ) inactiveRenderTarget.setSize( 1, 1 );
 	}
 	getTextureNode() {
 		return this._textureNode;
@@ -164,6 +187,11 @@ class GTVBAONode extends GTVBAONodeBase {
 		this._depthPrefilter.setSize( aoWidth, aoHeight, width, height );
 		const projectionScale = this._camera.projectionMatrix.elements[ 5 ];
 		const last = this._lastSize;
+		// Keep the drawing-buffer size current even on an otherwise idempotent
+		// call, so a debug-mode switch before the next frame can realign both
+		// render targets without a setSize() following it.
+		last.bufferWidth = width;
+		last.bufferHeight = height;
 		if (
 			last.aoWidth === aoWidth &&
 			last.aoHeight === aoHeight &&
@@ -175,7 +203,7 @@ class GTVBAONode extends GTVBAONodeBase {
 		last.projectionScale = projectionScale;
 		last.targetIsDebug = targetIsDebug;
 		this._resolution.value.set( aoWidth, aoHeight );
-		renderTarget.setSize( aoWidth, aoHeight );
+		if ( renderTarget.width !== aoWidth || renderTarget.height !== aoHeight ) renderTarget.setSize( aoWidth, aoHeight );
 		const inactiveRenderTarget = targetIsDebug ? this._aoRenderTarget : this._debugRenderTarget;
 		if ( inactiveRenderTarget.width !== 1 || inactiveRenderTarget.height !== 1 ) inactiveRenderTarget.setSize( 1, 1 );
 		this._halfProjScale.value = aoHeight * projectionScale * 0.25;
