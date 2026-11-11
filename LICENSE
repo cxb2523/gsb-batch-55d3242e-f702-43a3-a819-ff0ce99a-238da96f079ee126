@@ -1,0 +1,41 @@
+# License
+
+`dsh-psd-batch-studio` is licensed under a **modified version of the Apache
+License 2.0**, with the following additional conditions:
+
+1. **Commercial use is permitted**, including use as a backend service for other
+   applications or as an application development platform for enterprises. A
+   commercial license from 上海缙嘉科技有限公司 (Genca) must be obtained if either
+   of the following conditions is met:
+
+   a. **Multi-tenant service**: Unless explicitly authorized in writing by Genca,
+      you may not use the source code to operate a multi-tenant environment.
+
+      - **Tenant definition**: one tenant corresponds to one customer
+        organization or workspace. A workspace provides a separated area for
+        each tenant's data and configurations.
+
+   b. **Copyright and attribution notices**: You may not remove or modify the
+      copyright notices, the project name "PSD Batch Studio", or the attribution
+      to Genca / VinkWork in the plugin's frontend, source files, README, or
+      package metadata. This condition applies whether or not the project ships
+      a graphical logo.
+
+      - **Frontend definition**: for this project, the frontend includes the UI
+        components under `src/client/`, the built `client.js`, `icon.svg`, and
+        the display strings under `locale/`.
+
+2. **As a contributor**, you agree that:
+
+   a. The producer may adjust the open-source agreement to be more strict or
+      relaxed as deemed necessary.
+   b. Your contributed code may be used for commercial purposes, including but
+      not limited to its cloud business operations.
+
+Apart from the specific conditions mentioned above, all other rights and
+restrictions follow the Apache License 2.0. The full text is in
+[LICENSE-APACHE](LICENSE-APACHE), and at
+<http://www.apache.org/licenses/LICENSE-2.0>.
+
+© 2026 上海缙嘉科技有限公司 (Genca). Open-sourced by the VinkWork team.
+VinkWork's core product is [VinkClaw.com](https://vinkclaw.com).
