@@ -151,10 +151,14 @@ function ranking(m, limit) {
 
 function sourceCard(src) {
   if (src.status !== 'ok') {
-    const env = src.needs?.length ? src.needs.map((k) => `<code>${e(k)}</code>`).join(' ') : '';
+    const reason = src.reason || (src.status === 'skipped' ? 'Veri yok' : 'Veri alınamadı');
+    const env = src.status === 'skipped' && src.needs?.length && reason.includes('tanımlı değil')
+      ? src.needs.map((k) => `<code>${e(k)}</code>`).join(' ')
+      : '';
     return `<article class="card off" id="${src.id}">
-  <header class="card-head"><h3>${dot(src.id)}${e(src.name)}</h3><span class="status">${e(STATUS_TEXT[src.status] || 'Veri yok')}</span></header>
-  <p>${src.status === 'skipped' && env ? `Bağlamak için depo sırlarına ${env} ekleyin.` : e(src.reason || '')}</p>
+  <header class="card-head"><h3>${dot(src.id)}${e(src.name)}</h3><span class="status">${e(STATUS_TEXT[src.status] || 'Durum bilinmiyor')}</span></header>
+  <p>${e(reason)}</p>
+  ${env ? `<p>Bağlamak için depo sırlarına ${env} ekleyin.</p>` : ''}
   <a class="more" href="${REPO}#api-anahtarları">Nasıl bağlanır</a>
 </article>`;
   }

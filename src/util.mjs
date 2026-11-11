@@ -63,6 +63,23 @@ export function weekDays(weekId) {
   return Array.from({ length: 7 }, (_, i) => ymd(addDays(monday, i)));
 }
 
+/**
+ * Hata mesajlarındaki anahtar/jeton değerlerini rapora yazmadan önce maskeler.
+ * `?key=...`, `token=...`, `access_token=...` gibi parametrelerin yalnızca adı kalır.
+ */
+export function redactSecrets(message) {
+  return String(message ?? '')
+    // JSON gövdeleri: {"access_token":"..."}
+    .replace(/("(?:access_token|token|key)"\s*:\s*")((?:[^"\\]|\\.)*)(")/gi, '$1***$3')
+    // Sorgu/sorgu benzeri parametreler: ?key=...&token=...
+    .replace(/(access_token|token|key)(\s*[=:]\s*)([^&\s,;}"']+)/gi, '$1$2***')
+    .slice(0, 240);
+}
+
+/** Geriye dönük uyumluluk için kısa ad */
+export const maskSecrets = redactSecrets;
+export const safeReason = redactSecrets;
+
 /** Türkçe kurallarına uygun küçük harf + sadeleştirme; platformlar arası eşleştirme anahtarı */
 export function normalizeKey(text) {
   let s = String(text).trim();

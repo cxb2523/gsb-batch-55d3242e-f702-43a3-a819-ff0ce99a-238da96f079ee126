@@ -51,6 +51,6 @@ export const COLUMNS = {
 };
 
 export const STATUS_TEXT = {
-  skipped: 'API anahtarı tanımlı değil',
+  skipped: 'Atlandı',
   error: 'Veri alınamadı',
 };

@@ -31,10 +31,9 @@ export function renderMarkdown(m) {
     out.push(`## ${src.name}`);
     out.push('');
     if (src.status !== 'ok') {
-      const detail = src.status === 'skipped' && src.needs.length
-        ? ` (${src.needs.map((k) => `\`${k}\``).join(', ')})`
-        : src.reason ? ` — ${escapeMd(src.reason)}` : '';
-      out.push(`_${STATUS_TEXT[src.status] || 'Veri yok'}_${detail}`);
+      const label = STATUS_TEXT[src.status] || 'Durum bilinmiyor';
+      const detail = src.reason ? ` — ${escapeMd(src.reason)}` : '';
+      out.push(`_${label}_${detail}`);
       out.push('');
       continue;
     }

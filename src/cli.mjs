@@ -7,9 +7,9 @@
 //   node src/cli.mjs demo                ÖRNEK VERİ ile docs/ornek.html üretir
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { readJson, writeJson, writeText, isoWeek, weekDays, addDays, ymd, log } from './util.mjs';
-import { buildModel, META } from './model.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readJson, writeJson, writeText, isoWeek, weekDays, addDays, ymd, log, redactSecrets } from './util.mjs';
+import { buildModel, META, sourcesFromSnapshots } from './model.mjs';
 import { renderMarkdown } from './render/markdown.mjs';
 import { reportPage, indexPage } from './render/html.mjs';
 import * as google from './sources/google-trends.mjs';
@@ -33,7 +33,7 @@ const env = process.env;
 const missing = (meta) => meta.needs.filter((k) => !env[k]);
 
 /** Hata mesajlarından olası anahtarları temizler */
-const safe = (msg) => String(msg).replace(/(key|token|access_token)=[^&\s]+/gi, '$1=***').slice(0, 240);
+export const safe = (msg) => redactSecrets(msg);
 
 async function runSource(mod, fn) {
   const lack = missing(mod.meta);
@@ -48,7 +48,7 @@ async function runSource(mod, fn) {
   }
 }
 
-async function collect(now = new Date()) {
+export async function collect(now = new Date()) {
   const date = ymd(now);
   const sources = {};
   for (const mod of DAILY) sources[mod.meta.id] = await runSource(mod, () => mod.collect(env, now));
@@ -58,25 +58,15 @@ async function collect(now = new Date()) {
   return snap;
 }
 
-async function report(week, now = new Date()) {
+export async function report(week, now = new Date()) {
   const days = weekDays(week);
   const today = ymd(now);
   const snaps = (await Promise.all(days.map((d) => readJson(join(P.snapshots, `${d}.json`))))).filter(Boolean);
   log(`${week}: ${snaps.length} günlük anlık görüntü bulundu`);
 
-  const sources = {};
-  for (const mod of DAILY) {
-    const id = mod.meta.id;
-    const ok = snaps
-      .filter((s) => s.sources[id]?.status === 'ok')
-      .map((s) => ({ date: s.date, ...s.sources[id] }));
-    if (ok.length) sources[id] = { status: 'ok', items: mod.aggregate(ok) };
-    else {
-      // Haftada hiç başarılı veri yoksa en son durum (atlandı/hata) gösterilir
-      const last = snaps.at(-1)?.sources[id];
-      sources[id] = last ? { status: last.status, reason: last.reason } : { status: 'skipped', reason: 'Bu hafta için anlık görüntü yok' };
-    }
-  }
+  // Anlık görüntüden beslenen kaynaklar: başarılı günler birleştirilir; hiç veri yoksa
+  // kaynak uydurulmaz, "atlandı" durumu ve kısa nedeni korunur.
+  const sources = sourcesFromSnapshots(snaps);
 
   sources.wikipedia = await runSource(wikipedia, () => wikipedia.collectWeek(days.filter((d) => d < today)));
 
@@ -94,7 +84,7 @@ async function report(week, now = new Date()) {
   return model;
 }
 
-async function build() {
+export async function build() {
   const files = (await readdir(P.weeks).catch(() => [])).filter((f) => /^\d{4}-W\d{2}\.json$/.test(f)).sort().reverse();
   const weeks = [];
   for (const f of files) {
@@ -141,7 +131,7 @@ ${rows}
   await writeText(path, readme.replace(/<!-- SON-RAPOR:BASLA -->[\s\S]*?<!-- SON-RAPOR:BITIR -->/, block));
 }
 
-async function demo() {
+export async function demo() {
   const week = isoWeek(new Date());
   const m = buildModel({ week, days: weekDays(week), sources: demoSources(), snapshotDays: 7, sample: true });
   m.final = true;
@@ -150,33 +140,40 @@ async function demo() {
   log('Örnek rapor: docs/ornek.html, reports/ORNEK.md');
 }
 
-const [cmd, ...args] = process.argv.slice(2);
-const weekArg = args[args.indexOf('--week') + 1];
 const now = new Date();
 
-switch (cmd) {
-  case 'collect':
-    await collect(now);
-    break;
-  case 'report':
-    await report(args.includes('--week') ? weekArg : isoWeek(addDays(now, -1)), now);
-    await build();
-    break;
-  case 'build':
-    await build();
-    break;
-  case 'run': {
-    await collect(now);
-    // Pazartesi: geçen haftayı kesinleştir; her gün: içinde bulunulan haftayı güncelle
-    for (const week of new Set([isoWeek(addDays(now, -1)), isoWeek(now)])) await report(week, now);
-    await build();
-    break;
+export async function main(argv = process.argv.slice(2)) {
+  const [cmd, ...args] = argv;
+  const weekArg = args[args.indexOf('--week') + 1];
+  switch (cmd) {
+    case 'collect':
+      await collect(now);
+      break;
+    case 'report':
+      await report(args.includes('--week') ? weekArg : isoWeek(addDays(now, -1)), now);
+      await build();
+      break;
+    case 'build':
+      await build();
+      break;
+    case 'run': {
+      await collect(now);
+      // Pazartesi: geçen haftayı kesinleştir; her gün: içinde bulunulan haftayı güncelle
+      for (const week of new Set([isoWeek(addDays(now, -1)), isoWeek(now)])) await report(week, now);
+      await build();
+      break;
+    }
+    case 'demo':
+      await demo();
+      break;
+    default:
+      console.log('Komutlar: collect | report [--week 2026-W43] | build | run | demo');
+      if (cmd) process.exitCode = 1;
   }
-  case 'demo':
-    await demo();
-    break;
-  default:
-    console.log('Komutlar: collect | report [--week 2026-W43] | build | run | demo');
-    process.exitCode = cmd ? 1 : 0;
 }
+
+// Modül olarak içe aktarıldığında (testler) komut çalıştırma; yalnızca doğrudan
+// `node src/cli.mjs ...` çağrısında ana akışı başlat.
+const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+if (isMain) await main();
 
