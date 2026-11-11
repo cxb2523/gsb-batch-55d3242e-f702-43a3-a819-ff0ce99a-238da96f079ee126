@@ -239,17 +239,23 @@ def generate_signature(current_games, upcoming_games):
     return "CURRENT:" + ",".join(current_titles) + "|UPCOMING:" + ",".join(upcoming_titles)
 
 
-def load_saved_state():
-    if os.path.exists(STATE_FILE):
+def legacy_state_file_for(state_file):
+    base, _ = os.path.splitext(state_file)
+    return base + ".txt"
+
+
+def load_saved_state(state_file=STATE_FILE):
+    if os.path.exists(state_file):
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as file:
+            with open(state_file, "r", encoding="utf-8") as file:
                 data = json.load(file)
             return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
 
-    if os.path.exists(LEGACY_STATE_FILE):
-        with open(LEGACY_STATE_FILE, "r", encoding="utf-8") as file:
+    legacy_file = legacy_state_file_for(state_file)
+    if os.path.exists(legacy_file):
+        with open(legacy_file, "r", encoding="utf-8") as file:
             return {"signature": file.read().strip()}
 
     return {}
@@ -259,8 +265,22 @@ def has_changed(signature):
     return load_saved_state().get("signature") != signature
 
 
+def normalize_title(title):
+    return re.sub(r"\s+", " ", (title or "")).strip().lower()
+
+
+def normalize_link(link):
+    if not link:
+        return ""
+    link = str(link).strip()
+    # Drop tracking query params (e.g. ?utm_source=...) and fragments so the
+    # same offer is not mistaken for a new one when only the URL suffix changes.
+    link = link.split("#", 1)[0].split("?", 1)[0]
+    return link.rstrip("/").lower()
+
+
 def game_key(game):
-    return (game.get("title", "").strip().lower(), game.get("link", "").strip().lower())
+    return (normalize_title(game.get("title")), normalize_link(game.get("link")))
 
 
 def state_offer_keys(state):
@@ -285,7 +305,30 @@ def has_new_offers(saved_state, current_games, upcoming_games):
     return bool(fetched_offer_keys(current_games, upcoming_games) - state_offer_keys(saved_state))
 
 
-def save_state(signature, current_games, upcoming_games):
+def diff_offers(saved_state, current_games, upcoming_games):
+    """Split fetched offers into (new_current, new_upcoming, removed_keys).
+
+    "New" means the normalized (kind, title, link) key was not in the saved
+    state; "removed" means a saved key no longer appears in the fetch.
+    """
+    saved_keys = state_offer_keys(saved_state)
+
+    new_current = []
+    new_upcoming = []
+    seen_new = set()
+    for kind, games in (("current", current_games), ("upcoming", upcoming_games)):
+        for game in games:
+            key = (kind,) + game_key(game)
+            if key in saved_keys or key in seen_new:
+                continue
+            seen_new.add(key)
+            (new_current if kind == "current" else new_upcoming).append(game)
+
+    removed_keys = saved_keys - fetched_offer_keys(current_games, upcoming_games)
+    return new_current, new_upcoming, removed_keys
+
+
+def save_state(signature, current_games, upcoming_games, state_file=STATE_FILE):
     state = {
         "signature": signature,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -293,7 +336,7 @@ def save_state(signature, current_games, upcoming_games):
         "upcoming_games": upcoming_games,
     }
 
-    with open(STATE_FILE, "w", encoding="utf-8") as file:
+    with open(state_file, "w", encoding="utf-8") as file:
         json.dump(state, file, ensure_ascii=False, indent=2)
 
 
@@ -739,41 +782,79 @@ def send_whatsapp_notifications(current_games, upcoming_games):
     print(f"WhatsApp sent {total_messages} message(s) to {len(recipients)} recipient(s).")
 
 
-if __name__ == "__main__":
-    current_games, upcoming_games = fetch_games()
-    signature = generate_signature(current_games, upcoming_games)
-    saved_state = load_saved_state()
+def default_notifiers():
+    """Notification channels, each called with (new_current_games, new_upcoming_games)."""
 
-    if saved_state.get("signature") == signature:
-        print("No changes. Email not sent.")
-    elif not has_new_offers(saved_state, current_games, upcoming_games):
-        save_state(signature, current_games, upcoming_games)
-        print("Epic offers were removed or expired. JSON state saved without notifications.")
-    else:
-        print("New Epic update detected. Sending notifications...")
-        current_titles = ", ".join(game["title"] for game in current_games) or "None"
-        upcoming_titles = ", ".join(game["title"] for game in upcoming_games) or "TBA"
+    def notify_email(new_current, new_upcoming):
+        current_titles = ", ".join(game["title"] for game in new_current) or "None"
+        upcoming_titles = ", ".join(game["title"] for game in new_upcoming) or "TBA"
         subject = f"Free Now: {current_titles} | Next: {upcoming_titles}"
-        html = build_html(current_games, upcoming_games)
-        try:
-            send_email(subject, html)
-        except Exception as exc:
-            print(f"Failed to send email notification: {exc}")
+        send_email(subject, build_html(new_current, new_upcoming))
 
-        try:
-            send_telegram_notifications(current_games, upcoming_games)
-        except Exception as exc:
-            print(f"Failed to send Telegram notifications: {exc}")
+    return {
+        "email": notify_email,
+        "telegram": send_telegram_notifications,
+        "discord": send_discord_notifications,
+        "whatsapp": send_whatsapp_notifications,
+    }
 
-        try:
-            send_discord_notifications(current_games, upcoming_games)
-        except Exception as exc:
-            print(f"Failed to send Discord notifications: {exc}")
 
-        try:
-            send_whatsapp_notifications(current_games, upcoming_games)
-        except Exception as exc:
-            print(f"Failed to send WhatsApp notifications: {exc}")
+def run(fetch_fn=fetch_games, state_file=STATE_FILE, notifiers=None):
+    """Fetch offers, diff against the saved state, notify only about new offers.
 
-        save_state(signature, current_games, upcoming_games)
+    - New offers present  -> notify (new offers only), then save state.
+    - Only removals       -> save the fresh snapshot silently, no notifications.
+    - No differences      -> print "no changes" and leave the state file alone.
+    Notification failures never block saving the state; they are reported.
+    """
+    if notifiers is None:
+        notifiers = default_notifiers()
+
+    current_games, upcoming_games = fetch_fn()
+    signature = generate_signature(current_games, upcoming_games)
+    saved_state = load_saved_state(state_file)
+
+    new_current, new_upcoming, removed_keys = diff_offers(
+        saved_state, current_games, upcoming_games
+    )
+
+    if not new_current and not new_upcoming and not removed_keys:
+        print("No changes. Email not sent.")
+        return
+
+    if not new_current and not new_upcoming:
+        save_state(signature, current_games, upcoming_games, state_file)
+        print(
+            f"{len(removed_keys)} Epic offer(s) removed or expired. "
+            "JSON state saved without notifications."
+        )
+        return
+
+    total_new = len(new_current) + len(new_upcoming)
+    print(
+        f"New Epic update detected: {total_new} new offer(s) "
+        f"({len(new_current)} current, {len(new_upcoming)} upcoming). "
+        "Sending notifications..."
+    )
+
+    failed_channels = []
+    for channel, notify in notifiers.items():
+        try:
+            notify(new_current, new_upcoming)
+        except Exception as exc:
+            failed_channels.append(channel)
+            print(f"Failed to send {channel} notification: {exc}")
+
+    save_state(signature, current_games, upcoming_games, state_file)
+    if failed_channels:
+        print(
+            "JSON state saved, but notification failed on: "
+            + ", ".join(failed_channels)
+            + "."
+        )
+    else:
         print("Notifications processed and JSON state saved.")
+
+
+if __name__ == "__main__":
+    run()
