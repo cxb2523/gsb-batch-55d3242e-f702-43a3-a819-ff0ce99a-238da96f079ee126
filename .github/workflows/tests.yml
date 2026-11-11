@@ -1,0 +1,42 @@
+name: Tests
+
+# Runs on every PR (incl. from forks — plain `pull_request` gets a read-only, secret-less
+# GITHUB_TOKEN, which is fine and correct: the suite never needs secrets, see below) and on every
+# push to main, so a direct push gets the same signal a PR would.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    # Linux jobs keep the names branch protection requires ("test (3.11)", "test (3.13)").
+    name: ${{ matrix.os == 'windows-latest' && format('test-windows ({0})', matrix.python-version) || format('test ({0})', matrix.python-version) }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # requires-python = ">=3.11" in pyproject.toml — cover the floor and the latest stable.
+        python-version: ["3.11", "3.13"]
+        os: [ubuntu-latest]
+        # Windows-specific paths (CLI shims via shutil.which, chmod semantics, symlink skips).
+        include:
+          - os: windows-latest
+            python-version: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        # Entirely on the mock runner — zero tokens, no API calls, no secrets needed (see
+        # CONTRIBUTING.md "Development setup"). The one Docker-gated test skips cleanly when
+        # Docker isn't available, which is the norm on a bare runner.
+        run: python -m pytest tests/ -q

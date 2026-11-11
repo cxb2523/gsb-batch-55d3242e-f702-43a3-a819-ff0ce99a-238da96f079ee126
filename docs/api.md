@@ -1,0 +1,228 @@
+# HTTP API (`server/`)
+
+The backend that the web UI will talk to (Roadmap **Phase 0**). It wraps the pipeline so a run
+can be started, watched live, and read back over HTTP. It **never weakens the engine guardrails**
+(read-only repo, no live host, no patching, no auto-submit) and only serves whitelisted artifacts
+— never the repo copy or arbitrary paths.
+
+> Intended for **localhost / single user**. It runs an agent over arbitrary repos.
+
+## Access control
+
+- **Token.** Every route except `/` (login redirect), `/health` and the static UI under `/app` needs
+  the per-process token. `argo serve` generates it and prints `http://127.0.0.1:8000/?token=…`;
+  opening that link sets an `argo_token` cookie (HttpOnly, `SameSite=Strict`) and lands on the UI.
+  Scripts send it as the `X-Argo-Token` header. A missing or wrong token gives `401`.
+- **No CORS.** The UI is same-origin, so no `Access-Control-Allow-*` headers are sent: a web page
+  on another origin can neither read responses nor attach the cookie.
+- **Loopback Host only.** Requests whose `Host` is not `127.0.0.1`, `localhost` or `::1` (plus the
+  address passed to `--host`) get `403`, which blocks DNS rebinding.
+- **Run ids** in URLs must be a single safe path component inside the runs directory; anything else
+  (`..`, separators, drive letters) is `404`.
+- **No host commands over HTTP.** `POST /runs/{id}/fixes` does not accept `build_cmd` or `docker`
+  (unknown fields are rejected with `422`); those stay CLI-only (`argo fix`).
+- The UI is served with a Content-Security-Policy (`script-src 'self'`, no plugins, no framing), and
+  model- or repo-controlled markdown is sanitized (DOMPurify) before rendering.
+
+## Run it
+
+```bash
+python -m argo.cli serve --host 127.0.0.1 --port 8000 --runs-dir runs
+# or:  uvicorn --factory server.app:create_app
+```
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | liveness |
+| GET | `/knowledge` | the curated vulnerability-class index by archetype (Phase 4) |
+| GET | `/models` | available backends + selectable models (incl. the detected Codex default) + the token-cost price table — powers the UI model pickers and the Costs pricing card |
+| GET | `/costs` | observed cost economics from the ledger (Phase 8): totals, by-model, by-stage, recent runs |
+| GET | `/quality` | A2: triager **accept-rate** (real-world precision proxy) paired with benchmark **recall** (null until feedback is recorded via `argo feedback` + a benchmark exists) |
+| GET | `/benchmark` | the latest benchmark report (Phase 7): findings P/R/F1 by archetype + CWE, or `null` |
+| GET | `/benchmark/ab` | the latest A/B (same-backend, two audit models) benchmark report, or `null` |
+| GET | `/benchmark/cross` | the latest **cross-backend** benchmark report (`argo bench-cross`): cost/latency/P/R/F1 per backend (Claude/Codex/Gemini), or `null` |
+| GET | `/refusal-probe` | the latest refusal-rate probe report (`argo refusal-probe`): `refusal_flag_rate`/`refusal_recovery_rate` per backend, or `null` |
+| POST | `/runs` | start a run (202 + `run_id`) |
+| POST | `/uploads` | **C3**: upload a repo `.zip` (multipart `file`) → safely extracted to a staging dir; returns `{repo, files, name}`. Use `repo` in `POST /runs`. Guards: path-traversal, zip-bomb caps, no symlinks |
+| GET | `/runs` | list runs, newest first |
+| GET | `/runs/{id}` | live status (stage timeline + cost + ready artifacts) |
+| GET | `/runs/{id}/events` | **SSE** stream of status until terminal |
+| POST | `/runs/{id}/cancel` | request cancellation — **effective immediately**: the in-flight CLI session is killed mid-stage (C1), and at the next stage boundary as a backstop |
+| GET | `/runs/{id}/report` | `REPORT.md` (text/markdown) |
+| GET | `/runs/{id}/artifacts/{name}` | a whitelisted single-file artifact |
+| GET | `/runs/{id}/prompts` · `/findings` · `/drafts` | the multi-file artifacts |
+| GET / PUT | `/settings` | persisted UI defaults (runner, budget, parallelism, per-stage models, …) |
+| POST | `/recommend` | "Let the AI choose": `{repo, target}` → a recommended config + rationale (heuristic, no LLM; runner stays mock) |
+| POST | `/screen` | deterministic, read-only local fingerprint (no execution/network) |
+| POST | `/plan` | fingerprint + objective → explainable plan, routing, cost/time range, and reasons |
+| GET | `/runs/{id}/chat` | chat history for the run |
+| POST | `/runs/{id}/chat` | `{message}` → one chat turn: `{reply, generated, cost_usd, validated_candidate}` (read-only repo; test files go to `generated/`). **B1**: if the analyst proposes a `CANDIDATE_FINDING.json` for a "why didn't you find X?", it is re-validated by the pipeline's adversarial validator and `validated_candidate` carries the verdict (null otherwise). `cost_usd` is the chat turn; the re-validation session is logged to the ledger (in the run total). |
+| POST | `/runs/{id}/chat/stream` | **B2** the same chat turn as NDJSON: `{"type":"activity","text"}` lines while the analyst works (Claude, Codex, Gemini and Mistral API tool calls/interim messages; none yet on Vibe), then one `{"type":"done", …same payload as POST /chat}` or `{"type":"error","detail"}`. Same guardrails, ledger logging and persistence as the plain call |
+| GET | `/runs/{id}/generated` | files the chat analyst produced (e.g. test suites) |
+| POST | `/runs/{id}/fixes` | **Phase 6** — propose + verify a patch per confirmed finding: `{verify, only, re_audit}` → the fixes report (`build_cmd`/`docker` are CLI-only). Target repo stays read-only; verify runs on an isolated copy |
+| GET | `/runs/{id}/fixes` | the fixes report (`fixes_report.json`), or `null` if none generated |
+| GET | `/runs/{id}/patches` | the proposed patches (unified diffs) under `patches/` |
+| GET | `/runs/{id}/questions` | **F5** private review-question queue (`review_questions.json`), or `null` if none |
+| POST | `/runs/{id}/questions` | build/refresh the queue for a finished run (like `argo questions`); deterministic, no model call, keeps existing answers |
+| POST | `/runs/{id}/questions/{qid}/answer` | `{answer, provenance}` (both required; credential-like text rejected) → updated queue. No model call: affected verdicts are marked stale and their drafts withheld until re-validation; the answer never reaches `REPORT.md` |
+| POST | `/runs/{id}/revalidate-context` | `{question?, budget_usd?}` → re-validates only the findings made stale by answers (like `argo revalidate-context`; **spends model calls** on the run's backend, free on mock) → `{selected, revalidated, still_pending, …, questions}`. 409 while the run is active |
+
+Whitelisted artifact names: `scope`, `repo_profile`, `research_brief`, `threat_intel`,
+`synthesis_notes`, `validated_findings`, `incremental_review`, `attack_paths`, `report`, `meta`,
+`status`, `brief`, `fixes_report`.
+
+The status timeline includes the deterministic `evidence` stage immediately before `report`.
+CLI runs started with `--questions` also include the deterministic `review_questions` stage after
+evidence. The private `context_pack.json` and `review_questions.json` files are deliberately absent
+from the HTTP artifact allowlist; only their presence is visible in status telemetry.
+When opt-in composition is enabled, `compose` follows it and writes `attack_paths`; only exact
+capability/precondition and identity/tenant/deployment/configuration matches qualify, and this
+review artifact cannot change severity or submission state. Its canonical ledger is additive inside
+`validated_findings`; private triager comments are never copied into the run directory.
+
+`incremental_review` appears when a CLI run uses `--incremental-base`. It records a Git diff as an
+invalidation/prioritization plan, not as a claim that unchanged code was reviewed or is safe.
+
+`POST /runs` accepts `"research": true|false` (default **true**) — the Stage-1 web-OSINT step that
+runs before recon (one of two networked stages, with corroborate; never the live in-scope hosts; see
+[guardrails.md](guardrails.md#2a-the-bounded-exception-the-osint-stages-research--corroborate)). When on,
+`research` appears in the run's `stages` timeline and produces the `research_brief` / `threat_intel`
+artifacts; `research: false` keeps the run fully offline.
+
+### Remediation / fix verification (Phase 6)
+
+`POST /runs/{id}/fixes` is **opt-in** and separate from the detection-only audit. For each
+confirmed finding it asks the model (the run's own runner — free for mock runs) to describe the fix
+in `FIX.json` — a **full-file rewrite** (`new_content`) or, for large files, search/replace `edits`
+— and computes the unified diff **mechanically** (`difflib`), writing it to
+`runs/<id>/patches/<finding_id>.diff`, then **verifies** it: the patch
+is applied to an **isolated copy** of the repo and the copy is built/compiled to confirm it
+**(1) applies, (2) still compiles, (3) introduces no new errors** vs. a pre-patch baseline. The
+verdict per finding:
+
+```json
+{ "applied": true, "compiles": true, "new_errors": [], "verified": true,
+  "reason": "ok", "targets": ["src/api/search.py"], "tool": "py_compile" }
+```
+
+`verify` (default `true`) toggles the build check with the auto-detected build tool; `only` limits
+to specific finding ids. A Docker image or an explicit build command can be chosen only from the CLI
+(`argo fix --docker IMAGE --build-cmd CMD`), never over HTTP. `re_audit` (default `false`) additionally re-audits each patched copy and
+adds `verify.re_audit.confirmed_fixed` per finding (a probabilistic "the vuln is no longer detected"
+signal — one extra model session per patch; see [architecture.md](architecture.md#remediation--verification-phase-6-opt-in)).
+The target repo is **never** modified, nothing is applied in place, and no PR is opened.
+
+### Benchmarks (Phase 7) — read-only
+
+`GET /benchmark` returns the latest `benchmark_report.json` (or `null`). Benchmarks are **run from
+the CLI** (`argo bench`/`bench-cross`/`refusal-probe` — real runs cost money, so the API does not
+start them) and surfaced read-only here and on the **Benchmarks** UI page: precision/recall/F1
+overall and sliced by archetype and CWE, plus optional patch-quality, A/B (`GET /benchmark/ab`),
+cross-backend comparison (`GET /benchmark/cross`), and refusal rate (`GET /refusal-probe`).
+
+## Start a run
+
+`POST /runs`
+
+```json
+{
+  "brief": "ACME CMS — Bug Bounty Program\nScope: ...",
+  "repo": "https://github.com/acme/acme-cms",
+  "links": "https://acme.com\nhttps://acme.com/security",
+  "dry_run": false,
+  "config": { "runner": "mock", "budget_usd": 20, "audit_model": null,
+              "calibration": false, "parallel": 3 }
+}
+```
+
+- `brief` / `links` are **pasted text** (not file paths). `repo` is a git URL **or a local folder
+  path**. **`brief` is optional**: omit it (or send empty) to audit a **local/personal** codebase as a
+  source-only review — the scope is synthesized from `repo` and web research is auto-disabled.
+- `config.runner` defaults to **`mock`** — a request spends **zero tokens** unless the client
+  explicitly sets `"headless"` (Claude Code), `"codex"` (Codex CLI / OpenAI / OSS), `"gemini"`
+  (Gemini CLI), `"mistral-api"` (Mistral API, Argo tool loop) or `"mistral-vibe"` (Vibe CLI). This is the safety default; the UI adds an explicit confirm + cost preview before a
+  real run.
+- For `"codex"`: `config.codex_model` (omit to use your Codex CLI default, e.g. `"gpt-6.1-sol"`), `config.codex_oss` (bool), and
+  `config.codex_local_provider` (`"ollama"`/`"lmstudio"`) select the model / open-source provider;
+  `config.codex_api_key` supplies an OpenAI API key (Argo bootstraps a dedicated cached `CODEX_HOME`
+  for it via `codex login --with-api-key` on first use — a bare env var alone does not authenticate
+  `codex exec`; omit to use the CLI's existing login).
+  See [backends.md](backends.md).
+- For `"gemini"`: `config.gemini_model` selects the model (omit for the default per-stage tiering,
+  `DEFAULT_GEMINI_STAGE_MODELS`); `config.gemini_api_key` supplies the API key (else `GEMINI_API_KEY`
+  from the environment). See [backends.md](backends.md#gemini-specifics-runner--gemini) and
+  [ui.md](ui.md) (the web UI's runner selector offers Gemini too).
+- For `"headless"` (Claude): `config.claude_api_key` supplies `ANTHROPIC_API_KEY` for this run (else
+  the server's ambient env var / existing Claude Code subscription login).
+- For `"mistral-api"`: `config.mistral_api_model` (default `mistral-large-4`) and
+  `config.mistral_api_key` (else `ARGO_MISTRAL_API_KEY` / `MISTRAL_API_KEY`). For `"mistral-vibe"`:
+  `config.mistral_vibe_model` (a Vibe alias, default `mistral-medium-3.5`) and
+  `config.mistral_vibe_api_key`; the server needs the `vibe` CLI (`GET /models` reports
+  `installed`). Both have no web tools: send `research: false` and
+  `config.corroborate_enabled: false` (or route those stages elsewhere via `config.stage_runners`),
+  otherwise `POST /runs` answers **400** before any model call. Keys are redacted like the others.
+  See [backends.md](backends.md#mistral-api-specifics-runner--mistral-api).
+- Vibe additionally accepts `config.mistral_vibe_auth: "key" | "stored"` (default `key`). For
+  stored mode omit `mistral_vibe_api_key`; Vibe uses the **server OS user's** saved keyring login,
+  not the browser client's login. The server must have completed Vibe browser setup manually.
+  No credential/profile paths are accepted for this feature. `GET /models` is discovery, not a
+  paid authentication or quota probe. An invalid auth enum is a schema validation error (422);
+  incompatible stored-plus-key config is rejected with 400 before starting a job. An expired or
+  inaccessible login discovered during execution is a job failure, not a successful auth preflight.
+- An invalid routing/config (unknown backend/model pairing, an OSINT stage on a Mistral backend,
+  bad `stage_effort`) is a **400** with the reason in `detail`.
+- `config.claude_api_key`/`config.codex_api_key` are never echoed back or persisted in the clear
+  (see `PipelineConfig._SECRET_FIELDS`) — same redaction as `config.gemini_api_key`. Multi-account
+  key chaining (`--claude-api-keys`/`--codex-api-keys`) is CLI-only, not exposed over this API
+  (mirrors `gemini_accounts`' own absence from `RunConfig`).
+- `config` maps to `PipelineConfig` (budget is a per-run launch ceiling, etc. — see
+  [configuration.md](configuration.md)).
+
+Returns `202` with `{ run_id, state, status_url, events_url }`.
+
+## Live status
+
+`GET /runs/{id}` (and each SSE event) returns:
+
+```json
+{
+  "run_id": "...",
+  "state": "running",            // starting | running | completed | failed | cancelled
+  "current_stage": "audit",
+  "stages": [ {"name":"ingest","state":"done"}, {"name":"recon","state":"done"},
+              {"name":"audit","state":"running"}, ... ],
+  "artifacts": { "scope": true, "repo_profile": true, "synthesis_notes": true,
+                 "prompts": 3, "findings": 1, "validated_findings": false,
+                 "report": false, "drafts": 0 },
+  "cost_usd": 12.34,
+  "error": null
+}
+```
+
+`cost_usd` is read **live from the ledger** (advances even mid-stage). `artifacts` reflects which
+canonical files exist, so the UI can reveal partial results as they land (scope → prompts → each
+focus's findings → validated → report) instead of a blind spinner.
+
+## How it works (design)
+
+- **Background jobs.** `POST /runs` writes the inputs, starts the pipeline in a daemon thread
+  (`server/jobs.py`), and returns immediately. Cancellation is a `threading.Event` checked at each
+  stage boundary.
+- **File-based progress.** The pipeline writes `runs/<id>/status.json` at every stage boundary
+  (`argo/progress.py`), updated atomically and resiliently (telemetry never crashes a run).
+  The status/SSE endpoints read that file + live cost from the ledger — no in-memory coupling to
+  the job.
+- **Concurrency.** The ledger runs in WAL mode with a busy timeout, so the API's read connection
+  and the job's write connection coexist without locking.
+
+## Tested
+
+`tests/test_api.py` drives the whole lifecycle on the **mock runner** (zero tokens): full pipeline,
+dry-run, the SSE stream reaching a terminal state, the artifact whitelist, and 404s.
+
+## Not yet (later roadmap phases)
+
+Auth/multi-user and subprocess isolation per run (vs. in-process threads). (Mid-stage cancellation,
+the frontend, and repo-zip upload are done.) See [roadmap.md](roadmap.md).

@@ -1,0 +1,70 @@
+# Run artifacts and local state
+runs/
+.argo-target-memory/
+.argo-screen-cache/
+.pytest_tmp/
+.pytest_tmp*/
+argo/ledger.sqlite
+argo/ledger.sqlite-*
+argo/app_settings.json
+
+# Local agent/IDE state — never publish
+.claude/
+
+# Private research data & audit targets (kept OUT of the public repo)
+Vulnerability Repo/
+vuln-registry/
+targets/
+chatplugin/
+
+# Local scan drivers & their logs (per-target scratch, never published)
+/*.log
+/run_*.py
+/run_*.log
+/finish_*.py
+/finish_*.log
+/resume_*.py
+/resume_*.log
+/retry_*.py
+/retry_*.log
+/finalize_*.py
+/finalize_*.log
+/codex_*.log
+/CODEX_TASK_*.md
+/authentik_run.log
+/authentik_resume.log
+/*_build.log
+/*_tail.log
+/*_tail.py
+
+# Python
+.venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Python packaging
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Scratch output from manual audit runs — never part of the repo
+work/
+*_audit.log
+*_audit.err.log
+*_audit.out.log
+*_verify.log
+*_variant_check.log
+
+# One-off PoC scratch from manual verification (cookie jars, API dumps from local test instances)
+/a2.txt
+/a3.txt
+/attack.txt
+/cj.txt
+/adm.json
+/appnew.json
+/org.json
+/org2.json
+/pocapp.json

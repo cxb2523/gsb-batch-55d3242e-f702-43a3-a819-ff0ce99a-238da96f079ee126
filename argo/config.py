@@ -1,0 +1,775 @@
+"""Central configuration: model assignment, tool allowlists, budgets, paths.
+
+Everything tunable lives here so the guardrails and stages read from a single source.
+Per-stage models are overridable at runtime (CLI flags / ``PipelineConfig`` overrides);
+``audit`` is the headline knob because the audit model sets the missed-bug (false-negative)
+rate — the validation stage can only remove false positives, never recover a bug the audit
+model failed to surface.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field, fields, replace
+from datetime import datetime, timezone
+from pathlib import Path
+
+# --- Model IDs (current catalog snapshot; see argo.model_catalog) ------------------
+from .model_catalog import MODEL_CATALOG, catalog_snapshot, get_model_spec, resolve_pricing
+
+OPUS = "claude-opus-5-5"
+SONNET = "claude-sonnet-5-5"
+HAIKU = "claude-haiku-5-5"  # cheapest current model; used for smoke runs
+FABLE = "claude-fable-5-1"
+MYTHOS = "claude-mythos-5-1"
+
+# --- Model IDs (Gemini CLI backend). Pinned concrete ids, never the auto-resolving
+# "pro"/"flash" aliases: an alias breaks MODEL_PRICING's substring match, run-to-run
+# reproducibility, and (confirmed empirically against gemini-cli v0.49.0) can trigger an
+# extra internal "which model should handle this" routing call that a pinned id skips
+# entirely. Re-confirm these strings periodically -- preview ids churn; there is no
+# `--list-models` flag, these were read directly off real `stats.models` keys.
+GEMINI_ARGON = "gemini-4-argon"
+GEMINI_PRO = GEMINI_ARGON  # compatibility name for existing callers
+GEMINI_FLASH = "gemini-3.8-flash"
+GEMINI_MID = "gemini-3.6-flash"
+GEMINI_FLASH_LITE = "gemini-3.5-flash-lite"  # current cheap stable model
+GEMINI_CHEAP = "gemini-3.1-flash-lite"
+
+# --- Model IDs (Codex CLI backend), for the two cases that need a PINNED id rather than
+# "omit codex_model and let the CLI's own configured default apply" (the normal, recommended
+# path -- see docs/backends.md): calibrated() (a controlled top-tier run) and the cross-backend
+# benchmark's --tier flag (a controlled, reproducible comparison point). Unlike Claude/Gemini,
+# Codex has no per-stage tiering (model_for() uses one flat codex_model for every stage), so
+# these are the only two named tiers needed.
+CODEX_TOP = "gpt-6-astra"
+CODEX_BALANCED = "gpt-6.1-sol"
+CODEX_CHEAP = "gpt-6-luna"
+
+# Mistral developer API (runner == "mistral-api"): Chat Completions + an Argo-owned tool loop
+# (argo/mistral_api.py), platform-independent. Verified 2026-11-06 against api.mistral.ai: the
+# exact, priced, recommended model is `mistral-large-4` (`mistral-large-latest` still points at the
+# deprecated Large 3 and Medium 3.5 is deprecated), so it is both the default and the top tier.
+MISTRAL_API_BALANCED = "mistral-large-4"
+MISTRAL_API_TOP = "mistral-large-4"
+MISTRAL_API_CHEAP = "mistral-small-2603"
+MISTRAL_API_BASE_URL = "https://api.mistral.ai/v1"
+# Mistral Vibe CLI (runner == "mistral-vibe"; argo/mistral_vibe.py). Vibe takes its own model
+# ALIASES, not API ids; this is mistral-vibe 3.1.0's default (-> mistral-vibe-cli-latest).
+MISTRAL_VIBE_DEFAULT = "mistral-medium-3.5"
+#: Backends that expose no web tools: the networked OSINT stages cannot run on them.
+NO_WEB_BACKENDS: frozenset[str] = frozenset({"mistral-api", "mistral-vibe"})
+
+
+def networked_stage_conflicts(cfg: "PipelineConfig") -> list[str]:
+    """Enabled research/corroborate stages routed to a backend without web tools (empty = OK).
+    Used by the CLI and the HTTP API before any model call: an explicit choice beats a silently
+    degraded, web-less OSINT stage."""
+    out = []
+    for stage, on in (("research", cfg.research_enabled), ("corroborate", cfg.corroborate_enabled)):
+        backend = cfg.stage_runners.get(stage, cfg.runner)
+        if on and backend in NO_WEB_BACKENDS:
+            out.append(f"stage {stage!r} needs web tools, which runner={backend} does not have: "
+                       f"disable it (--no-{stage} / {stage}_enabled=false) or route it to "
+                       f"headless|codex|gemini (--stage-runner {stage}=...)")
+    return out
+
+# Codex's model selection is stage-aware.  The map is intentionally separate from the user
+# override field so an explicit --codex-model can still flatten every stage, while a per-stage
+# override wins over that global convenience flag.
+DEFAULT_CODEX_STAGE_MODELS: dict[str, str] = {
+    "ingest": CODEX_CHEAP,
+    "recon": CODEX_TOP,
+    "audit": CODEX_BALANCED,
+    "validate": CODEX_TOP,
+    "report": CODEX_CHEAP,
+    "chat": CODEX_BALANCED,
+    "remediate": CODEX_TOP,
+    "research": CODEX_CHEAP,
+    "sca": CODEX_CHEAP,
+    "runtime": CODEX_BALANCED,
+    "live": CODEX_BALANCED,
+    "corroborate": CODEX_BALANCED,
+    "corroborate_docs": CODEX_BALANCED,  # offline docs/VCS pass of corroborate (no network tools)
+    "verify": CODEX_TOP,
+    "asan_poc": CODEX_TOP,
+}
+
+#: Default per-stage model assignment.
+#:  * ingest   -> Sonnet (never Haiku: misreading scope/RoE has outsized consequences).
+#:  * recon    -> Opus   (judgment-heavy synthesis, low volume).
+#:  * audit    -> Sonnet (high-volume parallel fan-out; flip to Opus for high-value targets
+#:                        or during prompt calibration via --calibration / --audit-model).
+#:  * validate -> Opus   (adversarial confutation; the lever on accepted-report rate).
+#:  * report   -> deterministic code assembly (no LLM by default).
+DEFAULT_STAGE_MODELS: dict[str, str] = {
+    "ingest": SONNET,
+    "recon": OPUS,
+    "audit": SONNET,
+    "validate": OPUS,
+    "report": SONNET,  # only used if report LLM-polish is ever enabled; off by default.
+    "chat": SONNET,    # interactive post-run analysis (explain / why-not-found / test-gen)
+    "remediate": OPUS, # Phase-6 fix generation (proposed patch per confirmed finding)
+    "research": SONNET, # opt-out Stage-1 web OSINT / threat intel (feeds recon)
+    "sca": OPUS,        # dependency / software-composition analysis (manifest -> known-vuln deps)
+    "runtime": SONNET,  # R2: propose loopback probe plans + interpret results (offline, validated)
+    "live": SONNET,     # L2: propose in-scope live probe plans + interpret results (offline, validated)
+    "corroborate": SONNET,  # post-validation cross-check vs project docs + repo VCS history (networked)
+    "corroborate_docs": SONNET,  # the offline half of corroborate (repo docs/VCS only, no network)
+    "verify": OPUS,     # deep re-derivation: unbounded, full repo access, cross-finding aware (opt-in)
+    "asan_poc": OPUS,   # single-shot, precision-critical harness authoring (opt-in, C/C++ only)
+}
+
+#: Default per-stage model assignment for the Gemini backend. Same placement rationale as
+#: DEFAULT_STAGE_MODELS above (Pro for judgment-heavy/low-volume stages, Flash for high-volume
+#: fan-out) -- Gemini's pro/flash tier genuinely maps onto that split, unlike Codex's flat model.
+DEFAULT_GEMINI_STAGE_MODELS: dict[str, str] = {
+    "ingest": GEMINI_CHEAP,
+    "recon": GEMINI_FLASH,
+    "audit": GEMINI_FLASH,
+    "validate": GEMINI_ARGON,
+    "report": GEMINI_CHEAP,
+    "chat": GEMINI_FLASH,
+    "remediate": GEMINI_ARGON,
+    "research": GEMINI_CHEAP,
+    "sca": GEMINI_FLASH,
+    "runtime": GEMINI_FLASH,
+    "live": GEMINI_FLASH,
+    "corroborate": GEMINI_FLASH,
+    "corroborate_docs": GEMINI_FLASH,  # offline docs/VCS pass of corroborate (no network tools)
+    "verify": GEMINI_ARGON,
+    "asan_poc": GEMINI_ARGON,
+}
+
+#: Default per-stage wall-clock overrides (seconds). Recon now does deep ground-truth extraction
+#: (enumerating variant families, baseline-correct refs, invariants across the whole tree) and the
+#: audit walks every family member — both want more headroom than the 1800s global default. The
+#: completeness-critic re-pass (audit) also runs inside the audit stage budget.
+DEFAULT_STAGE_TIMEOUTS: dict[str, int] = {
+    "recon": 3600,
+    "audit": 3600,
+    "verify": 3600,  # unbounded per-finding re-derivation; give it the same headroom as audit/recon
+    "asan_poc": 3600,  # full read-only repo access to isolate one function; same headroom as verify
+}
+
+# --- Cost estimation for backends that report tokens but not USD ---------------------
+# Claude Code returns an authoritative ``total_cost_usd`` per call. The Codex CLI (OpenAI / OSS)
+# and the Gemini CLI report tokens, not dollars, so for both we ESTIMATE: tokens x this rough price
+# table. Figures are USD per 1M tokens (input, output); used only for the budget guard + cost
+# analytics, never billed. Unknown models (incl. ``--oss`` / local) retain a numeric 0.0 for
+# backwards-compatible aggregation but are tagged ``cost_source=unknown``. Current figures and
+# effective-dated promotional windows are maintained in the static model_catalog.py; no pricing is
+# fetched at runtime.
+# Compatibility mapping kept for callers that import MODEL_PRICING.  New code should use
+# resolve_pricing()/get_model_spec(), which match exact IDs and explicit aliases rather than
+# substring order.
+MODEL_PRICING: dict[str, tuple[float, float]] = {
+    s.model_id: (s.input_per_million, s.output_per_million)
+    for s in MODEL_CATALOG if s.pricing_known
+}
+
+
+def _codex_default_model() -> str | None:
+    """The Codex CLI's configured default model (``model =`` in ~/.codex/config.toml), so a Codex
+    run that doesn't pin a model still logs/estimates the *real* model. Best-effort, never raises."""
+    try:
+        import tomllib
+        p = Path.home() / ".codex" / "config.toml"
+        if p.exists():
+            m = tomllib.loads(p.read_text(encoding="utf-8")).get("model")
+            return m.strip() if isinstance(m, str) and m.strip() else None
+    except Exception:
+        return None
+    return None
+
+
+def estimate_cost_usd(model: str | None, input_tokens: int, output_tokens: int,
+                      *, as_of: str | None = None) -> float:
+    """Best-effort USD estimate from token counts (for token-only backends).
+
+    Unknown/local models return ``0.0`` for backwards-compatible numeric aggregation, but callers
+    must inspect :func:`model_cost_source` (``"unknown"``) and must never present that value as a
+    free or authoritative quote. ``as_of`` selects an effective-dated promotional price when the
+    static catalog contains one; it defaults to today's UTC date.
+    """
+    if as_of is None:
+        # The call happens now: price it at today's effective-dated rate, not the catalog's
+        # undated fallback (which would keep an expired introductory price forever).
+        as_of = datetime.now(timezone.utc).date().isoformat()
+    rates = resolve_pricing(model, as_of=as_of)
+    if rates is None:
+        return 0.0
+    in_rate, out_rate = rates
+    return (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000
+
+
+def model_cost_source(model: str | None) -> str:
+    """Return a stable cost provenance label for reports and budget explanations."""
+    if not model:
+        return "unknown"
+    spec = get_model_spec(model)
+    if spec is None:
+        return "unknown"
+    return "estimated_known_price" if spec.pricing_known else "unknown"
+
+
+def catalog_provenance() -> dict:
+    """Return the immutable catalog metadata to store in run/config artifacts."""
+    return catalog_snapshot()
+
+
+# --- Tool allowlists (defense-in-depth; the runner re-enforces these) ----------------
+#: Tools that can reach the network or spawn sub-agents. NEVER allowed in any session —
+#: this is the structural guarantee that no stage can touch a live host.
+NETWORK_TOOLS: frozenset[str] = frozenset(
+    {"Bash", "WebFetch", "WebSearch", "Task", "Agent", "BashOutput", "KillShell"}
+)
+#: Tools that mutate files. Never allowed: the pipeline never patches the target.
+MUTATION_TOOLS: frozenset[str] = frozenset({"Edit", "MultiEdit", "NotebookEdit"})
+
+#: Read-only analysis tools (repo inspection, no writes anywhere).
+READ_ONLY_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
+#: Read-only analysis + Write (scoped to the session's writable scratch cwd, never the
+#: read-only repo). Used by stages whose model must emit artifact files.
+ARTIFACT_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Write")
+
+#: OSINT subset of the network tools: read-only public web access (search + fetch), NO shell,
+#: NO sub-agents. Permitted ONLY in the opt-out ``research`` and online ``corroborate`` passes
+#: (see guardrails), neither of which mounts the audited repository; both are forbidden from
+#: contacting the program's live in-scope target hosts.
+OSINT_TOOLS: frozenset[str] = frozenset({"WebSearch", "WebFetch"})
+#: The research stage's allowlist: public web OSINT + Write to its scratch dir. No repo, no shell.
+RESEARCH_TOOLS: tuple[str, ...] = ("WebSearch", "WebFetch", "Read", "Write")
+
+#: Tools explicitly disallowed on every session (passed to --disallowedTools).
+ALWAYS_DISALLOWED: tuple[str, ...] = tuple(sorted(NETWORK_TOOLS | MUTATION_TOOLS))
+
+
+@dataclass(frozen=True)
+class PipelineConfig:
+    """Immutable run configuration. Use :meth:`with_overrides` to derive a variant."""
+
+    # Model assignment per stage.
+    stage_models: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_STAGE_MODELS))
+    # Gemini backend's own per-stage assignment (Gemini is tiered like Claude, not flat like Codex —
+    # see DEFAULT_GEMINI_STAGE_MODELS). Only consulted when runner == "gemini".
+    gemini_stage_models: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_GEMINI_STAGE_MODELS))
+    # Explicit Codex per-stage overrides. Empty means use the built-in map unless a global
+    # codex_model override is supplied; keeping overrides separate preserves precedence.
+    codex_stage_models: dict[str, str] = field(default_factory=dict)
+    # Frozen metadata used to interpret requested/served model IDs months later.  The snapshot is
+    # data-only and contains no credentials or prompts.
+    model_catalog_snapshot: dict = field(default_factory=catalog_snapshot)
+
+    # Execution.
+    runner: str = "headless"            # "headless" (Claude Code) | "codex" (Codex CLI) | "gemini" (Gemini CLI) | "mock"
+    # Optional per-stage backend overrides.  An empty mapping keeps the primary backend for all
+    # stages; entries such as {"audit": "codex", "report": "headless"} are resolved lazily by
+    # RunContext so a mixed run still shares the same ledger, cancellation signal, and artifacts.
+    stage_runners: dict[str, str] = field(default_factory=dict)
+    # Native effort is currently verified only for the Claude CLI. Other providers expose
+    # different controls; Argo records provider_default there rather than inventing a flag.
+    stage_effort: dict[str, str] = field(default_factory=dict)
+    # Resilience: ordered fallback backends. When the primary runner hits a retryable limit
+    # (session-limit / rate-limit / 429), the same call is transparently retried on the next backend
+    # (e.g. ["codex"] => Claude -> Codex). A walled backend is skipped for the rest of the run.
+    runner_fallbacks: list[str] = field(default_factory=list)
+    # Multi-account Claude: CLAUDE_CONFIG_DIR for THIS headless runner (selects which logged-in
+    # account it uses). ``claude_accounts`` is an ordered list of such dirs — the headless backend
+    # becomes an account-fallback chain (limits are PER-ACCOUNT, so account A -> account B doubles
+    # capacity before falling through to runner_fallbacks). Set up each dir once with
+    # ``CLAUDE_CONFIG_DIR=<dir> claude login``.
+    claude_config_dir: str | None = None
+    claude_accounts: list[str] = field(default_factory=list)
+    # Multi-account Codex: same idea via CODEX_HOME (default ~/.codex). ``codex_accounts`` is an
+    # ordered list of CODEX_HOME dirs -> the codex backend becomes an account-fallback chain.
+    codex_home: str | None = None
+    codex_accounts: list[str] = field(default_factory=list)
+    # Multi-account Gemini: unlike Claude/Codex's directory-based accounts, Gemini's practical
+    # automation-auth lever is the GEMINI_API_KEY env var, so ``gemini_accounts`` holds ordered KEY
+    # VALUES (not directory paths) -- a deliberate deviation from the Claude/Codex pattern, not an
+    # inconsistency. These are real secrets (the credential lives IN the value, not on disk outside
+    # Argo's state) -- see _SECRET_FIELDS below, which redacts both from runs/<id>/config.json.
+    gemini_api_key: str | None = None
+    gemini_accounts: list[str] = field(default_factory=list)
+    # Multi-account/API-key Claude: a SEPARATE mechanism from claude_config_dir/claude_accounts
+    # above (directory-based logins) -- ANTHROPIC_API_KEY is a real secret VALUE, injected as an env
+    # var exactly like Gemini's key, not a directory path. Coexists ADDITIVELY with
+    # claude_config_dir (two different env vars, no collision) -- see HeadlessClaudeRunner._invoke.
+    claude_api_key: str | None = None
+    claude_api_keys: list[str] = field(default_factory=list)
+    # Multi-account/API-key Codex: unlike Claude/Gemini, a bare ambient OPENAI_API_KEY env var does
+    # NOT authenticate `codex exec` (confirmed empirically: `codex login status` against a fresh
+    # CODEX_HOME with only the env var set reports "Not logged in"). Codex needs a real, stateful
+    # `codex login --with-api-key` bootstrap into a dedicated CODEX_HOME first --
+    # runner._ensure_codex_api_key_home does this once (cached under ~/.argo/codex_homes/<hash>),
+    # then plugs the resulting directory into the EXISTING codex_home env-injection path unchanged.
+    # codex_home (an explicit, already-set-up directory) WINS if both are set -- see
+    # runner.CodexRunner._codex_home_env_value.
+    codex_api_key: str | None = None
+    codex_api_keys: list[str] = field(default_factory=list)
+    max_parallel_audits: int = 3        # concurrency cap for Stage 3 / Stage 4 fan-out
+    # Efficiency: validate/corroborate historically span ONE session per finding, which is ~90% of a
+    # run's sessions and the main driver of rate-limit exhaustion. Batching groups N findings into a
+    # single session that judges each INDEPENDENTLY (no precision loss — same model, same adversarial
+    # rules), cutting session count ~Nx. 1 = the legacy per-finding path (kept for chat/B1 re-validate).
+    validate_batch_size: int = 8        # findings per adversarial-validation session
+    corroborate_batch_size: int = 8     # findings per corroboration session
+    # Cross-focus semantic dedup (Stage 4, before the adversarial fan-out): structural dedup
+    # (validate._merge) only collapses EXACT (file, line, cwe) matches, so the same root-cause bug
+    # reported by two different audit foci at two different call sites survives as two findings (seen
+    # on gguf-tools: a single "general.alignment=0 -> div-by-zero" bug reported 3x from 3 foci, each
+    # citing a different exact line). One extra cheap batched session clusters near-duplicates by
+    # meaning (title + explanation), not just by exact line — before the MUCH more expensive per-
+    # finding validate/corroborate fan-out. Skipped below the finding-count floor (not worth a session
+    # for a handful of findings); fails open (keeps every finding separate) on any error.
+    semantic_dedup_enabled: bool = True
+    semantic_dedup_min_findings: int = 6
+
+    # Codex backend (runner == "codex"). ``codex_model`` remains a flat compatibility override;
+    # the explicit codex_stage_models map is used by new defaults and wins per stage.
+    codex_model: str | None = None
+    # Ordered Codex model de-escalation chain, strongest first (e.g. gpt-6-astra, gpt-6.1-sol,
+    # gpt-5.6-sol). When non-empty it drives the codex fallback chain: each model becomes its own
+    # chain entry (crossed with codex_accounts/codex_api_keys), so a moderation flag or usage limit
+    # on a strong model advances the FallbackRunner to a weaker one before dropping to another
+    # backend. Supersedes codex_model for building the chain; assumes no per-stage codex_stage_models
+    # (the common case). See runner._expand_backend and docs/backends.md.
+    codex_model_chain: list[str] = field(default_factory=list)
+    codex_oss: bool = False             # use Codex's open-source provider (--oss)
+    codex_local_provider: str | None = None  # "ollama" | "lmstudio" (with --oss)
+    # Codex features passed as `--disable <name>` on every session. multi_agent is off by default:
+    # spawned sub-agents run outside the session's event stream, so Argo's turn/loop guards, token
+    # accounting and transcripts cannot see them.
+    codex_disable_features: tuple[str, ...] = ("multi_agent",)
+    # Real context window of a local model (tokens). Codex has no metadata for local models and so
+    # never auto-compacts; set this to the server's window (e.g. Ollama OLLAMA_CONTEXT_LENGTH) so
+    # Codex compacts at 80% instead of the server discarding half the conversation.
+    codex_context_window: int | None = None
+    # Mistral API backend (runner == "mistral-api"). Flat override + per-stage map, like Codex.
+    # The key is a SECRET (redacted from config.json); when unset, ARGO_MISTRAL_API_KEY then
+    # MISTRAL_API_KEY from the environment are used. Never read from Vibe's own credential store.
+    mistral_api_model: str | None = None
+    mistral_api_stage_models: dict[str, str] = field(default_factory=dict)
+    mistral_api_key: str | None = None
+    mistral_api_base_url: str | None = None      # default MISTRAL_API_BASE_URL
+    mistral_api_context_window: int | None = None  # tokens; default 128k (tool-output elision)
+    # Mistral Vibe CLI backend (runner == "mistral-vibe"): model ALIASES (vibe --model), flat + per
+    # stage. Key: mistral_vibe_api_key / ARGO_MISTRAL_VIBE_API_KEY, else the mistral-api key.
+    mistral_vibe_model: str | None = None
+    mistral_vibe_stage_models: dict[str, str] = field(default_factory=dict)
+    mistral_vibe_api_key: str | None = None
+    # Explicit opt-in to native Vibe keyring credentials. Old runs retain key-only resolution.
+    mistral_vibe_auth: str = "key"       # key | stored; never an implicit auto/fallback
+    session_timeout_s: int = 1800       # default per-session wall-clock cap (seconds)
+    # per-stage wall-clock overrides; seeded with DEFAULT_STAGE_TIMEOUTS (deep recon + audit).
+    stage_timeouts: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_STAGE_TIMEOUTS))
+    budget_usd: float | None = None     # per-run USD ceiling (launch gate; in-flight sessions may overshoot); None = unbounded
+    # Exact model pins are fail-closed by default.  Set only for deliberate best-effort runs where
+    # a provider may auto-route a deprecated/floating identifier; provenance still records both IDs.
+    allow_model_substitution: bool = False
+    # Optional evidence-driven escalation. Off by default; benchmark mode keeps it disabled so
+    # repeated trials remain comparable. Escalations are bounded by the existing per-run and
+    # per-session budget guards and are recorded in adaptive_events.jsonl.
+    adaptive_escalation: str = "off"  # off | conservative | balanced | aggressive
+    benchmark_mode: bool = False
+
+    # Per-session safety caps (this CLI has NO --max-turns flag in v2.1.178):
+    #   * cost is capped mid-session natively via --max-budget-usd (see runner),
+    #   * turns are a post-hoc tripwire enforced by the orchestrator (cannot pre-empt).
+    session_max_cost_usd: float | None = None   # per-session cost cap (also -> --max-budget-usd)
+    session_max_turns: int | None = None        # per-session turn tripwire; None = off
+    max_focuses: int | None = None              # cap audit fan-out to first N focuses (smoke)
+    # Completeness-critic re-passes per focus (Phase-3 depth lever): after a focus's first audit
+    # session, re-invoke it to find what was MISSED — uncovered variant-family members, unverified
+    # invariants, 🟡 rows not promoted. Each pass appends only NEW findings; passes stop early when
+    # a pass yields nothing new (loop-until-dry, capped). 0 disables. Trades tokens for recall.
+    # A focus whose SESSION never produced anything is lost work, not a result: both backends
+    # can blip inside the same minute and cost a whole focus permanently, which leaves one
+    # target audited on fewer focuses than the rest. Retried once by default, after a pause
+    # long enough for a short backend backoff to clear. Set passes to 0 to restore the old
+    # abandon-on-failure behaviour.
+    audit_retry_passes: int = 1
+    audit_retry_delay_s: int = 90
+    audit_critic_passes: int = 1
+    # Software-composition analysis: read dependency manifests and flag pinned versions with known
+    # advisories. Emits a synthetic `dependencies` focus that joins the normal validate+report flow.
+    sca_enabled: bool = True
+
+    # Stage-1 web OSINT / threat intel before recon. Historically this was passed as a separate
+    # run_pipeline argument; keeping it in the persisted config makes resume reconstruct the original
+    # stage set instead of guessing whether the run was started with --research or --no-research.
+    research_enabled: bool = True
+    # Ablation switch: omit only the curated vulnerability index from recon.
+    vuln_index_enabled: bool = True
+
+    # --- Second opinion (opt-in; runs AFTER audit/[sca], BEFORE validate) --------------------------
+    # OFF by default (0 = disabled). N >= 1 runs N ADDITIONAL, fully independent recon+audit passes
+    # over the same already-ingested scope/repo, then merges their raw findings into the primary's
+    # findings_dir before validate runs. Encodes the manual "blind second opinion" methodology used
+    # on fastjson2/open62541: a single audit pass is one noisy sample of what a careful reader would
+    # find; an independent second pass (ideally on a different backend via second_opinion_backend,
+    # for real diversity rather than just re-sampling the same model) both recovers findings the
+    # first pass missed and, when it independently converges on the same bug, produces a real
+    # corroboration signal no single pass can produce alone. See stages/second_opinion.py.
+    second_opinion_passes: int = 0
+    # Runner override for the second-opinion passes only (e.g. "headless" when the primary run used
+    # "codex", for genuine cross-engine diversity rather than just re-sampling the same model). None
+    # = same backend as the primary.
+    second_opinion_backend: str | None = None
+
+    # --- Corroboration (opt-out, networked; runs AFTER validate, BEFORE runtime/live) -------------
+    # ON by default. For each surviving finding, cross-checks it against the project's own DOCS and
+    # the source repo's VCS HISTORY (commits / releases / advisories) over public web OSINT, to
+    # CONFIRM or DISCARD it: a finding the docs describe as intended -> downgraded to design_accepted;
+    # one already patched in a newer commit -> moved to fixed_upstream (kept in an appendix, never
+    # silently deleted). Best-effort: a failure never fails the run. Uses the same scope forbidden-
+    # live-hosts rail as research (repo host + docs are public OSINT; live in-scope hosts are not).
+    corroborate_enabled: bool = True
+    # Explicit finding-id scope for this invocation. None preserves the normal behavior of
+    # corroborating every survivor; when set, every other finding and its existing verdict are left
+    # completely untouched.
+    corroborate_only: frozenset[str] | None = None
+    # Curated documentation URLs to ground the cross-check (additive to the scope's reference_links +
+    # source repo). If empty, the stage searches the web for the project's official docs + repo.
+    doc_links: list[str] = field(default_factory=list)
+    corroborate_max_searches: int = 8   # soft cap on web searches per finding (in-prompt guidance)
+
+    # --- Deep verify (opt-in, offline, full repo access; runs AFTER corroborate, BEFORE runtime/live) --
+    # OFF by default (the most expensive annotation stage: unbounded reasoning, one full agentic
+    # session per finding, never batched). Where validate is a cheap, deliberately finding-ISOLATED
+    # adversarial pass and corroborate is a networked docs/history cross-check, deep-verify is the
+    # final, deepest, most skeptical pass: independently RE-DERIVE each surviving finding from the
+    # actual source (not the excerpt) with full Read/Grep/Glob access, and reason ACROSS the whole
+    # survivor set so it can catch what per-finding isolation structurally cannot — one finding that
+    # is actually N distinct bugs (split), two findings that are the same root cause (merged), or a
+    # finding whose mechanism is real but a factual detail is wrong (corrected). Modeled on the
+    # standard of manual re-verification used before a disclosure ships: read every cited line, trace
+    # every sibling function, and show the work. See docs/deep-verify.md.
+    verify_enabled: bool = False
+    # Lower-cost pipeline mode: run deep-verify only for validation-confirmed High/Critical
+    # survivors. Independent from verify_enabled so resume preserves the operator's exact mode.
+    verify_high_enabled: bool = False
+    # Hard cap on how many survivors get a deep-verify session (cost control on a huge survivor set);
+    # None = verify every survivor. Findings past the cap are left unverified (kept, never dropped).
+    verify_max_findings: int | None = None
+    # Retries per finding on a transient session failure (CLI/sandbox crash, no output produced,
+    # malformed JSON) before falling back to `inconclusive`. Default 2 (1 retry): unlike validate/
+    # corroborate's cheap per-session cost, a verify session runs unbounded with no excerpt budget
+    # (seen for real: 1-4M input tokens, $1-4 per session) - worth one retry before giving up on a
+    # crash. 1 = no retry (legacy/cheap behavior).
+    verify_max_attempts: int = 2
+    # Explicit finding-id scope for this invocation (mirrors `fix --only`). None = the default,
+    # resumable behavior: findings that already carry a real (non-infra-failure) verification are
+    # left untouched and only findings with no verification yet, or an infra-failure `inconclusive`
+    # from a prior interrupted run, get a session. When set, exactly these ids get a (re-)session
+    # regardless of their current state, and every other survivor is left completely untouched -
+    # for deliberately re-verifying specific findings without re-spending on the rest.
+    verify_only: frozenset[str] | None = None
+
+    # --- Freshness check (opt-in, networked git history check; informational only) -----------------
+    # OFF by default. Late in the pipeline, check whether cited files were touched on the audited
+    # branch after the pinned commit or on version-looking sibling release/maintenance branches.
+    # This never proves a finding is fixed and never changes/drops findings; it only adds a
+    # "verify before sending" flag for human review. Best-effort: no git/network/origin -> skip.
+    freshness_check_enabled: bool = False
+    freshness_lookback_days: int = 365
+
+    # --- Runtime verification (opt-in, sandboxed; see docs/runtime-verification-study.md) ---------
+    # OFF by default. When on, build the OSS target from the cloned source into an EPHEMERAL,
+    # EGRESS-BLOCKED (--network=none), LOOPBACK-ONLY container and probe ONLY that local instance to
+    # confirm/refute findings with HTTP-level PoCs. NEVER touches the program's live in-scope hosts.
+    runtime_enabled: bool = False
+    runtime_image: str | None = None        # docker image that contains/builds the runnable app
+    runtime_run_cmd: str | None = None      # command (in-container) that starts the app on the port
+    runtime_build_cmd: str | None = None    # optional in-container build step before run
+    runtime_port: int = 8080                # in-container loopback port the app listens on
+    runtime_boot_timeout_s: int = 180       # max wait for the app to come up on 127.0.0.1:port
+    runtime_request_timeout_s: int = 10     # per-probe HTTP timeout
+    runtime_max_requests: int = 50          # hard cap on total probe requests (anti-DoS)
+    runtime_min_request_interval_s: float = 0.2   # rate cap between probes (anti-DoS)
+    runtime_max_payload_bytes: int = 8192   # cap request body size (anti-DoS)
+    runtime_allow_state_changing: bool = False    # default: read-only probes (GET/HEAD/OPTIONS)
+
+    # --- ASan PoC generation (opt-in, sandboxed, C/C++ only) ---------------------------------------
+    # OFF by default. When on, runs AFTER verify (or validate if verify is off): for each surviving
+    # memory-safety finding on a C/C++ file, an offline LLM session writes a MINIMAL, single-
+    # translation-unit harness that #includes the real vulnerable source directly (never
+    # reimplements it), then a FIXED (non-model) step compiles it with
+    # `clang -fsanitize=address,undefined` and runs it inside an egress-blocked (--network=none)
+    # Docker container. A real ASan crash trace is the most credibility-boosting artifact a
+    # disclosure can carry, and was the single most time-consuming manual step across every C/C++
+    # campaign so far. V1 is deliberately narrow (see docs/architecture.md): no attempt to drive an
+    # arbitrary third-party CMake/Autotools/Meson build — only the single-file-compile case, which
+    # covers the common shape of a parser/decoder/buffer-handling memory-safety bug. Anything outside
+    # that (can't isolate the function, non-C/C++ finding, no Docker) degrades to an honest, logged
+    # skip per finding — never a silent failure, and NEVER refutes the finding itself.
+    asan_poc_enabled: bool = False
+    asan_poc_image: str = "silkeh/clang"       # a small image with clang + libc dev headers
+    asan_poc_max_findings: int | None = None   # cap how many survivors get a harness (cost control)
+    asan_poc_compile_timeout_s: int = 60
+    asan_poc_run_timeout_s: int = 30
+
+    # --- LIVE testing of in-scope hosts (opt-in, heavily gated; see docs ⚠️ WARNING) -------------
+    # OFF by default. When on, a FIXED executor makes BOUNDED, IN-SCOPE-ONLY, read-only HTTP requests
+    # to the program's live in-scope assets (scope-locked + RoE-gated + capped + fully audit-logged).
+    # NEVER touches out-of-scope or non-in-scope hosts. Authorized-use only (your responsibility).
+    live_enabled: bool = False
+    live_allow_writes: bool = False                # default read-only (GET/HEAD/OPTIONS); writes = 2nd opt-in
+    live_max_writes: int = 5                        # L3: separate cap on state-changing reqs (DELETE always blocked)
+    live_max_requests: int = 30                    # hard total cap (anti-DoS)
+    live_min_request_interval_s: float = 1.0       # rate cap between live requests (anti-DoS)
+    live_request_timeout_s: int = 15               # per-request timeout
+    live_max_payload_bytes: int = 4096             # cap request body size
+    live_max_retries: int = 2                       # retry transient errors (timeout/conn/5xx/429) — idempotent reqs ONLY
+    live_max_redirects: int = 3                     # follow at most N redirects (idempotent only), each re-validated in-scope
+    live_user_agent: str = "Argo-live/1.0 (authorized security testing)"  # identifies the tool to the target
+
+    # "Produced by Argo" provenance footer on human-facing audit artifacts (REPORT.md, drafts) + an
+    # attribution block in fixes_report.json. Default ON (same signature for every user); set False
+    # (--no-attribution) to opt out. Attribution only — never changes any license.
+    attribution: bool = True
+    runtime_mount_source: bool = True   # mount the isolated source copy at /src:ro (build-at-run
+                                        # model). Set False for a self-contained PRE-BUILT image.
+    runtime_build_timeout_s: int = 1800  # R3: max seconds to docker-build a recipe/repo Dockerfile
+    # R2-auth: optional credentials the LLM may use to script a login step so authz findings can be
+    # runtime-confirmed (the probe runner keeps a per-finding cookie jar across the auth + probes).
+    runtime_credentials: dict = field(default_factory=dict)   # e.g. {"username":..., "password":...}
+
+    # Evidence-gated attack-path composition.  Opt-in: free-text model output is only composed when
+    # two findings make the same normalized capability/precondition and attacker-start declaration.
+    # It writes a review artifact; it never changes a finding's severity, proof or submit status.
+    attack_path_enabled: bool = False
+    attack_path_max_hops: int = 3
+    attack_path_max_paths: int = 20
+
+    # Validation excerpt sizing.
+    excerpt_context_lines: int = 40     # +/- lines of source around each cited file:line
+    excerpt_max_bytes: int = 60_000     # hard cap on total excerpt bytes per finding
+
+    # Paths.
+    runs_dir: Path = Path("runs")
+    prompts_dir: Path = Path(__file__).resolve().parent / "prompts"
+    ledger_path: Path = Path(__file__).resolve().parent / "ledger.sqlite"
+    # Private target knowledge persists beside the run root by default.  It is never a public
+    # artifact and is revision-bound before it may seed a later run.
+    target_memory_enabled: bool = True
+    target_memory_dir: Path | None = None
+
+    # F4 incremental/PR review: a Git base ref turns its diff into a deterministic invalidation and
+    # full-context review plan. Off by default; unchanged code is never considered safe by omission.
+    incremental_base: str | None = None
+    incremental_max_related_files: int = 50
+
+    # F5 architecture clarification queue. This deterministic stage is intentionally cheap and
+    # non-blocking: unanswered questions remain visible while the rest of the pipeline completes.
+    review_questions_enabled: bool = False
+    review_questions_max: int = 20
+
+    # Mock runner fixtures (only used when runner == "mock").
+    fixtures_dir: Path = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+    fixtures_scenario: str = "happy"
+
+    def __post_init__(self) -> None:
+        if self.mistral_vibe_auth not in ("key", "stored"):
+            raise ValueError("mistral_vibe_auth must be key or stored")
+        if self.mistral_vibe_auth == "stored" and self.mistral_vibe_api_key:
+            raise ValueError("mistral_vibe_api_key is incompatible with mistral_vibe_auth=stored")
+        if any(not isinstance(m, str) or not m.strip() for m in self.codex_model_chain):
+            raise ValueError("codex_model_chain entries must be non-empty model ids")
+
+    def model_for(self, stage: str) -> str:
+        backend = self.stage_runners.get(stage, self.runner)
+        if backend == "codex":
+            if stage in self.codex_stage_models:
+                return self.codex_stage_models[stage]
+            if self.codex_model:
+                return self.codex_model
+            return DEFAULT_CODEX_STAGE_MODELS.get(stage, CODEX_BALANCED)
+        if backend == "mistral-api":
+            if stage in self.mistral_api_stage_models:
+                return self.mistral_api_stage_models[stage]
+            return self.mistral_api_model or MISTRAL_API_BALANCED
+        if backend == "mistral-vibe":
+            if stage in self.mistral_vibe_stage_models:
+                return self.mistral_vibe_stage_models[stage]
+            return self.mistral_vibe_model or MISTRAL_VIBE_DEFAULT
+        # Gemini is tiered per stage like Claude, via its own dict (see DEFAULT_GEMINI_STAGE_MODELS).
+        if backend == "gemini":
+            try:
+                return self.gemini_stage_models[stage]
+            except KeyError:  # pragma: no cover - defensive
+                raise KeyError(f"No Gemini model configured for stage {stage!r}") from None
+        try:
+            return self.stage_models[stage]
+        except KeyError:  # pragma: no cover - defensive
+            raise KeyError(f"No model configured for stage {stage!r}") from None
+
+    def timeout_for(self, stage: str) -> int:
+        return self.stage_timeouts.get(stage, self.session_timeout_s)
+
+    def with_overrides(self, **kwargs) -> "PipelineConfig":
+        """Return a copy with the given top-level fields replaced."""
+        return replace(self, **kwargs)
+
+    def with_stage_model(self, stage: str, model: str) -> "PipelineConfig":
+        if self.runner == "codex":
+            models = dict(self.codex_stage_models)
+            models[stage] = model
+            return replace(self, codex_stage_models=models)
+        if self.runner == "mistral-api":
+            models = dict(self.mistral_api_stage_models)
+            models[stage] = model
+            return replace(self, mistral_api_stage_models=models)
+        if self.runner == "mistral-vibe":
+            models = dict(self.mistral_vibe_stage_models)
+            models[stage] = model
+            return replace(self, mistral_vibe_stage_models=models)
+        if self.runner == "gemini":
+            models = dict(self.gemini_stage_models)
+            models[stage] = model
+            return replace(self, gemini_stage_models=models)
+        models = dict(self.stage_models)
+        models[stage] = model
+        return replace(self, stage_models=models)
+
+    def calibrated(self) -> "PipelineConfig":
+        """Calibration default: run the audit stage on the backend's top-tier model
+        (effectively all-Opus / all-Pro / all-CODEX_TOP) so a weak prompt is never confounded
+        with a weak model when diagnosing missed bugs.
+
+        Codex fix (2026-08-17): this used to call with_stage_model("audit", OPUS) unconditionally,
+        which is a NO-OP for Codex -- model_for() ignores stage_models entirely when
+        runner=="codex" (it reads codex_model instead), so calibrated() silently did nothing for a
+        Codex run. Caught while building the cross-backend benchmark, whose --tier top mode
+        depends on calibrated() actually working per backend to be a fair comparison."""
+        if self.runner == "gemini":
+            return self.with_stage_model("audit", GEMINI_ARGON)
+        if self.runner == "codex":
+            return self.with_overrides(codex_model=CODEX_TOP)
+        if self.runner == "mistral-api":
+            return self.with_stage_model("audit", MISTRAL_API_TOP)
+        return self.with_stage_model("audit", OPUS)
+
+    def for_smoke(self) -> "PipelineConfig":
+        """De-risked first real headless run: cheap models, one audit focus, low budget +
+        short timeout + tight per-session caps. Validates the headless seam end-to-end for
+        real at minimal cost.
+
+        Recon uses Sonnet (not Haiku): the synthesis stage is guardrail-gated (each generated
+        prompt must carry the RoE + prohibited techniques + 'Do NOT patch' verbatim), and Haiku
+        is too unreliable at reproducing the template. Every other stage stays on Haiku.
+
+        Primes BOTH stage_models (Claude) and gemini_stage_models (Gemini) unconditionally, same
+        reasoning either way: the CLI's --smoke flow calls for_smoke() first, then re-applies the
+        actually-requested --runner afterward (see cli.py), so whichever backend ends up selected
+        must already have its cheap dict ready."""
+        models = {k: HAIKU for k in self.stage_models}
+        models["recon"] = SONNET
+        codex_models = {k: CODEX_CHEAP for k in DEFAULT_CODEX_STAGE_MODELS}
+        codex_models["recon"] = CODEX_BALANCED
+        gemini_models = {k: GEMINI_CHEAP for k in self.gemini_stage_models}
+        gemini_models["recon"] = GEMINI_FLASH
+        # A smoke preset may tighten a caller's caps, never silently relax them. Zero/None
+        # turns or session price mean no cap on the underlying CLI, not a zero-sized smoke.
+        timeout = min(600, self.session_timeout_s) if self.session_timeout_s > 0 else 600
+        turns = (min(60, self.session_max_turns)
+                 if self.session_max_turns is not None and self.session_max_turns > 0 else 60)
+        price = (min(0.75, self.session_max_cost_usd)
+                 if self.session_max_cost_usd is not None and self.session_max_cost_usd > 0 else 0.75)
+        return replace(
+            self,
+            runner="headless",
+            stage_models=models,
+            codex_stage_models=codex_models,
+            codex_model_chain=[],          # a smoke is one cheap model, never a de-escalation chain
+            gemini_stage_models=gemini_models,
+            budget_usd=min(2.0, self.budget_usd) if self.budget_usd is not None else 2.0,
+            stage_timeouts={stage: seconds for stage, seconds in self.stage_timeouts.items()
+                            if 0 < seconds < timeout},
+            session_timeout_s=timeout,
+            session_max_cost_usd=price,
+            session_max_turns=turns,
+            max_focuses=1,
+            max_parallel_audits=1,
+            audit_critic_passes=0,        # smoke stays single-session
+        )
+
+
+_PATH_FIELDS = {"runs_dir", "prompts_dir", "ledger_path", "target_memory_dir", "fixtures_dir"}
+
+# Fields holding real secret material (as opposed to claude_config_dir/codex_home, which are just
+# directory paths -- the credential lives on disk outside Argo's state, not in the field value
+# itself). Gemini's/Claude's/Codex's API-key fields DO carry raw key values (Codex's indirectly --
+# codex_api_key is the raw OpenAI key runner._ensure_codex_api_key_home consumes, even though what
+# actually reaches the CLI is a derived CODEX_HOME path). Every PipelineConfig field is serialized
+# verbatim into runs/<id>/config.json for `argo resume`/`argo chat` to read back -- redact these fields
+# so a run directory never leaks live API keys or runtime login credentials.
+_SECRET_FIELDS = {"gemini_api_key", "gemini_accounts",
+                  "claude_api_key", "claude_api_keys",
+                  "codex_api_key", "codex_api_keys", "mistral_api_key", "mistral_vibe_api_key",
+                  "runtime_credentials"}
+_REDACTED = "<redacted>"
+
+
+def _jsonable(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def pipeline_config_to_dict(config: PipelineConfig) -> dict:
+    """Return a JSON-safe representation of the effective PipelineConfig. Secret-bearing fields
+    (see _SECRET_FIELDS) are redacted -- `argo resume` on a Gemini run needs the key re-supplied,
+    a narrow, deliberate deviation from resume's normal zero-flags-needed behavior."""
+    out = {}
+    for f in fields(PipelineConfig):
+        if f.name in _SECRET_FIELDS:
+            value = getattr(config, f.name)
+            out[f.name] = ({k: _REDACTED for k in value} if isinstance(value, dict) else
+                           ([_REDACTED] * len(value)) if isinstance(value, list) else
+                           (_REDACTED if value else value))
+        else:
+            out[f.name] = _jsonable(getattr(config, f.name))
+    return out
+
+
+def pipeline_config_from_dict(raw: dict) -> PipelineConfig:
+    """Reconstruct PipelineConfig from config.json, ignoring unknown future keys. A redacted
+    secret (see _SECRET_FIELDS/_REDACTED) is converted back to its "unset" value here, never
+    resurrected as the literal sentinel string -- otherwise `argo resume`/`argo chat` on a run that
+    used a real key would silently pass the string "<redacted>" as the actual credential, clobbering
+    any real ambient key and breaking auth instead of falling back to it."""
+    if not isinstance(raw, dict):
+        raise ValueError("config.json must contain a JSON object")
+    known = {f.name for f in fields(PipelineConfig)}
+    data = {k: v for k, v in raw.items() if k in known}
+    for name in _PATH_FIELDS:
+        if name in data and data[name] is not None:
+            data[name] = Path(data[name])
+    for name in _SECRET_FIELDS:
+        if name not in data:
+            continue
+        v = data[name]
+        if v == _REDACTED:
+            data[name] = None
+        elif isinstance(v, list) and any(x == _REDACTED for x in v):
+            data[name] = []  # can't tell which real keys were there -- force explicit re-supply
+        elif isinstance(v, dict) and any(x == _REDACTED for x in v.values()):
+            data[name] = {}
+    return PipelineConfig(**data)
+
+
+def write_pipeline_config(path: Path, config: PipelineConfig) -> None:
+    Path(path).write_text(json.dumps(pipeline_config_to_dict(config), indent=2), encoding="utf-8")
+
+
+def load_pipeline_config(path: Path) -> PipelineConfig:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(p)
+    return pipeline_config_from_dict(json.loads(p.read_text(encoding="utf-8-sig")))

@@ -1,0 +1,731 @@
+"""Stage 5 - Report.
+
+Deterministic, code-assembled human-review bundle (no LLM, so the golden-file test is stable):
+``REPORT.md`` + one DRAFT submission per confirmed finding. Appends every surviving finding to
+the SQLite ledger and flags any dedup_key already seen for this program in a prior run.
+
+This stage NEVER submits. Drafts are marked DRAFT and submission is a manual human action.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from ..branding import attribution_footer
+from ..context import RunContext
+from ..ranking import confidence_rank, severity_rank
+from . import compose, evidence
+
+SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Informational"]
+
+
+#: Keys whose values are identifiers or paths (rendered inside backticks, where HTML is inert).
+_RAW_KEYS = frozenset({"id", "dedup_key", "affected", "finding_id", "file", "path", "url",
+                       "evidence_urls", "fix_commit", "doc_url", "run_id", "branch", "commit"})
+
+
+def _escape_tree(value, key: str | None = None):
+    """Copy ``value`` with ``<`` escaped in every string except identifier/path fields (no tag can
+    open without it, while ``->`` arrows in prose stay readable)."""
+    if isinstance(value, dict):
+        return {k: _escape_tree(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_escape_tree(v, key) for v in value]
+    if isinstance(value, str) and key not in _RAW_KEYS:
+        return value.replace("<", "&lt;")
+    return value
+
+
+def _eff_sev(f: dict) -> str:
+    v = (f.get("validation") or {}).get("validated_severity")
+    return v or f.get("severity", "")
+
+
+def _eff_conf(f: dict) -> str:
+    v = (f.get("validation") or {}).get("validated_confidence")
+    return v or f.get("confidence", "")
+
+
+def _verdict(f: dict) -> str:
+    return (f.get("validation") or {}).get("verdict", "")
+
+
+def _corr_verdict(f: dict) -> str:
+    return (f.get("corroboration") or {}).get("verdict", "")
+
+
+def _verify_verdict(f: dict) -> str:
+    return (f.get("verification") or {}).get("verdict", "")
+
+
+def _proof_level(f: dict) -> str:
+    return f.get("proof_level") or "hypothesis"
+
+
+def _open_obligations(f: dict) -> list[dict]:
+    return [o for o in (f.get("proof_obligations") or [])
+            if o.get("status") in {"open", "contradicted"}]
+
+
+def _proof_refuted(f: dict) -> bool:
+    return (f.get("claim_status") in {"refuted", "conflicted"}
+            or f.get("external_status") == "rejected"
+            or bool((f.get("validation") or {}).get("context_revalidation_required"))
+            or any(i.get("severity") == "error" for i in f.get("consistency_issues", [])))
+
+
+def _has_source_proof(ctx: RunContext, f: dict) -> bool:
+    # Synthetic mock fixtures deliberately use citations outside their tiny example tree.
+    if ctx.config.runner == "mock":
+        return True
+    return _proof_level(f) in {
+        "source_supported", "independently_rederived", "runtime_observed", "end_to_end_proven",
+    }
+
+
+def _repo_residual_unknowns(ctx: RunContext) -> list[str]:
+    if not ctx.repo_profile_path.exists():
+        return []
+    try:
+        prof = json.loads(ctx.repo_profile_path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError:
+        return []
+    ru = prof.get("residual_unknowns")
+    if isinstance(ru, list):
+        return [str(x) for x in ru]
+    return []
+
+
+def _attack_paths(ctx: RunContext, findings: list[dict]) -> list[dict] | None:
+    """Load composition only when it still describes this exact normalized findings set."""
+    try:
+        doc = json.loads(ctx.attack_paths_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if (doc.get("status") != "evidence_gated"
+            or doc.get("input_fingerprint") != compose.input_fingerprint(findings)):
+        return None
+    paths = doc.get("paths")
+    return paths if isinstance(paths, list) else None
+
+
+def _review_questions(ctx: RunContext) -> list[dict]:
+    """Load only a queue generated from the current finding inputs."""
+    from .review_questions import input_fingerprint
+
+    try:
+        doc = json.loads(ctx.review_questions_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    residual = _repo_residual_unknowns(ctx)
+    current = json.loads(ctx.validated_findings_path.read_text(encoding="utf-8-sig"))
+    findings = [f for f in current.get("findings") or [] if isinstance(f, dict)]
+    if doc.get("input_fingerprint") != input_fingerprint(findings, residual):
+        return []
+    return [q for q in doc.get("questions") or [] if isinstance(q, dict)]
+
+
+def run(ctx: RunContext) -> Path:
+    evidence.run(ctx)
+    scope = ctx.load_scope()
+    doc = json.loads(ctx.validated_findings_path.read_text(encoding="utf-8-sig"))
+    survivors: list[dict] = doc.get("findings", [])
+    dropped: list[dict] = doc.get("dropped", [])
+    fixed_upstream: list[dict] = doc.get("fixed_upstream", [])
+    split_originals: list[dict] = doc.get("split_originals", [])
+    merged_findings: list[dict] = doc.get("merged_findings", [])
+    survivors = sorted(
+        survivors,
+        key=lambda f: (-severity_rank(_eff_sev(f)), -confidence_rank(_eff_conf(f)), f.get("id", "")),
+    )
+    attack_paths = _attack_paths(ctx, survivors)
+    review_questions = _review_questions(ctx)
+
+    total_cost = ctx.ledger.run_cost(ctx.run_id)
+    n_calls = ctx.ledger.run_call_count(ctx.run_id)
+
+    # --- ledger: record survivors + detect cross-run resubmission --------------------
+    resubmissions: list[tuple[dict, list[dict]]] = []
+    for f in survivors:
+        prior = ctx.ledger.prior_sightings(scope.program_name, f.get("dedup_key", ""), ctx.run_id)
+        if prior:
+            resubmissions.append((f, prior))
+    for f in survivors:
+        ctx.ledger.record_finding(
+            program_name=scope.program_name,
+            run_id=ctx.run_id,
+            dedup_key=f.get("dedup_key", ""),
+            title=f.get("title"),
+            verdict=_verdict(f),
+            validated_severity=_eff_sev(f),
+        )
+
+    # Model- and repo-controlled text must not become live HTML wherever REPORT.md is rendered
+    # (the web UI, GitHub, editors): escape it here; identifiers and paths stay as they are.
+    report_md = _render_report(ctx, scope, _escape_tree(survivors), _escape_tree(dropped),
+                               [(_escape_tree(f), prior) for f, prior in resubmissions],
+                               total_cost, n_calls, _escape_tree(fixed_upstream),
+                               _escape_tree(split_originals), _escape_tree(merged_findings),
+                               _escape_tree(attack_paths), review_questions)
+    sig = attribution_footer(ctx.run_id) if ctx.config.attribution else ""   # Argo provenance (default on)
+    report_path = ctx.run_dir / "REPORT.md"
+    report_path.write_text(report_md + sig, encoding="utf-8")
+
+    # --- submission drafts (confirmed only), marked DRAFT ----------------------------
+    ctx.drafts_dir.mkdir(parents=True, exist_ok=True)
+    n_drafts = 0
+    wanted_ids: set[str] = set()
+    for f in survivors:
+        # Don't draft a submission for something corroboration found to be vendor-documented by design.
+        if (_verdict(f) == "confirmed" and _corr_verdict(f) != "design_accepted"
+                and not _proof_refuted(f) and _has_source_proof(ctx, f)):
+            draft = _render_draft(ctx, scope, f)
+            (ctx.drafts_dir / f"{f.get('id', 'finding')}.md").write_text(draft + sig, encoding="utf-8")
+            n_drafts += 1
+            wanted_ids.add(f.get("id", "finding"))
+    # A finding refuted/dropped by a later stage (deep-verify, corroborate) after an earlier
+    # report run already drafted it must not leave a stale submission draft behind -- a human
+    # skimming submission_drafts/ has no reason to re-check validated_findings.json for every
+    # file, and a disproven finding sitting there is a real risk of being sent by mistake.
+    for stale in ctx.drafts_dir.glob("*.md"):
+        if stale.stem not in wanted_ids:
+            stale.unlink()
+
+    print(f"[report] REPORT.md + {n_drafts} draft(s); {len(survivors)} survivor(s); "
+          f"cost ${total_cost:.4f} over {n_calls} call(s)")
+    return report_path
+
+
+def write_pr_draft(ctx: RunContext, finding_id: str, test_command: str | None = None) -> Path:
+    """Write a maintainer-facing GitHub PR body scaffold for one confirmed finding."""
+    out_dir = ctx.run_dir / "pr_drafts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{finding_id}.md"
+    path.write_text(render_pr_draft(ctx, finding_id, test_command=test_command), encoding="utf-8")
+    return path
+
+
+# ------------------------------------------------------------------------- rendering
+def _counts_by_severity(findings: list[dict]) -> dict[str, int]:
+    counts = {s: 0 for s in SEVERITY_ORDER}
+    for f in findings:
+        counts[_eff_sev(f)] = counts.get(_eff_sev(f), 0) + 1
+    return counts
+
+
+def _freshness_rows(findings: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for f in findings:
+        flags = f.get("freshness_flag") or []
+        if isinstance(flags, dict):
+            flags = [flags]
+        for flag in flags:
+            if not isinstance(flag, dict):
+                continue
+            commits = []
+            for c in flag.get("commits") or []:
+                if not isinstance(c, dict):
+                    continue
+                sha = (c.get("sha") or "")[:12] or "unknown"
+                date = c.get("author_date") or "date unknown"
+                subject = c.get("subject") or "(no subject)"
+                commits.append(f"`{sha}` ({date}) {subject}")
+            rows.append({
+                "finding_id": f.get("id", "?"),
+                "branch": flag.get("branch", "?"),
+                "relation": flag.get("relation", "sibling_branch"),
+                "file_path": flag.get("file_path", "?"),
+                "commits": "; ".join(commits) if commits else "commit details unavailable",
+            })
+    return rows
+
+
+def _render_report(ctx, scope, survivors, dropped, resubmissions, total_cost, n_calls,
+                   fixed_upstream=None, split_originals=None, merged_findings=None,
+                   attack_paths=None, review_questions=None) -> str:
+    fixed_upstream = fixed_upstream or []
+    split_originals = split_originals or []
+    merged_findings = merged_findings or []
+    attack_paths = attack_paths or []
+    review_questions = review_questions or []
+    freshness_rows = _freshness_rows(survivors)
+    counts = _counts_by_severity(survivors)
+    confirmed = [f for f in survivors if _verdict(f) == "confirmed" and not _proof_refuted(f)]
+    nrv = [f for f in survivors if _verdict(f) == "needs_runtime_verification"]
+    L: list[str] = []
+
+    L.append(f"# Security Audit Report - {scope.program_name}")
+    L.append("")
+    live_ran = (any(_validation_field(f, "live") for f in survivors)
+                or (ctx.run_dir / "live_results.json").is_file()
+                or (ctx.run_dir / "live_audit_log.jsonl").is_file())
+    live_note = ("Opt-in live evidence is identified per finding and came from the bounded, "
+                 "scope-locked executor. " if live_ran else
+                 "No live host was contacted, scanned, or exercised by this pipeline run. ")
+    L.append("> **Automated security audit - human-review bundle.** " + live_note +
+             "Nothing here has been submitted; submission is a manual human action.")
+    L.append("")
+
+    # Run metadata
+    L.append("## Run metadata")
+    L.append("")
+    L.append(f"- Run ID: `{ctx.run_id}`")
+    L.append(f"- Platform: {scope.platform}")
+    L.append(f"- Target type: {scope.target_type}")
+    L.append(f"- Generated at: {ctx.timestamp()}")
+    L.append("- Models: " + ", ".join(f"{k}={v}" for k, v in sorted(scope_models(ctx).items())))
+    L.append(f"- LLM cost: ${total_cost:.4f} over {n_calls} call(s)")
+    L.append("")
+
+    # Executive summary
+    L.append("## Executive summary")
+    L.append("")
+    L.append(f"- Surviving findings: **{len(survivors)}** "
+             f"(confirmed: {len(confirmed)}, needs-runtime-verification: {len(nrv)})")
+    L.append(f"- Dropped in validation/scope filtering: **{len(dropped)}**")
+    sev_line = ", ".join(f"{s}: {counts[s]}" for s in SEVERITY_ORDER if counts[s])
+    L.append(f"- Surviving by severity: {sev_line or 'none'}")
+    proof_counts = {level: sum(1 for f in survivors if _proof_level(f) == level)
+                    for level in dict.fromkeys(_proof_level(f) for f in survivors)}
+    if proof_counts:
+        L.append("- Proof levels: " + ", ".join(
+            f"{level}: {count}" for level, count in proof_counts.items()))
+    open_count = sum(len(_open_obligations(f)) for f in survivors)
+    if open_count:
+        L.append(f"- Open proof obligations: **{open_count}**")
+    unanswered = [q for q in review_questions if q.get("status") == "needs_context"]
+    pending = [q for q in review_questions if q.get("status") == "answered_pending_revalidation"]
+    resolved = [q for q in review_questions if q.get("status") == "resolved"]
+    if unanswered or pending or resolved:
+        L.append(f"- Private context questions: **{len(unanswered)}** unanswered, "
+                 f"**{len(pending)}** answered pending re-validation, "
+                 f"**{len(resolved)}** resolved")
+    if any(_validation_field(f, "runtime") for f in survivors):
+        rt_conf = sum(1 for f in survivors if any(e.get("source") == "runtime"
+                      and e.get("polarity") == "supports" for e in f.get("evidence", [])))
+        L.append(f"- Runtime-verified (sandboxed HTTP probes): **{rt_conf}** confirmed")
+    if any(f.get("verification") for f in survivors) or split_originals or merged_findings:
+        n_reconfirmed = sum(1 for f in survivors if _verify_verdict(f) == "reconfirmed")
+        n_corrected = sum(1 for f in survivors if _verify_verdict(f) == "corrected")
+        n_split_children = sum(1 for f in survivors if "-split-" in f.get("id", ""))
+        L.append(f"- Deep-verified: **{n_reconfirmed}** reconfirmed, **{n_corrected}** corrected, "
+                f"**{len(split_originals)}** split into {n_split_children} finding(s), "
+                f"**{len(merged_findings)}** merged away")
+    n_corroborated_by_passes = sum(1 for f in survivors if len(f.get("corroborating_passes") or []) > 1)
+    if n_corroborated_by_passes:
+        L.append(f"- **{n_corroborated_by_passes}** finding(s) independently confirmed by "
+                f"{'a blind second-opinion pass' if n_corroborated_by_passes == 1 else 'blind second-opinion passes'}")
+    L.append("")
+
+    if review_questions:
+        L.append("## Private context review")
+        L.append("")
+        L.append("The private `review_questions.json` queue contains architecture/business-context "
+                 "questions that source alone could not settle. Its question and answer text is "
+                 "deliberately not copied into this report. Answers are contextual claims, not "
+                 "technical proof; affected findings are excluded from drafts until re-validation.")
+        L.append("")
+        for q in review_questions:
+            ids = ", ".join(f"`{fid}`" for fid in q.get("affected_finding_ids") or []) or "repo context"
+            L.append(f"- `{q.get('id', '?')}` — {q.get('status', 'needs_context')} — {ids}")
+        L.append("")
+
+    # Fix-first ordering
+    L.append("## Fix first")
+    L.append("")
+    if confirmed:
+        for i, f in enumerate(confirmed, 1):
+            L.append(f"{i}. **{f.get('title')}** ({_eff_sev(f)}/{_eff_conf(f)}, {f.get('cwe')}) "
+                     f"- {_primary_ref(f)}")
+    else:
+        L.append("_No confirmed findings to prioritize._")
+    L.append("")
+
+    if attack_paths:
+        L.append("## Evidence-gated attack paths (review required)")
+        L.append("")
+        L.append("These are deterministic links between findings whose declared capability, "
+                 "precondition, attacker start, identity, tenant, deployment and configuration "
+                 "all match exactly. They do **not** change severity, prove end-to-end "
+                 "exploitability, or create a submission on their own.")
+        for path in attack_paths:
+            ids = " → ".join(f"`{item}`" for item in path.get("finding_ids") or [])
+            L.append(f"- {ids}: {path.get('impact') or 'impact not recorded'} "
+                     f"({path.get('proof_level') or 'proof level unknown'}; review required)")
+        L.append("")
+
+    # Findings, sorted
+    L.append("## Findings (sorted by validated severity, then confidence)")
+    L.append("")
+    if not survivors:
+        L.append("_No findings survived validation._")
+        L.append("")
+    for f in survivors:
+        L.extend(_finding_section(f))
+
+    # Residual unknowns
+    L.append("## Residual unknowns")
+    L.append("")
+    if nrv:
+        L.append("These need human runtime verification (static evidence strong; exploitability "
+                 "depends on runtime/config not visible from source):")
+        for f in nrv:
+            L.append(f"- **{f.get('title')}** ({f.get('cwe')}, {_primary_ref(f)}) - "
+                     f"{_validation_field(f, 'rationale') or 'see finding'}")
+    repo_ru = _repo_residual_unknowns(ctx)
+    for r in repo_ru:
+        L.append(f"- (recon) {r}")
+    if not nrv and not repo_ru:
+        L.append("_None recorded._")
+    L.append("")
+
+    # Dropped
+    L.append("## Dropped findings (not reported)")
+    L.append("")
+    if dropped:
+        for d in dropped:
+            L.append(f"- `{d.get('id')}` {d.get('title')} ({d.get('cwe')}) - {d.get('reason')}")
+    else:
+        L.append("_None._")
+    L.append("")
+
+    # Fixed upstream (corroboration appendix — kept, not silently deleted)
+    if fixed_upstream:
+        L.append("## Already fixed upstream (excluded from active findings)")
+        L.append("")
+        L.append("Corroboration found these already patched in a newer commit/release than the "
+                 "audited revision. Listed for the record; do not report as active:")
+        for f in fixed_upstream:
+            corr = f.get("corroboration") or {}
+            ref = corr.get("fix_commit") or "commit unspecified"
+            ev = corr.get("evidence_urls") or []
+            tail = f" ({ev[0]})" if ev else ""
+            L.append(f"- `{f.get('id')}` {f.get('title')} ({f.get('cwe')}) - fixed in `{ref}`{tail}")
+        L.append("")
+
+    # Freshness check appendix - informational only, active findings unchanged.
+    if freshness_rows:
+        L.append("## Freshness check - verify before sending")
+        L.append("")
+        L.append("These commits touched files cited by active findings on the audited branch after "
+                 "the pinned commit or on version-looking sibling branches. This is informational "
+                 "only: a same-file touch is not proof of a fix and does not change severity, "
+                 "confidence, or reporting status.")
+        for row in freshness_rows:
+            relation = {"audited_branch": "audited branch",
+                        "sibling_branch": "sibling branch"}.get(row["relation"], row["relation"])
+            L.append(f"- `{row['finding_id']}` {relation} `{row['branch']}`, file "
+                     f"`{row['file_path']}` - {row['commits']}")
+        L.append("")
+
+    # Split originals (deep-verify appendix — kept, not silently deleted)
+    if split_originals:
+        L.append("## Split at deep-verify (replaced by independent sub-findings, kept for the record)")
+        L.append("")
+        L.append("Deep-verify found these bundled >=2 independently-triggerable bugs under one "
+                 "description. Each sub-finding is reported on its own below (id suffixed "
+                 "`-split-N`); the original is kept here for provenance, not as an active finding:")
+        for f in split_originals:
+            verf = f.get("verification") or {}
+            L.append(f"- `{f.get('id')}` {f.get('title')} ({f.get('cwe')}) - {verf.get('rationale', '')}")
+        L.append("")
+
+    # Merged findings (deep-verify appendix — kept, not silently deleted)
+    if merged_findings:
+        L.append("## Merged at deep-verify (duplicate root cause, kept for the record)")
+        L.append("")
+        L.append("Deep-verify found these share their root cause with another surviving finding "
+                 "(by mechanism, not just by dedup key); folded into that finding rather than "
+                 "reported twice:")
+        for f in merged_findings:
+            verf = f.get("verification") or {}
+            L.append(f"- `{f.get('id')}` {f.get('title')} ({f.get('cwe')}) - merged into "
+                    f"`{verf.get('merged_into', '?')}`. {verf.get('rationale', '')}".rstrip())
+        L.append("")
+
+    # Resubmission guard
+    if resubmissions:
+        L.append("## (!) Possible resubmissions (seen in a prior run for this program)")
+        L.append("")
+        for f, prior in resubmissions:
+            runs = ", ".join(p["run_id"] for p in prior)
+            L.append(f"- `{f.get('id')}` {f.get('title')} - dedup_key seen in: {runs}")
+        L.append("")
+
+    L.append("---")
+    L.append("")
+    live_guardrail = ("live interaction scope-locked + audit-logged" if live_ran
+                      else "no live interaction performed")
+    L.append(f"**Guardrails:** repo mounted read-only | {live_guardrail} | "
+             "no patching | no auto-submission. Submission drafts in `submission_drafts/` are "
+             "marked DRAFT and require manual human review before any submission.")
+    L.append("")
+    return "\n".join(L)
+
+
+def _finding_section(f: dict) -> list[str]:
+    L = [f"### {f.get('id')} - {f.get('title')}", ""]
+    L.append(f"- Severity: **{_eff_sev(f)}** (audit: {f.get('severity')}) | "
+             f"Confidence: **{_eff_conf(f)}** | Verdict: **{_verdict(f)}**")
+    sources = list(dict.fromkeys(
+        e.get("source") for e in (f.get("evidence") or []) if e.get("polarity") == "supports"))
+    source_note = f" ({', '.join(sources)})" if sources else ""
+    L.append(f"- Proof level: **{_proof_level(f)}**{source_note}")
+    if f.get("claim_status", "active") != "active":
+        L.append(f"- Claim status: **{f['claim_status']}**")
+    if f.get("external_status", "unknown") != "unknown":
+        L.append(f"- External disposition: **{f['external_status']}**")
+    L.append(f"- CWE: {f.get('cwe')}" + (f" | OWASP: {f.get('owasp')}" if f.get('owasp') else ""))
+    L.append(f"- Affected: {', '.join('`' + a + '`' for a in f.get('affected', []))}")
+    grounding = f.get("grounding") or {}
+    if grounding.get("composite_suspect"):
+        L.append(f"- **Possible composite finding (informational):** "
+                 f"{grounding.get('composite_reason') or 'may bundle multiple distinct issues'}")
+    passes = f.get("corroborating_passes") or []
+    if len(passes) > 1:
+        L.append(f"- **Independently confirmed by {len(passes)} blind audit passes**: {', '.join(passes)}")
+    issues = f.get("consistency_issues") or []
+    for issue in issues:
+        L.append(f"- **Evidence consistency {issue.get('severity', 'warning')}:** "
+                 f"{issue.get('message', issue.get('code', 'review required'))}")
+    obligations = _open_obligations(f)
+    if obligations:
+        L.append("- **Open proof obligations:**")
+        for obligation in obligations[:4]:
+            suffix = f" Reason: {obligation.get('reason')}" if obligation.get("reason") else ""
+            L.append(f"  - {obligation.get('description')}{suffix}")
+        if len(obligations) > 4:
+            L.append(f"  - … plus {len(obligations) - 4} more in `validated_findings.json`")
+    L.append("")
+    L.append(f"**Vulnerable flow.** {f.get('vulnerable_flow', '')}")
+    L.append("")
+    L.append(f"**Why vulnerable.** {f.get('why_vulnerable', '')}")
+    L.append("")
+    L.append(f"**Exploit scenario.** {f.get('exploit_scenario', '')}")
+    L.append("")
+    L.append(f"**Impact.** {f.get('impact', '')}")
+    L.append("")
+    sdf = _validation_field(f, "surviving_data_flow")
+    if sdf:
+        L.append(f"**Validated data flow.** {sdf}")
+        L.append("")
+    rt = _validation_field(f, "runtime")
+    if rt:
+        booted = "sandbox booted" if rt.get("booted") else "sandbox did NOT boot"
+        line = f"**Runtime verification.** `{rt.get('verdict', 'runtime_inconclusive')}` ({booted})."
+        if rt.get("evidence"):
+            line += f" Interpretation: {evidence.redact_text(rt.get('evidence'))}"
+        L.append(line)
+        L.append("")
+    corr = f.get("corroboration") or {}
+    if corr.get("verdict") and corr.get("verdict") != "corroborated":
+        note = {"design_accepted": "Vendor-documented design decision / accepted risk",
+                "fixed_upstream": "Already fixed upstream",
+                "unknown": "Corroboration inconclusive"}.get(corr["verdict"], corr["verdict"])
+        line = f"**Corroboration.** {note}. {corr.get('rationale', '')}".rstrip()
+        ev = corr.get("evidence_urls") or []
+        if corr.get("doc_url"):
+            line += f" Docs: {corr['doc_url']}"
+        elif ev:
+            line += f" Evidence: {ev[0]}"
+        L.append(line)
+        if corr.get("verdict_overridden_from"):
+            L.append(f"> ⚠️ Verdict auto-corrected from `{corr['verdict_overridden_from']}` to "
+                      f"`design_accepted`: the model's own rationale above asserted vendor-confirmed/"
+                      f"documented intent, but its structured verdict initially said otherwise. "
+                      f"Double-check this call before relying on it.")
+        L.append("")
+    verf = f.get("verification") or {}
+    if verf.get("verdict"):
+        label = {"reconfirmed": "Independently re-derived from source; stands as written.",
+                 "corrected": "Mechanism confirmed real; a factual detail was corrected — see below.",
+                 "inconclusive": "Could not be independently settled from source alone."
+                 }.get(verf["verdict"], verf["verdict"])
+        L.append(f"**Deep-verify.** {label}")
+        if verf.get("corrections"):
+            L.append(f"- Corrected: {verf['corrections']}")
+        if verf.get("independent_derivation"):
+            L.append(f"- Independent derivation: {verf['independent_derivation']}")
+        L.append("")
+    L.append(f"**Recommended fix (guidance only).** {f.get('recommended_fix', '')}")
+    L.append("")
+    if f.get("live_verification_plan"):
+        L.append(f"**Live verification plan (for a human, in-scope, non-DoS).** "
+                 f"{f.get('live_verification_plan')}")
+        L.append("")
+    return L
+
+
+def _render_draft(ctx, scope, f: dict) -> str:
+    L: list[str] = []
+    L.append("# DRAFT - NOT SUBMITTED")
+    L.append("")
+    L.append(f"> Platform: **{scope.platform}** | Program: **{scope.program_name}** | "
+             f"Source-audit pipeline run `{ctx.run_id}`.")
+    L.append("> Human-review draft. The pipeline never submits. Review, verify against the "
+             "program's rules of engagement, and submit manually.")
+    L.append("")
+    L.append(f"## {f.get('title')}")
+    L.append("")
+    L.append(f"- **Severity:** {_eff_sev(f)} (audit assessment: {f.get('severity')})")
+    L.append(f"- **Confidence:** {_eff_conf(f)} | **Verdict:** {_verdict(f)}")
+    L.append(f"- **Proof level:** {_proof_level(f)}")
+    L.append(f"- **Weakness:** {f.get('cwe')}"
+             + (f" | {f.get('owasp')}" if f.get('owasp') else ""))
+    L.append(f"- **Affected:** {', '.join('`' + a + '`' for a in f.get('affected', []))}")
+    obligations = _open_obligations(f)
+    if obligations:
+        L.append(f"- **Open proof obligations:** {len(obligations)} (resolve before submission)")
+    L.append("")
+    L.append("### Summary")
+    L.append(f.get("why_vulnerable", ""))
+    L.append("")
+    L.append("### Steps to reproduce / exploit scenario")
+    L.append(f.get("exploit_scenario", ""))
+    L.append("")
+    L.append("### Impact")
+    L.append(f.get("impact", ""))
+    L.append("")
+    sdf = _validation_field(f, "surviving_data_flow")
+    if sdf:
+        L.append("### Validated data flow")
+        L.append(sdf)
+        L.append("")
+    rt = _validation_field(f, "runtime")
+    if rt and any(e.get("source") == "runtime" and e.get("polarity") == "supports"
+                  for e in f.get("evidence", [])):
+        L.append("### Runtime verification (sandboxed local instance)")
+        L.append(f"Confirmed at runtime via HTTP probe against a sealed local instance. "
+                 f"{evidence.redact_text(rt.get('evidence', ''))}")
+        L.append("")
+    verf = f.get("verification") or {}
+    if verf.get("verdict") == "corrected" and verf.get("corrections"):
+        L.append("### Correction (deep-verify)")
+        L.append("An independent re-derivation from source confirmed the mechanism but corrected "
+                 f"the following detail: {verf['corrections']}")
+        L.append("")
+    if obligations:
+        L.append("### Unresolved proof obligations")
+        for obligation in obligations[:6]:
+            suffix = f" Reason: {obligation.get('reason')}" if obligation.get("reason") else ""
+            L.append(f"- {obligation.get('description')}{suffix}")
+        if len(obligations) > 6:
+            L.append(f"- … plus {len(obligations) - 6} more in `validated_findings.json`")
+        L.append("")
+    L.append("### Suggested remediation")
+    L.append(f.get("recommended_fix", ""))
+    L.append("")
+    if scope.target_type == "source_and_live" and f.get("live_verification_plan"):
+        L.append("### Live verification plan (human-run, in-scope, non-DoS)")
+        L.append(f.get("live_verification_plan"))
+        L.append("")
+    L.append("---")
+    live_ran = bool(_validation_field(f, "live"))
+    L.append("**DRAFT - verify before submitting. " +
+             ("Any live evidence above came from the authorized scope-locked executor.**"
+              if live_ran else "No live testing was performed by the pipeline.**"))
+    L.append("")
+    return "\n".join(L)
+
+
+def _fix_verify_entry(ctx: RunContext, finding_id: str) -> dict | None:
+    """Look up this finding's entry in ``runs/<id>/fixes_report.json`` (Phase 6, ``argo fix``),
+    if that stage has already run for this finding. Returns the raw ``fixes[]`` entry (with its
+    ``verify`` sub-dict) or ``None`` if the report doesn't exist or has no matching entry."""
+    path = ctx.run_dir / "fixes_report.json"
+    if not path.is_file():
+        return None
+    try:
+        report = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    return next((f for f in report.get("fixes", []) if f.get("finding_id") == finding_id), None)
+
+
+def render_pr_draft(ctx: RunContext, finding_id: str, test_command: str | None = None) -> str:
+    evidence.run(ctx)
+    scope = ctx.load_scope()
+    doc = json.loads(ctx.validated_findings_path.read_text(encoding="utf-8-sig"))
+    finding = next((f for f in doc.get("findings", []) if f.get("id") == finding_id), None)
+    if finding is None:
+        raise ValueError(f"finding {finding_id!r} was not found in validated_findings.json")
+    if _verdict(finding) != "confirmed":
+        raise ValueError(f"finding {finding_id!r} is not confirmed; PR drafts are for confirmed findings")
+    if _corr_verdict(finding) == "design_accepted":
+        raise ValueError(f"finding {finding_id!r} is documented as an accepted design risk")
+    if _proof_refuted(finding):
+        raise ValueError(f"finding {finding_id!r} has unresolved evidence consistency issues")
+    if not _has_source_proof(ctx, finding):
+        raise ValueError(f"finding {finding_id!r} has no source-supported proof")
+
+    affected = finding.get("affected") or []
+    affected_text = ", ".join(f"`{item}`" for item in affected) or "_Add affected files._"
+    test_text = f"`{test_command}`" if test_command else "_Replace with the exact local test/build command you ran._"
+    fix_entry = _fix_verify_entry(ctx, finding_id)
+    verify = (fix_entry or {}).get("verify") or {}
+    L: list[str] = []
+    L.append(f"# Draft PR body - {finding.get('title')}")
+    L.append("")
+    L.append("> Human-edit before opening a PR: describe the final patch and paste real test output. ")
+    L.append("> Argo generated this from a confirmed source-static finding; it did not submit anything.")
+    L.append("")
+    L.append("## What does this PR do?")
+    L.append("")
+    L.append(f"Addresses **{finding.get('title')}** in {affected_text}.")
+    L.append("")
+    L.append(f"Root cause: {finding.get('why_vulnerable', '')}")
+    L.append("")
+    L.append(f"Recommended fix direction: {finding.get('recommended_fix', '')}")
+    L.append("")
+    L.append("## Why is it important?")
+    L.append("")
+    L.append(f"Impact: {finding.get('impact', '')}")
+    L.append("")
+    L.append(f"Validated flow: {_validation_field(finding, 'surviving_data_flow') or finding.get('vulnerable_flow', '')}")
+    L.append("")
+    L.append("## How was this checked?")
+    L.append("")
+    L.append(f"- Argo run: `{ctx.run_id}` against `{scope.program_name}`")
+    L.append(f"- Verdict: `{_verdict(finding)}`; severity: `{_eff_sev(finding)}`; confidence: `{_eff_conf(finding)}`")
+    if fix_entry and fix_entry.get("patch"):
+        if verify.get("verified"):
+            L.append(f"- Candidate patch `patches/{fix_entry['patch']}` (from `argo fix`) "
+                     f"**verified** on an isolated copy: applies cleanly, builds with "
+                     f"`{verify.get('tool', 'the detected build tool')}`, introduces no new errors.")
+            re_audit = verify.get("re_audit") or {}
+            if re_audit.get("ran") and re_audit.get("confirmed_fixed"):
+                L.append("- Re-audit on the patched copy confirms the original vulnerability is gone.")
+        else:
+            reason = verify.get("reason", "not verified")
+            L.append(f"- Candidate patch `patches/{fix_entry['patch']}` exists but Argo's own "
+                     f"verification did **NOT** pass ({reason}) — do not rely on it as-is; "
+                     f"treat it as a starting point only.")
+    else:
+        L.append("- No `argo fix` patch found for this finding "
+                 "(run `argo fix --run RUN_ID --only " + finding_id + "` to generate + verify one).")
+    L.append(f"- Local validation command: {test_text}")
+    L.append("- Regression expectation: the vulnerable flow above is rejected or safely handled after this patch.")
+    L.append("")
+    L.append("## Safety notes")
+    L.append("")
+    L.append("- Argo performed source-static analysis only; no live hosts were contacted.")
+    L.append("- This draft is for a human-authored PR after implementing and testing a fix.")
+    L.append("")
+    return "\n".join(L)
+
+
+def _primary_ref(f: dict) -> str:
+    aff = f.get("affected", [])
+    return f"`{aff[0]}`" if aff else "(no ref)"
+
+
+def _validation_field(f: dict, key: str):
+    return (f.get("validation") or {}).get(key)
+
+
+def scope_models(ctx: RunContext) -> dict[str, str]:
+    # The model that ACTUALLY ran each pipeline stage (via model_for, so a Codex run reports its
+    # model, not the unused Claude stage_models). Excludes post-run helpers like "chat".
+    pipeline_stages = ("ingest", "recon", "audit", "validate", "report")
+    return {s: ctx.config.model_for(s) for s in pipeline_stages}

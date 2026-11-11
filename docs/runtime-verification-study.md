@@ -1,0 +1,121 @@
+# Study: safe, optional runtime verification
+
+> Status: **R1 + R2 done** (validated live against Umbraco). Runtime verification is **opt-in**
+> (`--runtime`, default off) and **best-effort** (graceful skip when it cannot provision a runnable
+> instance). It never blocks a run and never weakens the static pipeline.
+
+## 1. Value
+Turn `needs_runtime_verification` findings (and re-test `confirmed` ones) into **HTTP-level
+confirmed / refuted with a real PoC** — the class of evidence that separated the reference Umbraco
+audit (5 live confirmations: `/backofficeHub/negotiate` → 200 anon; `?take=2147483647` past model
+binding; `swagger.json` served to anon) from a pure-static tool. It catches guards that exist in
+code but aren't wired at runtime, and it *raises precision* — a finding that won't reproduce live is
+honestly downgraded.
+
+## 2. The safety crux — why runtime does NOT break the core guardrail
+Argo's hardest guardrail is **"no stage ever contacts, scans, or exercises a live in-scope host."**
+Runtime verification preserves it, by construction:
+
+> It never touches the program's real hosts. It **builds the open-source target from the
+> already-cloned source into an ephemeral, network-sealed, local instance** and probes **only that
+> loopback instance** — the same trust model a researcher uses (build the OSS app, test your own
+> copy), and the same model [`verify.py`](architecture.md#remediation--verification-phase-6-opt-in)
+> already uses for Docker builds (`--network=none`).
+
+New explicit invariant: *probe targets are loopback-only; the sandbox has no egress; the real
+in-scope / out-of-scope hosts are never resolved or contacted.*
+
+## 3. Threat model — prevented structurally, not by prompt
+| Risk | Structural prevention |
+|---|---|
+| Sandbox reaches the internet / the program's prod hosts | container runs **egress-blocked** (`--network=none`); probes run **inside** the container against `127.0.0.1`, so no host networking is needed at all |
+| A probe aimed at a real host (typo / model error) | deterministic `assert_loopback_only(plan, scope)` — every target must be loopback; abort if any matches a scope host or resolves off-127.0.0.1 |
+| DoS vs the local instance (violates `prohibited_techniques`) | `validate_probe_plan` caps request count, RPS, payload size, timeout; rejects fuzz/flood shapes |
+| Model runs arbitrary shell | the model **never gets a shell or network** — it emits a constrained probe plan; a **fixed executor** runs the validated plan |
+| Malicious target source executes locally | build+run **inside the sealed container, non-root, `--rm`**, no host mounts beyond the source copy + a result file, no egress |
+| Persistent side effects | throwaway `copytree` + `--rm` container + ephemeral in-container DB — nothing survives |
+
+## 4. Architecture — one sealed container does everything
+```
+orchestrator (host)                    sealed container (--network=none, --rm, non-root)
+  isolated copy   ──mount ro──►  /src  ─► build ─► run app on 127.0.0.1:PORT (in-container)
+  probe_plan.json ──mount────►  /work  ─► fixed probe-runner curls localhost per the plan
+  results.json    ◄──mount────  /work  ◄─ writes {finding_id, request, status, observation}
+```
+The orchestrator only ever **reads a result file**; no port is exposed to the host. Reuses
+`verify.py` (`_copy_repo`, Docker invocation, timeouts).
+
+## 5. The LLM's constrained role: propose → validate → execute → interpret
+1. **Propose** (`04_runtime_probe_prompt.md`) — per finding, a `runtime_probe_plan`: HTTP requests
+   against `localhost:PORT` + an expected observation. No shell, no non-loopback hosts.
+2. **Validate** (deterministic, `guardrails.py`) — loopback-only, safe method set, payload/rate/
+   count/timeout caps. Reject → finding keeps `needs_runtime_verification`.
+3. **Execute** (fixed in-container runner) — runs the validated requests, records status + body snippet.
+4. **Interpret** (model, read-only) — returns `runtime: {confirmed|refuted|inconclusive, evidence}`,
+   merged into the verdict (the `verify.py` `on_patched` pattern).
+
+## 6. Pipeline integration
+An **optional** `runtime` stage after `validate` (mirrors SCA's opt-out wiring), `--runtime`
+(default off). Per kept finding with a probe plan: build-once → probe → attach a `runtime` evidence
+block; `report.py` surfaces "✅ runtime-confirmed (HTTP PoC)"; `benchmark.py` folds in
+`runtime_confirmed_rate` (like `re_audit_confirmed_rate`).
+
+## 7. The real blocker is *provisioning*, not safety
+Getting a complex app to actually run is the hard part (Umbraco = .NET 10 SDK + Node 22 + unattended
+DB). A generic "boot any repo" is **not** feasible. Pluggable launcher, in priority order:
+1. **User recipe (R3)** — explicit `--runtime-image`/`--runtime-run-cmd`, OR a committed
+   **`argo-runtime.json`** at the repo root (`{image | dockerfile, run_cmd?, port?, env?,
+   mount_source?, boot_timeout?}`), OR the repo's **own `Dockerfile`** (auto-built). Most reliable
+   for real apps. A worked, validated example (the one used for the live Umbraco confirmations) lives
+   at [examples/runtime-recipes/umbraco/](examples/runtime-recipes/umbraco/).
+2. **Auto-detect** simple stacks (single Flask/Express/FastAPI, static server).
+3. **Graceful skip** — no runnable instance ⇒ the stage no-ops; findings keep their static verdict.
+
+## 7a. Known limitation — PKCE / OAuth authentication
+
+R2-auth scripts a **single (or simple multi-step) cookie login**, which covers apps whose session
+is established by a username/password POST. It does **not** cover an **OAuth authorization-code +
+PKCE** flow (e.g. Umbraco's backoffice: `POST /login` only sets the Identity cookie; the Management
+API requires an OpenIddict access token obtained via `GET /authorize` → `POST /token` with a
+**runtime-generated `code_verifier`/`code_challenge`** and a redirect-extracted `code`). PKCE values
+cannot be expressed as static probe requests (they are generated/parsed at runtime), so the LLM
+cannot script them. Confirming such authz findings at runtime would need a **dedicated, target-
+specific OAuth helper** — a brittle, low-ROI effort, since those findings are already confirmed
+statically and diffed against the baseline-correct reference. **Deliberately not built**; authz
+findings on OAuth/PKCE backends stay `runtime_inconclusive` (honestly), not falsely confirmed.
+
+## 8. Decisions (current defaults)
+1. **Provisioning:** user-recipe-first + graceful skip (reliable, honest) — not magical auto-boot.
+2. **Docker:** required; skip with a clear message if absent.
+3. **Probe scope:** read-only by default (GET/HEAD/negotiate, take-overflow); state-changing PoCs
+   only behind an extra opt-in.
+
+## 9. Phased plan
+- **R1 — safe harness, no LLM:** sealed-container build+run+probe + `assert_loopback_only` +
+  `validate_probe_plan` + a hand-written probe plan. ✅ **DONE** — reproduced the reference's
+  `/server/status` + `/server/configuration` anonymous confirmations against a sealed Umbraco.
+- **R2 — LLM probe plans + interpretation** ✅ **DONE** — `04_runtime_probe_prompt.md` (propose,
+  offline, read-only repo) generates `runtime_probe_plan.json` from the validated findings (gated by
+  the R1 validators); `05_runtime_interpret_prompt.md` (interpret) turns the observations into
+  per-finding `runtime_confirmed/refuted/inconclusive` verdicts merged into `validated_findings.json`.
+  A hand-written plan still overrides generation. **R2-auth:** a finding entry may carry an optional
+  `auth` login step (used only when `runtime_credentials` are provided) — the probe runner keeps a
+  per-finding cookie jar so the probes run as that session, letting **authz** findings be
+  runtime-confirmed. The login POST is exempt from the read-only gate (it is non-destructive) but is
+  still loopback-checked and capped; the actual probe methods stay read-only unless explicitly opted in.
+- **R3 — launcher auto-detection** ✅ **DONE** — `_resolve_launcher` resolves provisioning in
+  priority order: explicit `--runtime-image`/`--runtime-run-cmd` → an **`argo-runtime.json`** recipe
+  (`{image | dockerfile, run_cmd?, port?, env?, mount_source?, boot_timeout?}`; a `dockerfile` is
+  auto-built) → the **repo's own `Dockerfile`** (auto-built, run via its default CMD, port from
+  `EXPOSE`). None → graceful skip. Env injection (`-e`) and image-default-CMD now supported.
+- **R4 — verdicts in the report** ✅ **DONE** — each finding's `validation.runtime` verdict +
+  evidence renders in `REPORT.md` (and confirmed ones in the submission draft); a gated
+  exec-summary line counts runtime-confirmed findings. The golden report stays byte-stable because
+  the runtime block only renders when present (off by default). The benchmark
+  `runtime_confirmed_rate` is deferred (it needs a runtime recipe per labeled case — a rare config).
+
+## 10. Files
+`config.py` (runtime flags/caps) · `guardrails.py` (`assert_loopback_only`, `validate_probe_plan`) ·
+`argo/runtime.py` (+ reuse `verify.py`) · `argo/prompts/04_runtime_probe_prompt.md` · `models.py`
+(`RuntimeEvidence`) · `orchestrator.py` + `cli.py` (optional stage, `--runtime`, `argo runtime`) ·
+`report.py`, `benchmark.py`, **`guardrails.md`** (mandatory safety section), both SVGs.

@@ -1,0 +1,342 @@
+# CLI reference
+
+## Invocation
+
+The CLI is a Typer app. Two equivalent ways to run it, on any OS:
+
+```bash
+python -m argo.cli <command> [options]      # works from the repo, no install
+# or, after `pip install -e .` (declares the entry point in pyproject.toml):
+argo <command> [options]
+```
+
+Everywhere below, `argo` ≡ `python -m argo.cli`.
+
+## Commands
+
+Before a paid run, `screen` and `plan` provide deterministic, offline target profiling and an
+explainable objective-based plan. `show-routing` and `profiles` expose the same core routing data
+used by the pipeline; they do not start a model session.
+
+| Command | Stage(s) | Purpose |
+|---|---|---|
+| `ingest` | 1 | brief + repo → `scope.json` (+ read-only repo copy) |
+| `recon` | 2 | `scope.json` + repo → `repo_profile.json` + custom prompts |
+| `compare-recon` | — | offline, read-only comparison of two completed recon outputs; checks comparability and emits bounded artifact diffs without making model calls |
+| `run` | 3 | per-focus findings JSON |
+| `sca` | SCA | dependency manifests → known-vuln pins as a `dependencies` focus (opt-out; no-op without manifests) |
+| `second-opinion` | SECOND-OPINION | **opt-in**, offline: run N additional, fully independent blind recon+audit passes over the already-ingested scope/repo (each in its own isolated `run_dir`), merge their findings in. `--passes N`, `--backend` to use a different runner for the extra passes (real cross-engine diversity). Re-run `validate` afterward to reconcile — its existing dedup already collapses cross-pass duplicates and records `corroborating_passes`; see [architecture.md](architecture.md#second-opinion-an-llm-audit-is-one-noisy-sample-not-the-answer) |
+| `questions` | QUESTIONS | rebuild an existing run's private, deterministic architecture/business-context question queue |
+| `answer-question` | QUESTIONS | record one provenance-bearing answer, add it to same-revision target memory/context, and block affected stale drafts pending re-validation |
+| `revalidate-context` | 4 / QUESTIONS | re-run validation only for findings marked stale by answered context questions; refresh evidence/questions/report while preserving unrelated findings and keeping failed attempts blocked |
+| `validate` | 4 | dedup + adversarial validation (downgrade-don't-delete) → `validated_findings.json` |
+| `corroborate` | CORROBORATE | **opt-out**, two-pass: an offline repo-mounted docs/VCS check plus a networked public-OSINT check with no repo mount or source excerpts; merged results downgrade documented-by-design findings and move already-fixed findings to a `fixed_upstream` appendix. Rewrites `validated_findings.json`. `--docs-url` pins docs; `--only ID,ID` re-corroborates only those findings and leaves every other existing verdict untouched; never the live hosts |
+| `verify` | VERIFY | **opt-in**, offline: independently re-derive each surviving finding from the actual source (full repo access, one full session per finding, no batching, no excerpt budget) and reason across the whole survivor set → `corrected`/`split`/`merged`/`reconfirmed`/`refuted`/`inconclusive`. Rewrites `validated_findings.json`. **Resumable by default**: re-running it on the same run skips findings that already have a real verdict and only re-attempts unverified/infra-failure ones — safe to re-invoke after a rate limit or a backend running out of credits without re-spending on what already succeeded. `--only ID,ID` to force specific findings to (re-)verify regardless of their state, leaving everything else untouched; `--max-findings` to cap cost; see [architecture.md](architecture.md#deep-verify-why-a-separate-stage-from-validate) |
+| `asan-poc` | ASAN_POC | **opt-in**, sandboxed, **C/C++ only**: for each already-verified memory-safety survivor, an offline LLM writes a minimal single-file harness that `#include`s the real vulnerable source directly, then a FIXED (non-model) step compiles it with `clang -fsanitize=address,undefined` and runs it in an egress-blocked Docker container → per-finding `confirmed`/`not_reproduced`/`crashed_no_sanitizer_output`/`not_attempted`. Rewrites `validated_findings.json`; harness + notes + full output land in `runs/<id>/asan_poc/<finding_id>/`. `--max-findings` to cap cost. Needs Docker; see [architecture.md](architecture.md#asan-poc-generation-why-v1-is-deliberately-narrow) |
+| `runtime` | RUNTIME | **opt-in** sandboxed runtime verification: build the target in an egress-blocked, loopback-only container and probe ONLY the local instance (never live hosts) → `runtime_results.json`; refreshes F1 evidence and an existing report. See [runtime-verification-study.md](runtime-verification-study.md) |
+| `live` | LIVE | ⚠️ **opt-in, default off, AUTHORIZED USE ONLY.** Bounded **read-only** requests to the program's **in-scope** hosts to confirm findings. Requires `--i-have-authorization`; RoE-gated (automation/safe-harbor/prohibited), in-scope-only (out-of-scope/unknown blocked), capped + audit-logged. Uses a hand-written `runs/<id>/live_probe_plan.json` if present, else (L2) an **offline** LLM generates one from the validated findings (same gates apply) and interprets the results → `live_results.json` + `live_audit_log.jsonl` (+ a `validation.live` block on findings); refreshes F1 evidence and an existing report. See [guardrails §2c](guardrails.md#2c-the-opt-in-live-exception-the-live-stage-in-scope-hosts-only) |
+| `compose` | COMPOSE | **opt-in**, deterministic attack-path review. Writes `attack_paths.json` only for active source-supported findings with an exact declared capability→precondition match and identical non-unknown attacker, principal, tenant, deployment, and configuration context. `--max-hops` / `--max-paths` bound output. It never changes severity, proof or draft/submission state. |
+| `report` | EVIDENCE → 5 | deterministically normalize the F1 claim/evidence contract, then write `REPORT.md` + DRAFT submissions |
+| `pr-draft` | post-report | maintainer-facing GitHub PR body scaffold for one confirmed finding; local artifact only, never submits |
+| `pipeline` | 1–5 | the whole chain; **stops before any submission** |
+| `resume` | any | continue a `pipeline`/`run` invocation that stopped partway (crash, Ctrl+C, a backend rate limit, a session timeout) from wherever it left off — no re-ingest, no re-paying for already-completed stages. See "Recovering a stopped run" below |
+| `fix` | 6 (opt-in) | propose + **verify** a patch per confirmed finding (applies? compiles? no new errors?); never touches the target |
+| `bench` | 7 | score a labeled suite — findings precision/recall/F1 by archetype + CWE (+ optional A/B and patch quality) |
+| `bench-cross` | 7 | run the same suite once **per backend** (Claude/Codex/Gemini) and report cost/latency/precision/recall/F1 side by side — N-way, distinct from `bench --ab-audit-model`'s same-backend 2-way delta |
+| `refusal-probe` | 7 | measure how often each backend's own safety classifier false-positives on a legitimate, authorized audit prompt (`refusal_flag_rate`), and how often a same-backend neutral-register retry recovers it (`refusal_recovery_rate`) |
+| `serve` | — | run the HTTP API + web UI |
+| `screen` | — | read-only local fingerprint; never executes target code or contacts the network |
+| `plan` | — | screen a target and emit a FAST/ECONOMY/BALANCED/DEEP plan with cost/time ranges and reasons |
+| `show-routing` | — | print resolved stage backend/model/effort and catalog metadata |
+| `profiles` | — | list/show/export/validate/import/save credential-free routing profiles |
+| `catalog` | — | show/validate the pinned static model catalog and snapshot hash; never refreshes implicitly |
+| `bench-validate` | — | validate benchmark commits/labels without cloning or model calls |
+| `sarif` | — | export a finished run's reportable findings as SARIF 2.1.0 for GitHub code scanning ([ci.md](ci.md)) |
+| `gate` | — | CI gate: exit 1 if reportable findings reach `--fail-on` (default High) ([ci.md](ci.md)) |
+
+There is intentionally **no `submit` command** — submission is a manual human action.
+
+## Per-command inputs
+
+```bash
+argo ingest   --repo PATH_OR_URL [--brief BRIEF.txt] [--links LINKS.txt] [--run RUN_ID]
+argo recon    --run RUN_ID
+argo compare-recon --baseline runs/BASE --candidate runs/CAND [--max-diff-lines 200]
+argo run      --run RUN_ID
+argo sca      --run RUN_ID
+argo validate --run RUN_ID
+argo revalidate-context --run RUN_ID [--question rq:0123456789abcdef] [--budget USD]
+argo report   --run RUN_ID
+argo pr-draft --run RUN_ID --finding FINDING_ID [--test-command "CMD"]
+argo pipeline --repo PATH_OR_URL [--brief BRIEF.txt] [--links LINKS.txt] [--commit SHA] [--dry-run] [--smoke]
+argo screen TARGET [--json] [--rescreen] [--cache-dir DIR]
+argo plan TARGET [--objective fast|economy|balanced|deep|custom] [--max-cost USD] [--max-duration MIN] [--json]
+argo plan TARGET [--benchmark-report runs/benchmark_report.json]
+argo show-routing [--runner headless|codex|gemini|mistral-api|mistral-vibe|mock] [--mistral-api-model ID] [--mistral-vibe-model ALIAS] [--stage-runner STAGE=BACKEND] [--stage-model STAGE=MODEL]
+argo profiles list|show|export|validate|import|save [--name NAME] [--input FILE] [--config FILE] [--output FILE]
+argo catalog show|validate|diff [--provider openai|anthropic|gemini] [--against SNAPSHOT.json]
+argo bench-validate --suite DIR
+argo sarif    --run RUN_ID [--out FILE] [--include-unverified]
+argo gate     --run RUN_ID [--fail-on Critical|High|Medium|Low] [--include-unverified]
+argo questions --run RUN_ID                       # (re)build the private review-question queue, no model call
+argo answer-question --run RUN_ID --question rq:0123456789abcdef --answer "TEXT" --provenance "SOURCE"
+argo freshness --run RUN_ID [--lookback-days 365]
+argo runtime  --run RUN_ID [--runtime-image IMG --runtime-run-cmd CMD] [--runtime-build-cmd CMD] [--runtime-port 8080] [--runtime-boot-timeout 180] [--mount-source|--no-mount-source]
+argo live     --run RUN_ID --i-have-authorization [--allow-writes [--max-writes 5]] [--max-requests 30] [--min-interval 1.0]
+argo serve    [--host 127.0.0.1] [--port 8000] [--open] [--runs-dir DIR]
+argo resume   --run RUN_ID [--wait] [--max-wait 12h] [--runs-dir DIR]
+argo verify   --run RUN_ID [--only ID,ID] [--max-findings N]
+argo asan-poc --run RUN_ID [--max-findings N] [--asan-poc-image IMAGE] [--asan-poc-compile-timeout S] [--asan-poc-run-timeout S]
+argo fix      --run RUN_ID [--no-verify] [--re-audit] [--docker IMAGE] [--build-cmd "CMD"] [--only ID,ID]
+argo bench    --suite DIR [--fixes] [--re-audit] [--parallel-cases N] [--repeats N] [--ab-audit-model MODEL]
+argo bench-cross    --suite DIR --backends headless,codex,gemini [--tier cheap|top] [--repeats N]
+argo refusal-probe  --backends headless,codex,gemini [--trials N] [--tier cheap|top] [--prompts FILE]
+argo feedback [--program P --dedup K --accepted/--rejected [--run R] [--note ...]] | [--import FILE]
+argo quality  [--program P] [--runs-dir DIR]
+```
+
+- **`argo verify` is safely re-invokable.** Each session costs real money (no excerpt budget,
+  seen up to $1-4/1-4M tokens per finding), so if a run gets interrupted partway (a backend runs
+  out of credits, a rate limit, a crash), just run `argo verify --run RUN_ID` again — findings that
+  already have a real verdict are left alone, only unverified/infra-failure ones get a new session.
+  Use `--only ID,ID` to force a re-verify of specific findings regardless of their current state
+  (e.g. after fixing something in the target that might change the answer).
+- `argo fix --re-audit` — after verifying a patch, re-audit the patched copy and report whether the
+  vuln is still detected (`verify.re_audit.confirmed_fixed`; one extra model session per patch).
+- `argo bench --parallel-cases N` — run N labeled cases concurrently (corpora at scale);
+  `--re-audit` folds the re-audit rate into `patch_quality`.
+- **`argo feedback`** (A2) — record real-world triager outcomes for reported findings (feeds the
+  accept-rate). Either one finding (`--program`/`--dedup`/`--accepted`|`--rejected`, optional
+  `--run`/`--note`) or bulk `--import FILE` (a JSON list of
+  `{program_name, dedup_key, accepted, run_id?, feedback?}`). The source of truth is the **Fleece**
+  registry; this only ingests it into the local ledger. `--ledger PATH` targets a specific DB.
+- **`argo quality`** (A2) — emit `<runs_dir>/quality.json`: the accept-rate (human precision proxy)
+  paired with the latest benchmark recall. `--program` scopes to one program.
+
+- `--brief` — program brief text file (paste the whole program page). **Optional**: omit it to audit
+  a **local/personal codebase** as a source-only review — Argo synthesizes a minimal scope from
+  `--repo` (zero-token ingest, web research auto-off, no live hosts). e.g. `argo pipeline --repo ./my-code`.
+- `--repo` — the **codebase to analyze**: a **local folder path** (need not be a git repo; never
+  pushed anywhere) **or** a git URL (cloned `--depth 1`).
+- `--commit` — pin `--repo` at a **specific git revision** (reproducible / known-CVE checkout): a URL
+  is fetched at that SHA, a local git path is checked out at it. Omit for the default head.
+- `--incremental-base` — opt into a PR/incremental review against this Git commit/ref. Argo records
+  changed files, candidate symbols declared there, stale private target facts, and a bounded textual
+  neighbourhood, then
+  performs recon/audit with the complete repository still mounted. It never treats an unchanged
+  line or file as safe by omission.
+- `--context-pack PATH` — validate and use bounded private architecture notes, role/service
+  inventories, business invariants, IAM/IaC facts, and document references. Raw content stays out
+  of reports, drafts, saved audit prompts, public OSINT, and the artifact API.
+- `--questions / --no-questions` — opt into the non-blocking private context-question queue
+  (default off). See [context-pack.md](context-pack.md).
+- `--links` — a curated reference-links file, one `http(s)` URL per line (`#` comments and blank
+  lines ignored). **Additive** to links the model extracts from the brief; the `--repo` URL is
+  never allowed into `reference_links`. See `--links` semantics in
+  [the root README](../README.md#inputs-how-to-set-up-a-program-bug-bounty-mode).
+- `--run` — reuse an existing run id (generated automatically if omitted).
+
+Advanced pipeline routing flags are repeatable: `--stage-runner STAGE=BACKEND`,
+`--stage-model STAGE=MODEL`, and Claude-only `--stage-effort STAGE=low|medium|high|xhigh|max`.
+An explicit stage choice wins over `--codex-model`/`--gemini-model`, which win over a selected
+profile and then built-in defaults. `--allow-model-substitution` is required for a best-effort run
+when a provider serves an ID different from the requested exact pin; exact benchmark evidence is
+fail-closed on that mismatch.
+
+## Recovering a stopped run
+
+Most transient backend hiccups (a rate limit, a Codex moderation-flag cooldown, a timeout) never
+even reach the point of "the run stopped" — the pipeline retries the same stage automatically, a
+bounded couple of times, before giving up (see [architecture.md](architecture.md#the-agentrunner-abstraction)
+for exactly which failures qualify). What follows is what happens once that auto-retry gives up, or
+for a failure it deliberately doesn't attempt (e.g. a confirmed-dead account, or a reset hint too
+far out to wait for unattended).
+
+If `pipeline` (or an individual stage command) stops partway — a backend crash, a rate limit, a
+session timeout, or you hitting Ctrl+C — you do **not** need to start over. Every stage writes its
+output atomically (temp file + rename), so a hard kill mid-write leaves the last good file intact
+rather than a truncated one, and `status.json` tracks exactly which stages already finished. When a
+run stops, the CLI prints a recovery hint. Some versions omit the required `--run`
+option in that hint; the executable commands below use the actual CLI syntax:
+
+```
+[argo] Run 'RUN_ID' stopped: RunnerError: ...
+[argo] Most progress is preserved on disk (stage outputs are written atomically).
+[argo] To continue from where it left off:
+[argo]     argo resume RUN_ID
+```
+
+```bash
+argo resume --run RUN_ID              # continue from the first not-yet-done stage
+argo resume --run RUN_ID --wait       # if the failure carried a "retry after TIME" hint (e.g. a rate
+                                 # limit), sleep until then instead of failing immediately
+argo resume --run RUN_ID --wait --max-wait 2h   # cap how long --wait will sleep
+```
+
+`resume` re-reads the run's persisted `config.json`, so it uses the exact same settings the
+original invocation did — you don't repeat `--repo`/`--brief`/flags. A stage already marked `done`
+in `status.json` is normally never re-run (and never re-billed); only the first incomplete stage
+onward executes. Audit is tracked more finely: `status.json` records each focus as pending, running,
+done, invalid, or retryable-failed. A later `resume` reopens audit when retryable focus gaps remain,
+skips every focus whose validated findings artifact already exists, and regenerates downstream
+validation/report artifacts after the missing focuses succeed. A run where every audit backend was
+temporarily unavailable therefore remains resumable without discarding any prior focus success.
+The one hard boundary: a run that stopped **before ingest finished** (no usable
+`scope.json`/repo copy yet) can't be resumed — `resume` says so plainly and you start over with
+`pipeline`.
+
+## Shared options (all commands)
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--runner {headless\|codex\|gemini\|mistral-api\|mistral-vibe\|mock}` | `headless` | `headless` = Claude Code · `codex` = Codex CLI (OpenAI / OSS) · `gemini` = Gemini CLI (Google) · `mistral-api` = Mistral API with Argo's own tool loop (key from `ARGO_MISTRAL_API_KEY`/`MISTRAL_API_KEY`) · `mistral-vibe` = Mistral Vibe CLI under an isolated Argo config; both offline stages only, add `--no-research --no-corroborate` · `mock` = zero-token fixtures. See [backends.md](backends.md). |
+| `--mistral-api-model ID` | `mistral-large-4` | (`--runner mistral-api`) model for every stage; `--stage-model STAGE=ID` overrides one stage. |
+| `--mistral-vibe-model ALIAS` | `mistral-medium-3.5` | (`--runner mistral-vibe`) Vibe model alias for every stage; needs the `vibe` CLI (`uv tool install mistral-vibe`) and the explicitly selected auth mechanism below. |
+| `--mistral-vibe-auth {key\|stored}` | `key` | Vibe auth mechanism: legacy key precedence, or Vibe's native saved OS-keyring credentials after manual browser login. Stored mode strips API-key overrides from the child and never falls back to key mode. The isolated runtime home remains Argo-managed. Resume retains the saved mode; no `auto` or arbitrary profile path. See [backends.md](backends.md#mistral-vibe-specifics-runner--mistral-vibe). |
+| `--codex-model MODEL` | — | (runner=codex) model id (e.g. `gpt-6.1-sol`); **omit to use the Codex CLI default** (recommended) |
+| `--codex-oss` | off | (runner=codex) use the open-source provider (`--oss`) |
+| `--codex-local-provider {ollama\|lmstudio}` | — | (runner=codex --codex-oss) which local provider |
+| `--codex-context-window N` | none | (runner=codex) local server's real context window; Codex then auto-compacts at 80% |
+| `--gemini-model MODEL` | — | (runner=gemini) flat model override across every stage (e.g. `gemini-3.1-pro`); applied before `--calibration`/`--audit-model`. Omit to use the built-in per-stage tiering. |
+| `--gemini-api-key KEY` | — | (runner=gemini) sets `GEMINI_API_KEY` for this run; omit to use the ambient env var / an existing `gemini` CLI login. A real secret — redacted in `runs/<id>/config.json`; `argo resume` needs it re-supplied. |
+| `--claude-api-key KEY` / `--claude-api-keys K1,K2` | — | (runner=headless) `ANTHROPIC_API_KEY` for this run (a bare key needs no login step); coexists additively with `--claude-accounts`. The plural chains multiple keys (multi-account via key — `--claude-accounts` wins if both are set). A real secret — redacted; `argo resume` needs it re-supplied. See [backends.md](backends.md#api-keys---claude-api-key----codex-api-key). |
+| `--codex-api-key KEY` / `--codex-api-keys K1,K2` | — | (runner=codex) OpenAI API key; unlike Claude/Gemini this needs a real `codex login --with-api-key` bootstrap (Argo does it for you, cached under `~/.argo/codex_homes`). `--codex-home`/`--codex-accounts` win if both are set. A real secret — redacted; `argo resume` needs it re-supplied. See [backends.md](backends.md#api-keys---claude-api-key----codex-api-key). |
+| `--gemini-accounts K1,K2` | — | (runner=gemini) chain several `GEMINI_API_KEY` values (limits are per key). Unlike `--claude-accounts`/`--codex-accounts` these are raw secrets, not directories; redacted like `--gemini-api-key`. |
+| `--fallback BACKEND[,BACKEND]` | — | backends to fall through to when the primary hits a session/rate limit or a transient failure, e.g. `--fallback codex` (Claude → Codex); see [backends.md](backends.md#fallback-and-partial-work-recovery) |
+| `--profile NAME` | — | credential-free routing profile: `balanced`, `maximum-quality`, `cost-saver`, `diverse-validation`, `smoke` (`argo profiles show --name NAME`). Profiles are `provisional` until benchmark evidence exists |
+| `--audit-model MODEL` | — | override only the Stage-3 audit model |
+| `--calibration` | off | run audit on Opus (effectively all-Opus) |
+| `--budget USD` | none | **HARD** per-run ceiling; aborts remaining sessions once hit |
+| `--parallel N` | 3 | max concurrent audit/validate sessions |
+| `--runs-dir DIR` | `runs` | root dir for run artifacts |
+| `--scenario NAME` | `happy` | mock fixtures scenario (only with `--runner mock`) |
+| `--timeout SECONDS` | 1800 | per-session wall-clock cap |
+| `--max-turns N` | none | per-session turn tripwire (Claude: checked after the call; Codex: enforced mid-session on completed tool calls) |
+| `--session-budget USD` | none | per-session cost cap (mapped to the CLI's native `--max-budget-usd`) |
+
+## `pipeline`-only options
+
+| Flag | Meaning |
+|---|---|
+| `--research / --no-research` | Stage-1 **web OSINT/threat-intel** before recon (CVEs, advisories, project security history → injected into recon). **On by default.** One of two networked stages (with corroborate); never the live in-scope hosts (see [guardrails.md](guardrails.md#2a-the-bounded-exception-the-osint-stages-research--corroborate)). `--no-research` → fully offline. |
+| `--vuln-index / --no-vuln-index` | include the curated archetype vulnerability-class index in recon (**on by default**). Disable only for a controlled ablation; the choice is persisted in `config.json` for resume. |
+| `--sca / --no-sca` | software-composition analysis of dependency manifests (known-vuln pins) between audit and validate. **On by default**; emits a `dependencies` focus. No-op when the repo has no manifests. |
+| `--second-opinion N` | run N additional, fully independent blind recon+audit passes over the same scope/repo before validate (each isolated in its own `run_dir`), then merge their findings in. **Off by default (`N=0`)** — encodes the manual blind-second-opinion methodology as a pipeline mode. A failed pass is skipped, never aborts the run. |
+| `--second-opinion-backend BACKEND` | (`--second-opinion`) runner override for the extra passes only, e.g. `headless` when `--runner codex`, for real cross-engine diversity. Omit to reuse the primary's backend. |
+| `--corroborate / --no-corroborate` | after validate, cross-check each finding against the project's **docs** + the repo's **VCS history** (commits/releases/advisories) over public web OSINT → downgrade documented-by-design, exclude already-fixed. **On by default** (networked, best-effort); `--no-corroborate` skips it. Forced off for `--smoke` and brief-less local reviews. |
+| `--docs-url URL` | documentation URL to ground corroboration (repeatable). If omitted, the stage web-searches for the project's official docs. |
+| `corroborate --only ID,ID` | re-corroborate exactly these finding IDs; every other survivor's existing `corroboration` block is left untouched. Useful for split children created by deep-verify. |
+| `--verify / --no-verify` | after corroborate, independently re-derive each surviving finding from the actual source (full repo access, one full session per finding, no batching, no excerpt budget) and reason across the whole survivor set — catches splits/merges/corrections that per-finding-isolated stages cannot. **Off by default** (offline, but the most expensive annotation stage). |
+| `--verify-high / --no-verify-high` | severity-gated alternative to `--verify`: deep-verify only survivors whose validation verdict is `confirmed` and whose validated severity is `High` or `Critical`. **Off by default.** This still costs one full-repo session per selected finding; `--verify` takes precedence and verifies every survivor when both flags are supplied. |
+| `--verify-max-findings N` | (`--verify` / `--verify-high`) hard cap on how many survivors get a deep-verify session (cost control); omit to verify every survivor eligible for the selected mode. |
+| `--asan-poc / --no-asan-poc` (+ `--asan-poc-max-findings` / `--asan-poc-image`) | **opt-in, default off, C/C++ only.** After verify: for each eligible memory-safety survivor, writes a minimal single-file harness that `#include`s the real vulnerable source and compiles it standalone with `clang -fsanitize=address,undefined` inside an egress-blocked Docker container — a real crash trace is the most credibility-boosting artifact a disclosure can carry. Needs Docker; gracefully skips (never refutes a finding) when Docker is absent, the finding isn't C/C++, or the function can't be isolated into one translation unit. |
+| `--accepted-risks FILE` | file of the vendor's **intended / accepted-by-design behaviors** (threat model / known-limitations). Injected into audit + validate + corroborate + verify so those behaviors are not reported as bugs. Additive, never inferred from the brief. Also available on `argo ingest`. |
+| `--runtime / --no-runtime` (+ `--runtime-image` / `--runtime-run-cmd` / `--runtime-port`) | **opt-in, default off.** Sandboxed runtime verification after validate: builds the target into an egress-blocked, loopback-only container and probes ONLY the local instance to confirm/refute findings. Needs Docker + a launcher recipe + a `runs/<id>/runtime_probe_plan.json`; gracefully skips otherwise. Never touches the program's live hosts. |
+| `--critic-passes N` | completeness-critic re-passes per audit focus (the depth lever — re-audits each focus for missed variant-family members / unverified invariants, looping until dry). **Default 1**; `0` disables. |
+| `--max-focuses N` | cap the audit fan-out to the first **N** of the focus areas recon planned, in slug order — the choice is fixed before any focus runs, so it can never depend on what a focus found. Skipped focuses are named in the log, never dropped silently. Recon splits a repository into anywhere from 1 to 7 focuses depending on the repository, so a raw finding count is only comparable across targets when this is pinned. Also on `argo run` and `argo estimate`; `--smoke` pins it to 1 regardless. |
+| `--freshness-check / --no-freshness-check` (+ `--freshness-lookback-days N`, default 365) | **opt-in.** Before reporting, check the audited and sibling branches' git history for commits that touched a cited file after the pinned commit; flagged findings get a report appendix to verify manually before sending. Informational only, never changes a verdict. |
+| `--adaptive-escalation {off\|conservative\|balanced\|aggressive}` | **opt-in**, default `off`: evidence-driven escalation within the existing run/session budget guards; the choice is persisted in run provenance. Kept off in benchmark mode so trials stay comparable. |
+| `--attribution / --no-attribution` | append the "Produced by Argo" provenance footer to `REPORT.md`, drafts and the fix report (default on). Attribution only; never changes a licence. |
+| `--yes` | proceed past the pre-audit cost estimate without prompting (non-interactive use, e.g. CI). Not a substitute for approving the spend. |
+| `--dry-run` | run ingest + recon, then **stop before any audit**. The prompt-quality feedback loop: inspect the generated prompts (incl. the ground-truth sections) before paying to run them. |
+| `--smoke` | de-risked **real** end-to-end check: cheapest models, one audit focus, low budget + short timeout + tight caps. Explicit narrower time/turn/session-cost/run-budget caps are preserved, including narrower stage timeouts; larger/default caps are tightened by the preset. Defaults `--brief`/`--repo` to the bundled fixtures (and disables research/corroboration). See [headless-runner.md](headless-runner.md#the---smoke-run). |
+
+`compare-recon` reads only `repo_profile.json`, `prompts/audit_*.md`, optional recon artifacts,
+`meta.json`, `recon_inputs.json`, and recon rows from `llm_log.jsonl`. It writes nothing and makes no
+model call. `--max-diff-lines` is a global output bound (default 200, maximum 5000). Full artifact
+text can appear in stdout, so keep the output private when the run is private. A comparison warns
+instead of claiming isolation when the recorded commit, base prompt/context/settings, or successful
+backend/model differ. Counts of prompts, citations, characters, and CWE labels are structural
+signals only; they do not establish quality, precision, or recall.
+
+## `pr-draft` options
+
+| Flag | Meaning |
+|---|---|
+| `--finding ID` | confirmed finding id from `validated_findings.json` to turn into a GitHub PR body scaffold |
+| `--test-command "CMD"` | optional local build/test command to include in the draft's validation section |
+
+`pr-draft` writes `runs/<RUN_ID>/pr_drafts/<ID>.md`. It is meant for the OSS-maintainer flow:
+after you implement and locally test a fix, use the scaffold as the starting point for a clear PR
+body with what changed, why it matters, and how it was checked. It refuses unconfirmed findings and
+does not open or submit anything.
+
+If `argo fix` (Phase 6) has already produced + verified a patch for this finding
+(`runs/<RUN_ID>/fixes_report.json`), the "How was this checked?" section cites that real evidence
+(patch applies/builds/introduces no new errors, plus a re-audit confirmation if `--re-audit` was
+used) instead of the manual `--test-command` placeholder. A patch that exists but FAILED
+verification is flagged explicitly ("did **NOT** pass ... do not rely on it as-is"), never
+presented as if it were clean. Run `argo fix` before `pr-draft` to get this — it's optional, not
+required.
+
+## `fix`-only options (Phase 6 remediation)
+
+| Flag | Meaning |
+|---|---|
+| `--no-verify` | skip the build/compile + no-new-errors check (just emit the proposed diffs) |
+| `--docker IMAGE` | run the verify build inside this Docker image (offline, `--network=none`) |
+| `--build-cmd "CMD"` | explicit build/compile command to verify the patch on the isolated copy |
+| `--only ID,ID` | only fix these confirmed finding ids (default: all confirmed) |
+
+> Like every CLI command, `fix` defaults to `--runner headless` (**real** model calls cost money).
+> Add `--runner mock` for a zero-token dry run. The target repo is never modified — patches go to
+> `runs/<id>/patches/` and verification runs on an isolated copy.
+
+## `bench`-only options (Phase 7 evaluation)
+
+| Flag | Meaning |
+|---|---|
+| `--suite DIR` | suite directory; each `<case>/` has `case.json` + `expected_findings.json` (see [benchmarks/README.md](../benchmarks/README.md)) |
+| `--fixes` | also generate + verify Phase-6 patches per case and report the verified rate |
+| `--ab-audit-model MODEL` | run the suite a second time with this audit model; report the precision/recall/F1 delta (B − A) |
+
+Scores **precision / recall / F1** (overall + by archetype + by CWE) into
+`<runs_dir>/benchmark_report.json`. Use `--runner mock` to exercise the harness for free; headless
+measures real quality (and costs money). The bundled `benchmarks/acme-widgets` case is a mock case.
+
+## `bench-cross` / `refusal-probe`-only options (Phase 7, cross-backend)
+
+| Flag | Meaning |
+|---|---|
+| `--backends headless,codex,gemini` | comma-separated backends to compare (any subset/order) |
+| `--tier {cheap\|top}` | `cheap` (default) — each backend's cheapest model (Haiku 5.5/`gpt-6-luna`/Flash-Lite), a full sweep costs cents. `top` — each backend's own top-tier model (Opus 5.5/`gpt-6-astra`/Gemini 4 Argon), for real publishable numbers — real, non-trivial spend across three paid APIs |
+| `--trials N` | (`refusal-probe` only, default 1) repeat each prompt N times per backend |
+
+`bench-cross` derives each backend's config from the same base config
+(`base_config.with_overrides(runner=...)`), so `--budget`/credentials/etc. carry over identically
+per backend. `refusal-probe` uses a small curated, **non-adversarial** prompt set
+(`tests/fixtures/refusal_prompts.json`) — deliberately not jailbreak/adversarial-prompt testing.
+Reports: `<runs_dir>/benchmark_crossbackend_report.json` / `refusal_probe_report.json`. Run
+`--tier cheap` first to confirm all backends are wired up/authed before spending on `--tier top`.
+See [benchmarks/README.md](../benchmarks/README.md#cross-backend-comparison-and-refusal-rate).
+
+## Examples
+
+```bash
+# Zero-token full-glue test (no API calls):
+python -m argo.cli pipeline --runner mock \
+  --brief tests/fixtures/brief.txt --repo tests/fixtures/repo
+
+# Inspect the generated prompts before spending on audits:
+python -m argo.cli pipeline --dry-run --brief brief.md --repo https://github.com/acme/cms
+
+# Real, cheap end-to-end seam check (≈ $1, one focus):
+python -m argo.cli pipeline --smoke
+
+# Real run on a high-value target: audit on Opus, hard $20 ceiling, 2 sessions at a time:
+python -m argo.cli pipeline --brief brief.md --links links.txt \
+  --repo https://github.com/acme/cms --calibration --budget 20 --parallel 2
+
+# Stage by stage (reuse the run id printed by ingest):
+python -m argo.cli ingest --brief brief.md --repo https://github.com/acme/cms
+python -m argo.cli recon    --run 20260616-...
+python -m argo.cli run       --run 20260616-...
+python -m argo.cli validate  --run 20260616-...
+python -m argo.cli report    --run 20260616-...
+```
+
+## Output
+
+Each command prints a small JSON summary to stdout (run id, artifact paths, cost). Progress and
+warnings go to **stderr** (`[ingest]`, `[recon]`, `[audit]`, `[validate]`, `[evidence]`, `[report]`,
+`[runner]` prefixes). Every run also writes `runs/<RUN_ID>/llm_log.jsonl` (one line per LLM call).

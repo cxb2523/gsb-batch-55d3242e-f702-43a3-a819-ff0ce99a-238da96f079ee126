@@ -1,0 +1,649 @@
+"""Stage 3 — Audit.
+
+For each generated prompt, run a separate Claude session in its OWN isolated scratch dir with
+READ-ONLY repo access. Each emits a findings JSON validated against ``findings_schema.json``.
+Focuses run in parallel up to a cap; a per-run USD budget can abort further launches (the skip
+is logged, never silent).
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+from ..config import ARTIFACT_TOOLS
+from ..context import BudgetExceeded, RunContext, atomic_write_json, collect_output_files
+from ..guardrails import PromptGuardrailError, assert_prohibited_present
+from ..rendering import ensure_context_pack_present, neutralize_audit_prompt, with_artifact_contract
+from ..runner import TERMINAL_FAILURE_KINDS, RunnerError
+from ..schemas import SchemaValidationError, validate_findings
+from ..progress import read_status
+
+
+def _log(msg: str) -> None:
+    print(f"[audit] {msg}", file=sys.stderr)
+
+
+def _focus_progress(ctx: RunContext, slug: str, state: str, **details) -> None:
+    reporter = getattr(ctx, "_progress_reporter", None)
+    if reporter is not None:
+        reporter.update_stage_focus("audit", slug, state, **details)
+
+
+def _saved_focuses(ctx: RunContext) -> dict[str, dict]:
+    status = read_status(ctx.run_dir) or {}
+    audit_status = next((st for st in (status.get("stages") or [])
+                         if isinstance(st, dict) and st.get("name") == "audit"), {})
+    focuses = audit_status.get("focuses") or {}
+    return {str(k): v for k, v in focuses.items() if isinstance(v, dict)}
+
+
+def _neutral_variant(prompt: str, scope, slug: str) -> str | None:
+    """Best-effort neutral-register variant for a reactive retry after a moderation flag (see
+    ``rendering.neutralize_audit_prompt``). Re-checked against the SAME guardrail the original
+    prompt passed (``assert_prohibited_present``) before it is ever handed to ``ctx.runner.run``
+    — if the deterministic rewrite happened to touch the scope's verbatim constraint text, fall
+    back to no neutral variant (the call still gets a normal single attempt, just without the
+    retry) rather than silently sending a weakened prompt."""
+    candidate = neutralize_audit_prompt(prompt)
+    try:
+        assert_prohibited_present(candidate, scope.prohibited_techniques)
+    except PromptGuardrailError:
+        _log(f"{slug}: neutral-register variant dropped a prohibited-technique constraint; "
+             "no neutral retry available for this focus")
+        return None
+    return candidate
+
+
+# Findings-schema string-typed fields. Real models sometimes emit these as structured
+# objects/arrays (e.g. impact: {confidentiality, integrity, availability}); we JSON-stringify
+# them so the information is preserved AND the file passes the schema gate.
+_TEXT_FIELDS = ("title", "cwe", "owasp", "vulnerable_flow", "why_vulnerable",
+                "exploit_scenario", "impact", "recommended_fix", "action_plan",
+                "missing_tests", "variants", "live_verification_plan")
+
+
+_SEVERITY_FIX = {"critical": "Critical", "crit": "Critical", "high": "High",
+                 "medium": "Medium", "moderate": "Medium", "med": "Medium",
+                 "low": "Low", "informational": "Informational", "info": "Informational",
+                 "none": "Informational", "negligible": "Informational"}
+_CONFIDENCE_FIX = {"confirmed": "Confirmed", "confirm": "Confirmed", "certain": "Confirmed",
+                   "high": "High", "medium": "Medium", "moderate": "Medium", "med": "Medium",
+                   "low": "Low", "tentative": "Low"}
+# Required finding fields (mirrors findings_schema.json). A finding missing any of these is
+# REPAIRED (backfilled) rather than dropped — losing a whole focus to model drift (e.g. the
+# Umbraco files-uploads focus) is worse than keeping a flagged, reviewable finding.
+_REQUIRED_STR_FIELDS = ("id", "title", "cwe", "vulnerable_flow", "why_vulnerable",
+                        "exploit_scenario", "impact", "recommended_fix")
+_REPAIR_PLACEHOLDER = "(missing from audit output — schema-repaired; verify manually)"
+# Common field-name divergences seen from real models (the prose per-finding format does not
+# spell the exact JSON keys). Only applied when the canonical key is absent.
+_FIELD_ALIASES = {
+    "affected_files": "affected", "affected_components": "affected",
+    "exploit_scenarios": "exploit_scenario", "root_cause": "why_vulnerable",
+}
+
+_STREAMING_SEED_KEY = "_argo_streaming_seed"
+#: Filled only by validate / corroborate / deep-verify; never accepted from the audit model.
+_STAGE_OWNED_FIELDS = ("validation", "corroboration", "verification")
+
+
+def _streaming_seed(ctx: RunContext, scope, slug: str) -> dict:
+    """Valid scratch document created before the model starts.
+
+    The marker distinguishes an untouched seed from a model-produced empty answer.  It is removed
+    before the focus artifact leaves scratch, so it never changes the public findings schema.
+    """
+    return {
+        "program_name": scope.program_name,
+        "audit_focus": slug,
+        "generated_at": ctx.timestamp(),
+        "findings": [],
+        _STREAMING_SEED_KEY: True,
+    }
+
+
+def _choose_findings_file(files: list[Path], expected: str) -> tuple[Path, dict]:
+    """Pick the findings document to use for a focus.
+
+    Prefer the exactly-named file, unless it is still Argo's own untouched streaming seed and the
+    model wrote its findings to a differently-named ``SECURITY_FINDINGS__*.json`` (observed live:
+    local models drop the ``audit_`` prefix of the slug, e.g. ``SECURITY_FINDINGS__authz_acl.json``).
+    Without this, the seed won, the focus was reported as "no checkpointed findings" and re-run
+    even though the findings existed. Among model-written candidates the one with the most findings
+    wins. Raises ``json.JSONDecodeError`` only when no candidate parses."""
+    exact = [f for f in files if f.name == expected]
+    ordered = exact + [f for f in files if f.name != expected]
+    parsed: list[tuple[Path, dict]] = []
+    first_error: json.JSONDecodeError | None = None
+    for f in ordered:
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError as exc:
+            first_error = first_error or exc
+            continue
+        if isinstance(doc, dict):
+            parsed.append((f, doc))
+    if not parsed:
+        if first_error is not None:
+            raise first_error
+        raise json.JSONDecodeError("no JSON object in findings files", "", 0)
+    head_path, head = parsed[0]
+    head_is_seed = bool(head.get(_STREAMING_SEED_KEY)) and not head.get("findings")
+    if exact and head_path == exact[0] and not head_is_seed:
+        return head_path, head
+    model_written = [(f, d) for f, d in parsed if not d.get(_STREAMING_SEED_KEY) and d.get("findings")]
+    if model_written:
+        best = max(model_written, key=lambda x: len(x[1].get("findings") or []))
+        _log(f"findings written to {best[0].name} instead of {expected}; using it")
+        return best
+    return head_path, head
+
+
+def _streaming_rule(filename: str) -> str:
+    return (
+        f"The scratch file `{filename}` is already initialized as valid JSON. As soon as each "
+        "finding is complete, add it to `findings` and immediately overwrite the whole file with "
+        "valid JSON before continuing the audit. Keep every earlier finding in each rewrite. Do "
+        "not wait until the end of the session: this file is the crash-recovery checkpoint."
+    )
+
+
+def _coerce_finding(f: dict) -> tuple[dict, bool]:
+    out = dict(f)
+    changed = False
+    for alias, canonical in _FIELD_ALIASES.items():
+        if alias in out and canonical not in out:
+            out[canonical] = out.pop(alias)
+            changed = True
+    for key, fix in (("severity", _SEVERITY_FIX), ("confidence", _CONFIDENCE_FIX)):
+        v = out.get(key)
+        if isinstance(v, str) and v.strip().lower() in fix and v != fix[v.strip().lower()]:
+            out[key] = fix[v.strip().lower()]
+            changed = True
+    for k in _TEXT_FIELDS:
+        if isinstance(out.get(k), (dict, list)):
+            out[k] = json.dumps(out[k], ensure_ascii=False)
+            changed = True
+    if isinstance(out.get("affected"), list):
+        new = [a if isinstance(a, str) else json.dumps(a, ensure_ascii=False)
+               for a in out["affected"]]
+        if new != out["affected"]:
+            out["affected"], changed = new, True
+    return out, changed
+
+
+def _allows_null(schema: dict) -> bool:
+    t = schema.get("type")
+    return t is None or t == "null" or (isinstance(t, list) and "null" in t)
+
+
+def _strip_schema_nulls(value, schema: dict) -> tuple[object, bool]:
+    """``null`` where the schema does not allow it means "no value": drop it from an OPTIONAL
+    property, turn it into ``[]`` for a REQUIRED array, and recurse into nested objects/arrays.
+    Required non-array nulls are left for :func:`_repair_finding` (which flags them). Never invents
+    content. Observed live on local models: ``"validation": null`` (80B) and
+    ``"obligations_satisfied": null`` (27B) each discarded an otherwise schema-valid finding."""
+    changed = False
+    if isinstance(value, dict) and isinstance(schema.get("properties"), dict):
+        props, required = schema["properties"], set(schema.get("required") or ())
+        out = {}
+        for k, v in value.items():
+            sub = props.get(k)
+            if not isinstance(sub, dict):
+                out[k] = v
+                continue
+            if v is None and not _allows_null(sub):
+                if k not in required:
+                    changed = True
+                    continue
+                if sub.get("type") == "array":
+                    out[k], changed = [], True
+                    continue
+            out[k], c = _strip_schema_nulls(v, sub)
+            changed |= c
+        return out, changed
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        new = []
+        for v in value:
+            nv, c = _strip_schema_nulls(v, schema["items"])
+            new.append(nv)
+            changed |= c
+        return new, changed
+    return value, False
+
+
+def _finding_item_schema(ctx: RunContext) -> dict:
+    from ..schemas import _DEFAULT_PROMPTS_DIR, _load_schema
+    try:
+        schema = _load_schema(ctx.assets_dir or _DEFAULT_PROMPTS_DIR, "findings_schema.json")
+    except (OSError, ValueError, TypeError):
+        return {}
+    return ((schema.get("properties") or {}).get("findings") or {}).get("items") or {}
+
+
+def _repair_finding(f: dict, slug: str, idx: int) -> dict:
+    """Last-resort backfill so a drifted finding survives the schema gate instead of being dropped.
+    Only ever ADDS minimal valid values for missing/invalid REQUIRED fields and flags the finding
+    ``schema_repair_failed`` so a human (and the validator) treats it with suspicion."""
+    out = dict(f)
+    repaired: list[str] = []
+    if not isinstance(out.get("id"), str) or not out.get("id", "").strip():
+        out["id"] = f"{slug.upper()}-REPAIR-{idx:03d}"
+        repaired.append("id")
+    sev = str(out.get("severity", "")).strip().lower()
+    if out.get("severity") not in {"Critical", "High", "Medium", "Low", "Informational"}:
+        out["severity"] = _SEVERITY_FIX.get(sev, "Medium")
+        repaired.append("severity")
+    conf = str(out.get("confidence", "")).strip().lower()
+    if out.get("confidence") not in {"Confirmed", "High", "Medium", "Low"}:
+        out["confidence"] = _CONFIDENCE_FIX.get(conf, "Low")
+        repaired.append("confidence")
+    aff = out.get("affected")
+    if not isinstance(aff, list) or not aff:
+        # Try to salvage a location from any field; else placeholder (never silently lose it).
+        salvage = out.get("location") or out.get("file") or out.get("component")
+        out["affected"] = [str(salvage)] if salvage else ["(location unspecified — schema-repaired)"]
+        repaired.append("affected")
+    for k in _REQUIRED_STR_FIELDS:
+        if not isinstance(out.get(k), str) or not out.get(k, "").strip():
+            out[k] = _REPAIR_PLACEHOLDER
+            repaired.append(k)
+    if repaired:
+        out["schema_repair_failed"] = True
+        out["schema_repaired_fields"] = repaired
+    return out
+
+
+def _normalize_findings_doc(raw_doc: dict, ctx: RunContext, scope, slug: str):
+    """Make a real-model findings file robust to the schema gate WITHOUT discarding findings:
+    backfill required top-level fields, coerce structured string-fields, validate EACH finding,
+    and for any that still fail, REPAIR (backfill required fields, flag ``schema_repair_failed``)
+    rather than drop — a drifted finding kept-for-review beats a whole focus silently lost."""
+    doc = dict(raw_doc)
+    doc.pop(_STREAMING_SEED_KEY, None)
+    doc.setdefault("program_name", scope.program_name)
+    doc["audit_focus"] = slug
+    if not isinstance(doc.get("generated_at"), str) or not doc.get("generated_at"):
+        doc["generated_at"] = ctx.timestamp()
+    kept: list[dict] = []
+    repaired_ids: list[str] = []
+    unrecoverable: list[str] = []
+    coerced = 0
+    item_schema = _finding_item_schema(ctx)
+    for idx, f in enumerate(doc.get("findings", [])):
+        if not isinstance(f, dict):
+            unrecoverable.append("?")
+            continue
+        cf, changed = _coerce_finding(f)
+        cf, nulls = _strip_schema_nulls(cf, item_schema)
+        # Verdict-bearing fields belong to later stages; an auditor must not pre-fill them (e.g.
+        # self-declare "confirmed"), and a partial/empty one crashed validate.
+        owned = [k for k in _STAGE_OWNED_FIELDS if k in cf]
+        for k in owned:
+            cf.pop(k)
+        coerced += int(changed or nulls or bool(owned))
+        try:
+            validate_findings({**doc, "findings": [cf]}, ctx.assets_dir)
+            kept.append(cf)
+            continue
+        except SchemaValidationError:
+            pass
+        rf = _repair_finding(cf, slug, idx)
+        try:
+            validate_findings({**doc, "findings": [rf]}, ctx.assets_dir)
+            kept.append(rf)
+            repaired_ids.append(str(rf.get("id", "?")))
+        except SchemaValidationError:
+            unrecoverable.append(str(cf.get("id", "?")))   # genuinely unparseable; the only drop path
+    doc["findings"] = kept
+    return doc, repaired_ids, unrecoverable, coerced
+
+
+def _audit_one(ctx: RunContext, scope, prompt_path: Path
+               ) -> tuple[str, Path | None, str | None, bool]:
+    """Audit one focus. Returns (slug, findings_path, error, retryable).
+
+    ``retryable`` is True only when the SESSION itself never produced anything -- a transient
+    backend failure, not a bad answer. A malformed or schema-invalid findings file is a real
+    result and is never retried: re-rolling until the model emits something parseable would be
+    selecting on the output.
+    """
+    slug = prompt_path.stem  # e.g. "audit_p1_full_scope"
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+
+    # Guardrail (defense-in-depth): the prompt that actually drives the session must still
+    # carry the prohibited techniques, even if it was hand-edited after recon.
+    assert_prohibited_present(prompt_text, scope.prohibited_techniques)
+    # Add private architecture context only to the in-memory model prompt. It must not be persisted
+    # into prompts/audit_*.md, which are ordinary review artifacts and may later be shared.
+    prompt_text = ensure_context_pack_present(prompt_text, ctx.context_pack_path)
+
+    findings_filename = f"SECURITY_FINDINGS__{slug}.json"
+    prompt = with_artifact_contract(
+        prompt_text,
+        artifacts=[{
+            "type": "findings", "filename": findings_filename, "schema": "findings_schema.json",
+            "desc": "the normalized findings for this focus",
+        }],
+        extra_rules=[
+            "Detection and reporting ONLY: do not patch, do not contact any live host.",
+            _streaming_rule(findings_filename),
+        ],
+    )
+    # The audit template lists per-finding fields in PROSE; give the model the EXACT JSON
+    # Schema so it emits the right keys (`affected`, `why_vulnerable`, `exploit_scenario`, ...)
+    # and Title-case enums, instead of guessing the structure.
+    schema_text = (ctx.assets_dir / "findings_schema.json").read_text(encoding="utf-8")
+    prompt += (
+        "\n\n## FINDINGS JSON SCHEMA (the `" + findings_filename + "` file MUST validate "
+        "against this — use these exact field names and enum values verbatim)\n```json\n"
+        + schema_text + "\n```\n")
+
+    work = ctx.work_dir("audit", slug)            # isolated per focus -> no collisions
+    scratch_findings = work / findings_filename
+    atomic_write_json(scratch_findings, _streaming_seed(ctx, scope, slug))
+    partial = False
+    # Exhausted credits / a rejected key fail identically on the second pass: such a session
+    # failure is final for this backend (FallbackRunner may still have tried another one).
+    session_retry = True
+    try:
+        result = ctx.runner_for("audit").run(
+            prompt=prompt,
+            neutral_prompt=_neutral_variant(prompt, scope, slug),
+            run_dir=ctx.run_dir,
+            work_dir=work,
+            model=ctx.config.model_for("audit"),
+            stage="audit",
+            run_id=ctx.run_id,
+            repo_dir=ctx.repo_dir,                 # READ-ONLY
+            allowed_tools=ARTIFACT_TOOLS,
+            label=slug,
+        )
+        files = collect_output_files(result, "SECURITY_FINDINGS__*.json")
+        partial = result.is_error
+    except RunnerError as exc:
+        # Hard session failure (timeout / no-envelope / cap). Don't crash the whole audit —
+        # still try to recover any partial findings file from the scratch dir.
+        partial = True
+        session_retry = getattr(exc, "failure_kind", None) not in TERMINAL_FAILURE_KINDS
+        files = sorted(work.glob("SECURITY_FINDINGS__*.json"))
+        if getattr(exc, "failure_kind", None) == "budget_reached":
+            return slug, None, f"{_BUDGET_SKIP} ({exc})", False
+        if not files:
+            return slug, None, f"session failed, no partial artifact ({exc})", session_retry
+        _log(f"{slug}: session failed ({exc}); recovered partial artifact from scratch dir")
+    if not files:
+        return slug, None, "no findings JSON produced", True
+    try:
+        chosen, raw_doc = _choose_findings_file(files, findings_filename)
+    except json.JSONDecodeError as exc:
+        return slug, None, f"findings file is not valid JSON: {exc}", False
+
+    if raw_doc.get(_STREAMING_SEED_KEY) and not raw_doc.get("findings"):
+        # The backend failed before checkpointing even one finding.  Preserve the existing retry
+        # semantics: an untouched seed is not an answer and must not suppress the bounded retry.
+        return slug, None, "session produced no checkpointed findings", session_retry
+
+    doc, repaired_ids, unrecoverable, coerced = _normalize_findings_doc(raw_doc, ctx, scope, slug)
+    if repaired_ids:
+        _log(f"{slug}: schema-repaired {len(repaired_ids)} drifted finding(s), kept for review "
+             f"(flagged schema_repair_failed): {repaired_ids}")
+    if unrecoverable:
+        _log(f"{slug}: dropped {len(unrecoverable)} unparseable finding(s): {unrecoverable}")
+    if coerced:
+        _log(f"{slug}: coerced structured fields to strings in {coerced} finding(s)")
+    if not doc.get("findings"):
+        return slug, None, "no schema-conformant findings after normalization", False
+    try:
+        validate_findings(doc, ctx.assets_dir)     # final gate on the normalized doc
+    except SchemaValidationError as exc:
+        return slug, None, f"findings still invalid after normalization: {exc}", False
+
+    out = ctx.findings_dir / f"{slug}.json"
+    atomic_write_json(out, doc)
+    _collect_variant_log(ctx, slug, work)
+    n = len(doc.get("findings", []))
+    _log(f"{slug}: {n} finding(s){' [partial session]' if partial else ''}")
+    return slug, out, None, False
+
+
+def _collect_variant_log(ctx: RunContext, slug: str, work: Path) -> Path | None:
+    """Preserve the focus's VARIANT_HUNT_LOG (coverage forcing-function) into the run dir, so the
+    completeness-critic and the report can see which family members/invariants were checked."""
+    logs = sorted(work.glob("VARIANT_HUNT_LOG__*.md")) or sorted(work.glob("VARIANT_HUNT_LOG*.md"))
+    if not logs:
+        return None
+    ctx.variant_logs_dir.mkdir(parents=True, exist_ok=True)
+    dst = ctx.variant_logs_dir / f"{slug}.md"
+    dst.write_text(logs[0].read_text(encoding="utf-8"), encoding="utf-8")
+    return dst
+
+
+# --------------------------------------------------------------------------- completeness critic
+def _finding_key(f: dict) -> str:
+    """Coarse identity for dedup across audit + critic passes: title + first affected ref."""
+    title = str(f.get("title", "")).strip().lower()
+    aff = f.get("affected") or []
+    first = str(aff[0]).strip().lower() if aff else ""
+    return f"{title}::{first}"
+
+
+def _critic_pass(ctx: RunContext, scope, slug: str, prompt_path: Path,
+                 existing: list[dict]) -> list[dict]:
+    """One completeness-critic session for a focus: re-run the SAME ground-truth-laden prompt with
+    an addendum that says 'you already produced these; find ONLY what was missed'. Returns the new,
+    schema-conformant, deduped findings (empty list if none / on failure)."""
+    base = prompt_path.read_text(encoding="utf-8")
+    assert_prohibited_present(base, scope.prohibited_techniques)
+    base = ensure_context_pack_present(base, ctx.context_pack_path)
+    findings_filename = f"SECURITY_FINDINGS__{slug}.json"
+    log_path = ctx.variant_logs_dir / f"{slug}.md"
+    variant_log = log_path.read_text(encoding="utf-8") if log_path.exists() else "(none produced)"
+    titles = "\n".join(f"  - {f.get('title','?')}  [{', '.join(map(str, f.get('affected', [])[:2]))}]"
+                       for f in existing) or "  (none)"
+
+    addendum = (
+        "\n\n---\n\n## COMPLETENESS RE-PASS (this session's ONLY job)\n"
+        "A prior pass over THIS focus already produced the findings below. Do NOT repeat them. "
+        "Your sole task now is to find what was **MISSED**, using the ground-truth sections above "
+        "as the coverage spec:\n"
+        "- Every **VARIANT FAMILY** member not yet verified, or marked 🟡/🔴 but not turned into a finding.\n"
+        "- Every **INVARIANT** left UNKNOWN or not checked.\n"
+        "- Anonymous endpoints / sinks / outbound calls / mass-assignment models not yet traced.\n"
+        "- Sibling occurrences of any confirmed root cause that were not enumerated.\n"
+        "Emit ONLY genuinely new findings (same schema/file name). If nothing was missed, emit a "
+        "findings file with an empty `findings` array. Be precise — do not pad with low-value or "
+        "duplicate items.\n\n"
+        "### Already-reported findings (do NOT repeat)\n" + titles + "\n\n"
+        "### VARIANT_HUNT_LOG produced so far\n```\n" +
+        variant_log[:12000].replace("```", "` ` `") + "\n```\n"
+    )
+    prompt = with_artifact_contract(
+        base + addendum,
+        artifacts=[{"type": "findings", "filename": findings_filename,
+                    "schema": "findings_schema.json", "desc": "ONLY the newly-discovered findings"}],
+        extra_rules=["Detection and reporting ONLY: do not patch, do not contact any live host."],
+    )
+    schema_text = (ctx.assets_dir / "findings_schema.json").read_text(encoding="utf-8")
+    prompt += ("\n\n## FINDINGS JSON SCHEMA (the `" + findings_filename + "` file MUST validate "
+               "against this)\n```json\n" + schema_text + "\n```\n")
+
+    work = ctx.work_dir("audit", f"{slug}__critic")
+    try:
+        result = ctx.runner_for("audit").run(
+            prompt=prompt, neutral_prompt=_neutral_variant(prompt, scope, f"{slug}-critic"),
+            run_dir=ctx.run_dir, work_dir=work,
+            model=ctx.config.model_for("audit"), stage="audit", run_id=ctx.run_id,
+            repo_dir=ctx.repo_dir, allowed_tools=ARTIFACT_TOOLS, label=f"{slug}-critic")
+        files = collect_output_files(result, "SECURITY_FINDINGS__*.json")
+    except RunnerError as exc:
+        files = sorted(work.glob("SECURITY_FINDINGS__*.json"))
+        if not files:
+            _log(f"{slug}: critic pass failed ({exc}); keeping prior findings")
+            return []
+    if not files:
+        return []
+    chosen = next((f for f in files if f.name == findings_filename), files[0])
+    try:
+        raw_doc = json.loads(chosen.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError:
+        return []
+    doc, _rep, _unrec, _coerced = _normalize_findings_doc(raw_doc, ctx, scope, slug)
+    _collect_variant_log(ctx, slug, work)   # critic may extend the coverage log
+    return doc.get("findings", [])
+
+
+def _run_critic_for_focus(ctx: RunContext, scope, slug: str, doc_path: Path,
+                          prompt_path: Path) -> None:
+    """Run up to ``audit_critic_passes`` completeness passes for one focus, appending new findings
+    to its file. Stops early when a pass adds nothing (loop-until-dry, capped)."""
+    passes = ctx.config.audit_critic_passes
+    if passes <= 0:
+        return
+    doc = json.loads(doc_path.read_text(encoding="utf-8-sig"))
+    findings: list[dict] = list(doc.get("findings", []))
+    seen = {_finding_key(f) for f in findings}
+    for i in range(passes):
+        try:
+            ctx.assert_budget()
+        except BudgetExceeded as exc:
+            _log(f"{slug}: skipping critic pass {i+1} (budget reached: {exc})")
+            break
+        new = _critic_pass(ctx, scope, slug, prompt_path, findings)
+        fresh = [f for f in new if _finding_key(f) not in seen]
+        for f in fresh:
+            seen.add(_finding_key(f))
+        if not fresh:
+            _log(f"{slug}: critic pass {i+1} found nothing new — stopping")
+            break
+        findings.extend(fresh)
+        _log(f"{slug}: critic pass {i+1} added {len(fresh)} new finding(s) "
+             f"({len(findings)} total)")
+    if len(findings) != len(doc.get("findings", [])):
+        doc["findings"] = findings
+        atomic_write_json(doc_path, doc)
+
+
+_BUDGET_SKIP = "budget reached before launch"
+
+
+def run(ctx: RunContext) -> list[Path]:
+    scope = ctx.load_scope()
+    prompts = sorted(ctx.prompts_out_dir.glob("audit_*.md"))
+    if not prompts:
+        raise RuntimeError("audit: no generated prompts found (run recon first)")
+
+    # Cap the audit fan-out (e.g. --smoke runs one focus). Truncation is logged, never silent.
+    cap = ctx.config.max_focuses
+    if cap is not None and len(prompts) > cap:
+        _log(f"max_focuses={cap}: running {cap} of {len(prompts)} focuses "
+             f"(skipping {[p.stem for p in prompts[cap:]]})")
+        prompts = prompts[:cap]
+
+    ctx.findings_dir.mkdir(parents=True, exist_ok=True)
+    results: list[Path] = []
+    skipped: list[str] = []
+    saved = _saved_focuses(ctx)
+    completed: dict[str, Path] = {}
+    for prompt in prompts:
+        slug = prompt.stem
+        expected = ctx.findings_dir / f"{slug}.json"
+        if saved.get(slug, {}).get("state") == "done" and expected.is_file():
+            try:
+                validate_findings(json.loads(expected.read_text(encoding="utf-8-sig")), ctx.assets_dir)
+            except (OSError, ValueError, SchemaValidationError):
+                _log(f"{slug}: saved success artifact is missing/invalid; scheduling it again")
+            else:
+                completed[slug] = expected
+                results.append(expected)
+                _log(f"{slug}: already completed in a prior attempt; skipping")
+
+    # Budget pre-check: only launch focuses while under the cap. Skips are logged, not silent.
+    launch: list[Path] = []
+    pending_prompts = [p for p in prompts if p.stem not in completed]
+    for p in pending_prompts:
+        try:
+            ctx.assert_budget()
+            launch.append(p)
+        except BudgetExceeded as exc:
+            skipped = [pp.stem for pp in pending_prompts[len(launch):]]
+            for slug in skipped:
+                _focus_progress(ctx, slug, "pending", retryable=True,
+                                error=f"budget reached before launch: {exc}")
+            _log(f"budget reached, skipping {len(skipped)} focus(es): {skipped} ({exc})")
+            break
+
+    produced: dict[str, Path] = {}   # slug -> focus findings doc
+
+    def _pass(paths: list[Path], attempt: int) -> list[Path]:
+        """Run a set of focuses; return the ones whose SESSION failed and may be retried."""
+        retryable: list[Path] = []
+        workers = max(1, min(ctx.config.max_parallel_audits, len(paths)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {}
+            for p in paths:
+                _focus_progress(ctx, p.stem, "running", attempt=attempt, retryable=True)
+                futures[ex.submit(_audit_one, ctx, scope, p)] = p
+            for fut in as_completed(futures):
+                slug, path, err, can_retry = fut.result()
+                if err and err.startswith(_BUDGET_SKIP):
+                    skipped.append(slug)
+                    _focus_progress(ctx, slug, "pending", attempt=attempt, retryable=True,
+                                    error=err)
+                    _log(f"{slug}: not launched ({err})")
+                elif err:
+                    _log(f"{slug}: {'FAILED' if can_retry else 'SKIPPED'} ({err})"
+                         + (f" [attempt {attempt}]" if attempt > 1 else ""))
+                    if can_retry:
+                        retryable.append(futures[fut])
+                        _focus_progress(ctx, slug, "failed", attempt=attempt,
+                                        retryable=True, error=err)
+                    else:
+                        _focus_progress(ctx, slug, "invalid", attempt=attempt,
+                                        retryable=False, error=err)
+                elif path is not None:
+                    results.append(path)
+                    produced[slug] = path
+                    _focus_progress(ctx, slug, "done", attempt=attempt, retryable=False,
+                                    artifact=str(path.relative_to(ctx.run_dir)))
+        return retryable
+
+    # A focus whose session never started is lost work, not a result: both backends can blip
+    # inside the same minute and cost a whole focus permanently, leaving one target audited on
+    # fewer focuses than the rest and making their finding counts incomparable. Retried once,
+    # after a pause long enough for a short backend backoff to clear. Only SESSION failures are
+    # retried (see _audit_one); a malformed answer is a result and stands.
+    failed = _pass(launch, 1)
+    if failed and ctx.config.audit_retry_passes > 0:
+        delay = ctx.config.audit_retry_delay_s
+        _log(f"{len(failed)} focus(es) failed at session level: {[p.stem for p in failed]}; "
+             f"retrying once in {delay}s")
+        time.sleep(delay)
+        still = _pass(failed, 2)
+        if still:
+            _log(f"still failing after the retry: {[p.stem for p in still]} — these focuses are "
+                 f"absent from this run's coverage")
+
+    # Completeness-critic round: per focus, re-pass to surface missed variant-family members /
+    # unverified invariants. Appends new findings in place. Cost-gated; parallel across focuses.
+    if ctx.config.audit_critic_passes > 0 and produced:
+        crit_workers = max(1, min(ctx.config.max_parallel_audits, len(produced)))
+        with ThreadPoolExecutor(max_workers=crit_workers) as ex:
+            cfuts = {ex.submit(_run_critic_for_focus, ctx, scope, slug, dpath,
+                               ctx.prompts_out_dir / f"{slug}.md"): slug
+                     for slug, dpath in produced.items()}
+            for fut in as_completed(cfuts):
+                try:
+                    fut.result()
+                except Exception as exc:   # a critic failure must never lose the base findings
+                    _log(f"{cfuts[fut]}: critic round error ({type(exc).__name__}: {exc})")
+
+    if skipped:
+        _log(f"NOTE: {len(skipped)} focus(es) not run due to budget: {skipped}")
+    if not results:
+        raise RuntimeError("audit: no valid findings files were produced")
+    return sorted(results)

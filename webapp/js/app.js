@@ -1,0 +1,1307 @@
+// Router + views. Hash-based routing keeps deep links working with zero server config.
+import { api, streamRun, streamChat } from "./api.js";
+import {
+  h, mount, toast, sevPill, verdictPill, stateChip, costChip,
+  SEVERITIES, sevRank, confRank, effSev, effConf, verdict, primaryRef,
+} from "./ui.js";
+import { donut, barsH, statTile, chartCard, SEV_COLOR, STATE_COLOR } from "./charts.js";
+import { icon } from "./icons.js";
+
+const app = () => document.getElementById("app");
+
+// Markdown from reports, drafts, artifacts and chat is model- or repo-controlled: render it, then
+// sanitize (no scripts, event handlers or javascript: URLs) before it touches the DOM.
+function renderMd(md) {
+  const html = window.marked ? window.marked.parse(String(md ?? "")) : `<pre>${escapeHtml(String(md ?? ""))}</pre>`;
+  return window.DOMPurify ? window.DOMPurify.sanitize(html, { USE_PROFILES: { html: true } }) : `<pre>${escapeHtml(String(md ?? ""))}</pre>`;
+}
+const STAGES = ["ingest", "recon", "audit", "validate", "evidence", "report"];
+const SCREEN_LABELS = {
+  overview: "Overview", new: "New audit", history: "Run history",
+  knowledge: "Vulnerability index", costs: "Costs", benchmark: "Benchmarks",
+  settings: "Settings", run: "Audit run",
+};
+// Canonical archetype keys -> display labels (mirrors argo/archetype.py).
+// Keep this before the initial render: the knowledge route uses it synchronously.
+const ARCH_LABELS = {
+  web_api_cms: "Web / API / CMS", plugin_extension: "Plugin / Extension / Mod",
+  library_sdk: "Library / SDK / Framework", cli_desktop: "CLI / Desktop",
+  agent_llm_mcp: "Agent / LLM / MCP", mobile: "Mobile", data_ml: "Data / ML pipeline",
+  smart_contract: "Smart contract", firmware: "Firmware / Embedded",
+  iac: "Infrastructure-as-code", other: "Other",
+};
+let teardown = null;  // called before leaving a view (e.g. close an SSE stream)
+
+// --------------------------------------------------------------------- router
+function parseRoute() {
+  const hash = location.hash.replace(/^#/, "") || "/";
+  const m = hash.match(/^\/run\/(.+)$/);
+  if (m) return { name: "run", id: decodeURIComponent(m[1]) };
+  if (hash.startsWith("/history")) return { name: "history" };
+  if (hash.startsWith("/settings")) return { name: "settings" };
+  if (hash.startsWith("/knowledge")) return { name: "knowledge" };
+  if (hash.startsWith("/costs")) return { name: "costs" };
+  if (hash.startsWith("/benchmark")) return { name: "benchmark" };
+  if (hash.startsWith("/new")) return { name: "new" };
+  return { name: "overview" };
+}
+
+function render() {
+  if (teardown) { try { teardown(); } catch (_) {} teardown = null; }
+  const r = parseRoute();
+  document.querySelectorAll("#nav a").forEach((a) => {
+    const target = a.getAttribute("href").replace(/^#/, "");
+    const active =
+      (r.name === "overview" && (target === "/" || target === "/overview")) ||
+      (r.name === "new" && target === "/new") ||
+      (r.name === "history" && target === "/history") ||
+      (r.name === "settings" && target === "/settings") ||
+      (r.name === "knowledge" && target === "/knowledge") ||
+      (r.name === "costs" && target === "/costs") ||
+      (r.name === "benchmark" && target === "/benchmark");
+    a.classList.toggle("active", active);
+    if (active) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  const screenName = document.getElementById("screenName");
+  if (screenName) screenName.textContent = SCREEN_LABELS[r.name] || "Argo";
+  const canvas = document.querySelector("main");
+  if (canvas) canvas.classList.toggle("content-fit", ["history", "benchmark"].includes(r.name));
+  document.title = `${SCREEN_LABELS[r.name] || "Argo"} · Argo`;
+  closeNavigation();
+  const view = r.name === "run" ? runView(r.id)
+    : r.name === "overview" ? overviewView()
+    : r.name === "history" ? historyView()
+    : r.name === "settings" ? settingsView()
+    : r.name === "knowledge" ? knowledgeView()
+    : r.name === "costs" ? costsView()
+    : r.name === "benchmark" ? benchmarkView()
+    : newRunView();
+  mount(app(), view);
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", render);
+
+function setupTheme() {
+  const btn = document.getElementById("themeToggle");
+  if (!btn) return;
+  const paint = () => {
+    const light = document.documentElement.getAttribute("data-theme") === "light";
+    mount(btn, icon(light ? "moon" : "sun", 17));
+    btn.setAttribute("aria-label", light ? "Use dark theme" : "Use light theme");
+    btn.title = light ? "Use dark theme" : "Use light theme";
+  };
+  paint();
+  btn.addEventListener("click", () => {
+    const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("theme", next); } catch (_) {}
+    paint();
+  });
+}
+
+function closeNavigation() {
+  document.body.classList.remove("nav-open");
+  const toggle = document.getElementById("menuToggle");
+  const backdrop = document.getElementById("navBackdrop");
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+  if (backdrop) backdrop.hidden = true;
+}
+
+function setupShell() {
+  const toggle = document.getElementById("menuToggle");
+  const backdrop = document.getElementById("navBackdrop");
+  if (!toggle || !backdrop) return;
+  toggle.addEventListener("click", () => {
+    const open = !document.body.classList.contains("nav-open");
+    document.body.classList.toggle("nav-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    backdrop.hidden = !open;
+  });
+  backdrop.addEventListener("click", closeNavigation);
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeNavigation(); });
+}
+
+setupTheme();
+setupShell();
+render();
+
+// -------------------------------------------------------------- OVERVIEW (dashboard)
+function countBy(items, keyFn) {
+  const m = new Map();
+  for (const it of items) { const k = keyFn(it); if (k == null || k === "") continue; m.set(k, (m.get(k) || 0) + 1); }
+  return m;
+}
+function topN(map, n) {
+  return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([label, value]) => ({ label, value }));
+}
+function cweLabel(c) {
+  if (Array.isArray(c)) c = c[0];
+  if (c == null || c === "") return null;
+  c = String(c).trim();
+  return /^\d+$/.test(c) ? "CWE-" + c : c;
+}
+// Verification mix — surfaces the "prove, don't just detect" ratio (xalgorix idea).
+const VERDICT_META = {
+  confirmed: { label: "Confirmed", color: "var(--ok)" },
+  needs_runtime_verification: { label: "Needs runtime check", color: "var(--warn)" },
+};
+const verdictMeta = (v) => VERDICT_META[v] || { label: (v || "unverified").replace(/_/g, " "), color: "var(--info)" };
+const isDemoRun = (run) => run && run.runner === "mock";
+function resultVerdictPill(finding, simulated = false) {
+  const value = verdict(finding);
+  if (!simulated || !value) return verdictPill(value);
+  return h("span", { class: `pill vd-${value} demo-verdict` },
+    h("span", { class: "dot" }), `simulated: ${value.replace(/_/g, " ")}`);
+}
+async function pool(items, worker, limit = 4) {
+  const out = []; let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; try { out[idx] = await worker(items[idx]); } catch (_) { out[idx] = null; } }
+  }));
+  return out;
+}
+
+function kpiTiles(runs, evidence) {
+  const total = runs.length;
+  const completed = runs.filter((r) => r.state === "completed").length;
+  const findings = evidence ? evidence.findings : null;
+  const confirmed = evidence ? evidence.confirmed : null;
+  const runtime = evidence ? evidence.runtime : null;
+  return [
+    statTile({ label: "Real audits", value: total, sub: `${completed} completed` }),
+    statTile({ label: "Validated findings", value: findings == null ? "…" : findings,
+      sub: findings == null ? "Reading completed runs" : "survived review", accent: true }),
+    statTile({ label: "Confirmed", value: confirmed == null ? "…" : confirmed,
+      sub: "supported by evidence" }),
+    statTile({ label: "Needs runtime", value: runtime == null ? "…" : runtime,
+      sub: "uncertainty kept visible" }),
+  ];
+}
+
+function overviewView() {
+  const notice = h("div", {});
+  const statRow = h("div", { class: "stat-row" }, ...Array.from({ length: 4 }, () => h("div", { class: "skeleton", style: { height: "94px" } })));
+  const grid = h("div", { class: "dash-grid" }, ...Array.from({ length: 4 }, () => h("div", { class: "skeleton", style: { height: "260px" } })));
+  const root = h("div", {},
+    h("div", { class: "page-head dash-head" },
+      h("div", {}, h("h1", {}, "Overview"),
+        h("p", {}, "A quiet view of what Argo found, what survived review, and what still needs proof.")),
+      h("a", { class: "btn btn-primary", href: "#/new" }, "New audit")),
+    notice, statRow, grid);
+  api.listRuns().then((runs) => renderOverview(runs, notice, statRow, grid)).catch((e) => mount(grid, h("div", { class: "empty" }, e.message)));
+  return root;
+}
+
+function renderOverview(allRuns, notice, statRow, grid) {
+  const demos = allRuns.filter(isDemoRun);
+  const runs = allRuns.filter((run) => !isDemoRun(run));
+  if (demos.length) {
+    mount(notice, h("div", { class: "banner demo-banner overview-demo" },
+      icon("info", 17),
+      h("span", {}, h("strong", {}, `${demos.length} synthetic demo ${demos.length === 1 ? "run is" : "runs are"} excluded. `),
+        "Fixture results never contribute to audit metrics. ", h("a", { href: "#/history" }, "View run history"))));
+  } else mount(notice);
+  if (!runs.length) {
+    mount(statRow);
+    statRow.classList.add("hidden");
+    grid.className = "first-run";
+    mount(grid,
+      h("div", { class: "first-run-copy" },
+        h("h2", {}, "Begin with the code, not a claim"),
+        h("p", {}, "Argo reads a repository, builds a review specific to it, and preserves the difference between a candidate and a finding."),
+        h("a", { class: "btn btn-primary", href: "#/new" }, "Start your first audit")),
+      h("div", { class: "first-run-steps" },
+        h("div", {}, h("strong", {}, "Understand"), h("p", {}, "Map the code, its trust boundaries, and the rules that constrain the review.")),
+        h("div", {}, h("strong", {}, "Challenge"), h("p", {}, "Ask a second pass to refute each candidate and retain the evidence.")),
+        h("div", {}, h("strong", {}, "Stay honest"), h("p", {}, "Separate confirmed findings from questions that still need runtime proof."))));
+    return;
+  }
+  statRow.className = "stat-row";
+  mount(statRow, ...kpiTiles(runs, null));
+
+  const sevBody = h("div", {}, h("div", { class: "skeleton", style: { height: "180px" } }));
+  const verBody = h("div", {}, h("div", { class: "skeleton", style: { height: "180px" } }));
+  const cweBody = h("div", {}, h("div", { class: "skeleton", style: { height: "180px" } }));
+  const recent = h("div", { class: "runlist" }, ...runs.slice(0, 5).map((r) =>
+    h("div", { class: "runrow", onclick: () => location.hash = `#/run/${encodeURIComponent(r.run_id)}` },
+      h("div", { class: "grow" },
+        h("div", { class: "rprog" }, r.program_name || "Unnamed audit"),
+        h("div", { class: "rid" }, r.run_id)),
+      costChip(r.cost_usd), stateChip(r.state))));
+
+  mount(grid,
+    chartCard("Evidence quality", verBody, "confirmed and unresolved"),
+    chartCard("Severity mix", sevBody, "validated findings"),
+    chartCard("Recent audits", recent, `${Math.min(runs.length, 5)} of ${runs.length}`),
+    chartCard("Recurring weakness", cweBody, "top CWEs"));
+
+  const done = runs.filter((r) => r.state === "completed");
+  pool(done, (r) => api.validated(r.run_id).catch(() => null), 4).then((all) => {
+    const findings = all.filter(Boolean).flatMap((doc) =>
+      Array.isArray(doc) ? doc : (doc.findings || [])).filter(Boolean);
+    const sevMap = countBy(findings, (f) => effSev(f));
+    const sevData = SEVERITIES.filter((sv) => sevMap.get(sv)).map((sv) => ({ label: sv, value: sevMap.get(sv), color: SEV_COLOR[sv] }));
+    const cweData = topN(countBy(findings, (f) => cweLabel(f.cwe)), 8);
+    const verMap = countBy(findings, (f) => verdict(f) || "unverified");
+    const verData = [...verMap.entries()].map(([v, n]) => ({ label: verdictMeta(v).label, value: n, color: verdictMeta(v).color }));
+    mount(statRow, ...kpiTiles(runs, {
+      findings: findings.length,
+      confirmed: findings.filter((f) => verdict(f) === "confirmed").length,
+      runtime: findings.filter((f) => verdict(f) === "needs_runtime_verification").length,
+    }));
+    mount(sevBody, findings.length ? donut(sevData, { centerBottom: "findings" }) : h("div", { class: "chart-empty" }, "No validated findings yet"));
+    mount(verBody, findings.length ? donut(verData, { centerBottom: "findings" }) : h("div", { class: "chart-empty" }, "No validated findings yet"));
+    mount(cweBody, cweData.length ? barsH(cweData) : h("div", { class: "chart-empty" }, "No CWE data"));
+  });
+}
+
+// --------------------------------------------------------------- NEW RUN view
+function newRunView() {
+  const form = { brief: "", repo: "", links: "", runner: "mock", budget: "", audit_model: "", parallel: 3, dry_run: false, calibration: false, research: true, codex_model: "", codex_oss: false, codex_local_provider: "", gemini_model: "", gemini_api_key: "", claude_api_key: "", codex_api_key: "", mistral_model: "", mistral_key: "", mistral_vibe_auth: "key", profile: "", stage_runners: "", stage_models: "", stage_effort: "" };
+
+  let mode = "general";  // "general" = audit any code (no brief) · "bounty" = scoped program
+  const briefEl = h("textarea", { placeholder: "Paste the bug-bounty program page: scope, rules, rewards, exclusions, “no DoS”…", oninput: (e) => form.brief = e.target.value });
+  const linksEl = h("textarea", { placeholder: "https://project.example/docs\nhttps://project.example/security", style: { minHeight: "70px" }, oninput: (e) => form.links = e.target.value });
+  const repoEl = h("input", { type: "text", placeholder: "/home/me/project   ·   C:\\dev\\app   ·   https://github.com/org/repo", oninput: (e) => form.repo = e.target.value });
+
+  const isMistral = (v) => v === "mistral-api" || v === "mistral-vibe";
+  const runnerSeg = seg([["mock", "Demo · synthetic"], ["headless", "Claude"], ["codex", "Codex"], ["gemini", "Gemini"], ["mistral-api", "Mistral API"], ["mistral-vibe", "Mistral Vibe"]], "mock", (v) => {
+    form.runner = v; costBanner.classList.toggle("hidden", v === "mock");
+    mistralRow.classList.toggle("hidden", !isMistral(v));
+    mistralModelEl.placeholder = v === "mistral-vibe" ? `blank = Vibe default (${mistralDefaults["mistral-vibe"]})` : `blank = ${mistralDefaults["mistral-api"]}`;
+    mistralKeyEl.placeholder = v === "mistral-vibe" ? "blank = server's ARGO_MISTRAL_VIBE_API_KEY / MISTRAL_API_KEY" : "blank = server's ARGO_MISTRAL_API_KEY / MISTRAL_API_KEY";
+    updateVibeAuth();
+    demoBanner.classList.toggle("hidden", v !== "mock");
+    claudeRow.classList.toggle("hidden", v !== "headless");
+    codexRow.classList.toggle("hidden", v !== "codex");
+    codexKeyRow.classList.toggle("hidden", v !== "codex");
+    geminiRow.classList.toggle("hidden", v !== "gemini");
+    startBtn.lastChild.textContent = v === "mock" ? "Run synthetic demo" : "Start real audit";
+  }, ["headless", "codex", "gemini", "mistral-api", "mistral-vibe"]);
+  const claudeApiKeyEl = h("input", { type: "password", placeholder: "blank = server's Claude Code login / ANTHROPIC_API_KEY", oninput: (e) => form.claude_api_key = e.target.value.trim() });
+  const claudeRow = h("div", { class: "hidden", style: { marginTop: "14px" } },
+    field("Claude API key", claudeApiKeyEl, "Blank uses the server's ambient ANTHROPIC_API_KEY / existing Claude Code subscription login. Never echoed back or persisted in the clear."));
+  const codexModelEl = h("input", { type: "text", list: "dl-codex-models", placeholder: "blank = your Codex default model", oninput: (e) => form.codex_model = e.target.value.trim() });
+  const codexProviderEl = h("input", { type: "text", placeholder: "blank = OpenAI; or ollama / lmstudio", oninput: (e) => { form.codex_local_provider = e.target.value.trim(); form.codex_oss = !!form.codex_local_provider; } });
+  const codexRow = h("div", { class: "grid-2 hidden", style: { marginTop: "14px" } },
+    field("Codex model", codexModelEl, "Model id for the Codex CLI; blank = its own default."),
+    field("Codex provider", codexProviderEl, "Blank uses OpenAI; set ollama/lmstudio to run a local/open-source model via Codex --oss."));
+  const codexApiKeyEl = h("input", { type: "password", placeholder: "blank = your Codex CLI login", oninput: (e) => form.codex_api_key = e.target.value.trim() });
+  const codexKeyRow = h("div", { class: "hidden", style: { marginTop: "14px" } },
+    field("Codex API key", codexApiKeyEl, "Blank uses your existing `codex login`. Setting a key makes Argo bootstrap (once, cached) a dedicated logged-in Codex profile for it via `codex login --with-api-key`. Never echoed back or persisted in the clear."));
+  const geminiModelEl = h("input", { type: "text", list: "dl-gemini-models", placeholder: "default (per-stage tiering)", oninput: (e) => form.gemini_model = e.target.value.trim() });
+  const geminiKeyEl = h("input", { type: "password", placeholder: "blank = server's GEMINI_API_KEY", oninput: (e) => form.gemini_api_key = e.target.value.trim() });
+  const geminiRow = h("div", { class: "grid-2 hidden", style: { marginTop: "14px" } },
+    field("Gemini model", geminiModelEl, "Flat model override across every stage; blank = the built-in per-stage tiering (Pro for recon/validate, Flash for audit)."),
+    field("Gemini API key", geminiKeyEl, "Blank uses the server's ambient GEMINI_API_KEY / existing gemini CLI login. Never echoed back or persisted in the clear."));
+  const mistralDefaults = { "mistral-api": "mistral-large-4", "mistral-vibe": "mistral-medium-3.5" };
+  const mistralModelEl = h("input", { type: "text", list: "dl-mistral-models", placeholder: "blank = mistral-large-4", oninput: (e) => form.mistral_model = e.target.value.trim() });
+  const mistralKeyEl = h("input", { type: "password", placeholder: "blank = server's ARGO_MISTRAL_API_KEY / MISTRAL_API_KEY", oninput: (e) => form.mistral_key = e.target.value.trim() });
+  const mistralKeyField = field("Mistral key", mistralKeyEl, "Blank uses the server's environment in key mode. Never echoed back or persisted in the clear.");
+  const vibeAuthEl = h("select", { name: "mistral_vibe_auth", id: "mistral-vibe-auth", "aria-label": "Vibe authentication", onchange: (e) => {
+    form.mistral_vibe_auth = e.target.value;
+    if (form.runner === "mistral-vibe" && form.mistral_vibe_auth === "stored") {
+      form.mistral_key = ""; mistralKeyEl.value = "";
+    }
+    updateVibeAuth();
+  } }, h("option", { value: "key" }, "API key — legacy sources"),
+       h("option", { value: "stored" }, "Existing Vibe login — saved credentials"));
+  const vibeAuthRow = h("div", { class: "hidden", style: { marginTop: "14px" } },
+    field("Vibe authentication", vibeAuthEl, "Existing login uses Vibe's native OS keyring for the user running the Argo server, not this browser's session. Complete vibe --setup on that host manually. Account, plan and allowance are not verified here; no automatic API-key fallback."));
+  function updateVibeAuth() {
+    const stageVibe = form.stage_runners.split(",").some((entry) => entry.split("=")[1]?.trim() === "mistral-vibe");
+    vibeAuthRow.classList.toggle("hidden", form.runner !== "mistral-vibe" && !stageVibe);
+    mistralKeyField.classList.toggle("hidden", form.runner === "mistral-vibe" && form.mistral_vibe_auth === "stored");
+  }
+  const mistralRow = h("div", { class: "hidden", style: { marginTop: "14px" } },
+    h("div", { class: "grid-2" },
+      field("Mistral model", mistralModelEl, "Mistral API: a model id (mistral-large-4 is priced and pinned). Mistral Vibe: a Vibe alias (needs the vibe CLI on the server)."),
+      mistralKeyField),
+    h("p", { class: "hint", style: { marginTop: "8px" } }, "Mistral backends have no web tools: web research and corroboration are switched off for this run. Mistral API uses Argo tools; Vibe uses an isolated Argo-managed CLI configuration. Repository read-only; writes only to session scratch."));
+  const drySeg = seg([["false", "Full pipeline"], ["true", "Dry-run (stop after recon)"]], "false", (v) => form.dry_run = v === "true");
+  const calSeg = seg([["false", "Off"], ["true", "Calibration (audit→Opus)"]], "false", (v) => form.calibration = v === "true");
+  const researchSeg = seg([["true", "On · web OSINT"], ["false", "Off · offline"]], "true", (v) => form.research = v === "true");
+  const budgetEl = h("input", { type: "number", min: "0", step: "1", placeholder: "blank = no limit (run to completion)", oninput: (e) => form.budget = e.target.value });
+  const modelEl = h("input", { type: "text", list: "dl-claude-models", placeholder: "default (per-stage)", oninput: (e) => form.audit_model = e.target.value });
+  const claudeDL = h("datalist", { id: "dl-claude-models" });
+  const codexDL = h("datalist", { id: "dl-codex-models" });
+  const geminiDL = h("datalist", { id: "dl-gemini-models" });
+  const mistralDL = h("datalist", { id: "dl-mistral-models" });
+  api.models().then((mm) => {
+    const ma = (mm.backends || []).find((b) => b.id === "mistral-api");
+    (ma ? ma.models : []).forEach((m) => mistralDL.append(h("option", { value: m.id }, m.notes || "")));
+    if (ma && ma.default_model) mistralDefaults["mistral-api"] = ma.default_model;
+    const cl = (mm.backends || []).find((b) => b.id === "headless");
+    const cx = (mm.backends || []).find((b) => b.id === "codex");
+    const gm = (mm.backends || []).find((b) => b.id === "gemini");
+    (cl ? cl.models : []).forEach((m) => claudeDL.append(h("option", { value: m.id }, m.label || "")));
+    (cx ? cx.models : []).forEach((m) => codexDL.append(h("option", { value: m.id })));
+    (gm ? gm.models : []).forEach((m) => geminiDL.append(h("option", { value: m.id }, m.label || "")));
+    if (cx && cx.default) codexModelEl.placeholder = `blank = your Codex default (${cx.default})`;
+  }).catch(() => {});
+  const parallelEl = h("input", { type: "number", min: "1", max: "16", value: "3", oninput: (e) => form.parallel = +e.target.value || 3 });
+  const profileEl = h("select", { onchange: (e) => form.profile = e.target.value },
+    h("option", { value: "" }, "Built-in defaults"),
+    ...["balanced", "maximum-quality", "cost-saver", "diverse-validation", "smoke"].map((p) => h("option", { value: p }, p)));
+  const stageRunnerEl = h("input", { type: "text", placeholder: "optional: audit=codex,validate=headless", oninput: (e) => { form.stage_runners = e.target.value; updateVibeAuth(); } });
+  const stageModelEl = h("input", { type: "text", placeholder: "optional: audit=gpt-6.1-sol", oninput: (e) => form.stage_models = e.target.value });
+  const stageEffortEl = h("input", { type: "text", placeholder: "Claude only: validate=high", oninput: (e) => form.stage_effort = e.target.value });
+
+  const adv = h("div", { class: "adv hidden" },
+    h("div", { class: "grid-2" },
+      field("Runner", runnerSeg, "Demo replays synthetic fixtures and does not assess the selected repository. Claude, Codex, Gemini and Mistral perform real model-backed analysis."),
+      field("Mode", drySeg, "Dry-run shows the generated prompts before paying for audits.")),
+    h("div", { class: "grid-2", style: { marginTop: "14px" } },
+      field("Budget (USD)", budgetEl, "Per-run ceiling in USD. Leave blank for no limit — the default: the audit runs to completion regardless of cost. Set a number to stop launching sessions once spending reaches it (sessions already running can overshoot it)."),
+      field("Audit model", modelEl, "Override only the Stage-3 model (the missed-bug lever).")),
+    h("div", { class: "grid-2", style: { marginTop: "14px" } },
+      field("Parallel sessions", parallelEl, "How many audit/validate sessions run at once (default 3). Higher = faster wall-clock but more simultaneous spend and more chance of provider rate-limits; lower = slower but gentler. It changes speed, not what's found."),
+      field("Calibration", calSeg, "Force audit on Opus while prompts are unproven.")),
+    h("div", { class: "grid-2", style: { marginTop: "14px" } },
+      field("Web research (Stage 1)", researchSeg, "On: a web-OSINT pass (CVEs, advisories, the project's history) feeds recon — the ONLY networked step, never the live in-scope hosts. Off: fully offline.")),
+    h("div", { class: "grid-2", style: { marginTop: "14px" } },
+      field("Routing profile", profileEl, "Credential-free profile; explicit stage overrides below win."),
+      field("Stage backends", stageRunnerEl, "Comma-separated STAGE=BACKEND overrides; same guardrails apply.")),
+    h("div", { class: "grid-2", style: { marginTop: "14px" } },
+      field("Stage models", stageModelEl, "Comma-separated STAGE=MODEL overrides."),
+      field("Stage effort", stageEffortEl, "Claude-only native effort values.")),
+    codexRow, codexKeyRow, claudeRow, geminiRow, mistralRow, vibeAuthRow);
+  const advToggle = h("div", { class: "adv-toggle" }, h("span", { class: "chev" }, "▸"), "Advanced configuration");
+  advToggle.addEventListener("click", () => { advToggle.classList.toggle("open"); adv.classList.toggle("hidden"); });
+
+  const costBanner = h("div", { class: "banner warn hidden", style: { marginTop: "16px" } },
+    icon("alert", 18),
+    h("span", {}, h("strong", {}, "Real run. "), "Spends real tokens on the selected backend (Claude / Codex / Gemini / Mistral; a full audit can cost real money). Set a budget and confirm before starting."));
+
+  const demoBanner = h("div", { class: "banner demo-banner", style: { marginTop: "16px" } },
+    icon("info", 18),
+    h("span", {}, h("strong", {}, "Synthetic pipeline demo. "),
+      "It replays a fixed sample application to test Argo's workflow. Findings and verdicts do not describe the repository you select."));
+
+  const startBtn = h("button", { class: "btn btn-primary btn-lg", onclick: submit },
+    icon("play"), h("span", {}, "Run synthetic demo"));
+
+  // ---- "Let the AI choose" ---------------------------------------------------
+  let recoTarget = "standard";
+  const recoSeg = seg([["quick", "Quick"], ["standard", "Standard"], ["thorough", "Thorough"]], "standard", (v) => recoTarget = v);
+  const recoBanner = h("div", { class: "banner info hidden", style: { marginTop: "14px" } });
+  const recoBtn = h("button", { class: "btn btn-ghost", onclick: async () => {
+    recoBtn.disabled = true;
+    try {
+      const r = await api.recommend({ repo: form.repo || null, target: recoTarget });
+      applyConfig(r.config);
+      advToggle.classList.add("open"); adv.classList.remove("hidden");
+      mount(recoBanner, icon("sparkle"), h("span", {}, h("strong", {}, "Recommended. "), r.rationale));
+      recoBanner.classList.remove("hidden");
+    } catch (e) { toast(e.message, true); } finally { recoBtn.disabled = false; }
+  } }, icon("sparkle"), h("span", {}, "Recommend settings"));
+  const recoCard = h("div", { class: "card reco-card" },
+    h("div", { class: "spread" },
+      h("div", { class: "grow" }, h("h2", {}, "Let the pipeline choose"),
+        h("div", { class: "hint" }, "Pick how thorough this run should be. Models, budget and parallelism are set for you; the runner stays Demo until you choose a real backend.")),
+      recoSeg, recoBtn),
+    recoBanner);
+
+  function applyConfig(cfg) {
+    if (cfg.runner) setSeg(runnerSeg, cfg.runner);
+    const b = (cfg.budget_usd == null ? "" : String(cfg.budget_usd)); form.budget = b; budgetEl.value = b;
+    if (cfg.parallel) { form.parallel = cfg.parallel; parallelEl.value = cfg.parallel; }
+    const am = cfg.audit_model || (cfg.models && cfg.models.audit) || "";
+    form.audit_model = am; modelEl.value = am;
+    setSeg(calSeg, cfg.calibration ? "true" : "false");
+  }
+
+  async function submit() {
+    if (!form.repo.trim()) return toast("Add code to audit: a local folder path or a git URL", true);
+    // General mode => empty brief => local/personal source-only review (scope synthesized).
+    const brief = mode === "general" ? "" : form.brief;
+    const links = mode === "general" ? null : (form.links.trim() || null);
+    startBtn.disabled = true; startBtn.lastChild.textContent = "Starting…";
+    try {
+      const assignments = (text) => Object.fromEntries((text || "").split(",").map((x) => x.trim()).filter(Boolean).map((x) => x.split("=", 2)).filter((x) => x.length === 2 && x[0] && x[1]));
+      const cfg = { runner: form.runner, parallel: form.parallel, calibration: form.calibration,
+        budget_usd: form.budget ? Number(form.budget) : null, audit_model: form.audit_model.trim() || null,
+        codex_model: form.codex_model || null, codex_oss: form.codex_oss, codex_local_provider: form.codex_local_provider || null,
+        gemini_model: form.gemini_model || null, gemini_api_key: form.gemini_api_key || null,
+        claude_api_key: form.claude_api_key || null, codex_api_key: form.codex_api_key || null,
+        mistral_api_model: form.runner === "mistral-api" ? (form.mistral_model || null) : null,
+        mistral_vibe_model: form.runner === "mistral-vibe" ? (form.mistral_model || null) : null,
+        mistral_api_key: form.runner === "mistral-api" ? (form.mistral_key || null) : null,
+        mistral_vibe_auth: form.mistral_vibe_auth,
+        ...(form.runner === "mistral-vibe" && form.mistral_vibe_auth === "key" ? { mistral_vibe_api_key: form.mistral_key || null } : {}),
+        corroborate_enabled: isMistral(form.runner) ? false : null,
+        profile: form.profile || null, stage_runners: assignments(form.stage_runners),
+        models: assignments(form.stage_models), stage_effort: assignments(form.stage_effort) };
+      const research = isMistral(form.runner) ? false : form.research;   // no web tools on Mistral
+      const res = await api.startRun({ brief, repo: form.repo, links, dry_run: form.dry_run, research, config: cfg });
+      location.hash = `#/run/${encodeURIComponent(res.run_id)}`;
+    } catch (e) {
+      toast(e.message, true); startBtn.disabled = false;
+      startBtn.lastChild.textContent = form.runner === "mock" ? "Run synthetic demo" : "Start real audit";
+    }
+  }
+
+  // load persisted defaults (Settings page)
+  api.getSettings().then((s) => applyConfig({ runner: s.runner, budget_usd: s.budget_usd, parallel: s.parallel, audit_model: s.audit_model, calibration: s.calibration, models: s.models })).catch(() => {});
+
+  // ---- mode: general code audit (default) vs bug-bounty triage ----------------
+  const briefField = field("Program description", briefEl, "The bug-bounty program page — scope, rules and exclusions are extracted from it; it drives scope filtering and the submission drafts.");
+  const linksField = field("Reference links", linksEl, "Docs / security pages / advisory history. One URL per line. Optional.");
+  const uploadStatus = h("span", { class: "help", style: { margin: 0 } });
+  const fileEl = h("input", { type: "file", accept: ".zip,application/zip", style: { display: "none" },
+    onchange: async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      uploadStatus.textContent = `Uploading ${f.name}…`;
+      try {
+        const r = await api.uploadRepo(f);
+        form.repo = r.repo; repoEl.value = r.repo;
+        uploadStatus.textContent = `${r.name}: ${r.files} files extracted`;
+      } catch (err) { uploadStatus.textContent = ""; toast(err.message, true); }
+      e.target.value = "";                         // allow re-selecting the same file
+    } });
+  const uploadBtn = h("button", { type: "button", class: "btn btn-ghost", style: { padding: "8px 13px" },
+    onclick: () => fileEl.click() }, icon("upload"), h("span", {}, "Upload .zip"));
+  const repoControl = h("div", {}, repoEl,
+    h("div", { class: "row", style: { marginTop: "8px", alignItems: "center" } }, uploadBtn, uploadStatus, fileEl));
+  const repoField = field("Code to audit", repoControl,
+    "Use a local path, a git URL, or a .zip. Argo mounts source read-only and never pushes it. Cloud backends send source to their provider; a local model keeps it on-device.", true);
+  const screenSummary = h("div", { class: "banner info hidden", style: { marginTop: "12px" } });
+  const planSummary = h("div", { class: "banner hidden", style: { marginTop: "8px" } });
+  const screenBtn = h("button", { type: "button", class: "btn btn-ghost", onclick: async () => {
+    if (!form.repo.trim()) return toast("Add a local repository before screening", true);
+    screenBtn.disabled = true; screenBtn.textContent = "Screening…";
+    try {
+      const fp = await api.screen({ target: form.repo.trim() });
+      mount(screenSummary, h("strong", {}, "Target profile: "),
+        `${fp.languages && Object.keys(fp.languages).length ? Object.entries(fp.languages).map(([k,v]) => `${k} ${v}`).join(", ") : "no languages detected"} · ${fp.files} files · ${fp.approx_loc} LOC · surfaces: ${Object.keys(fp.surfaces || {}).join(", ") || "none"}`);
+      screenSummary.classList.remove("hidden");
+      const objective = form.budget ? "economy" : "balanced";
+      const plan = await api.plan({ target: form.repo.trim(), objective, max_cost: form.budget ? Number(form.budget) : null });
+      const cost = plan.estimated_cost_usd || {};
+      mount(planSummary, h("strong", {}, `Recommended ${plan.objective} plan: `),
+        `${(plan.enabled_stages || []).join(" → ")} · cost ${cost.low == null ? "unknown" : `$${cost.low.toFixed(2)}–$${cost.high.toFixed(2)}`} · ${plan.reasons.map((r) => r.code).join(", ") || "no special signals"}`);
+      planSummary.classList.remove("hidden");
+    } catch (e) { toast(e.message, true); } finally { screenBtn.disabled = false; screenBtn.textContent = "Screen & plan"; }
+  } }, "Screen & plan");
+  const screenCard = h("div", { class: "row", style: { marginTop: "10px", alignItems: "center" } }, screenBtn, screenSummary);
+  function setMode(m) {
+    mode = m;
+    briefField.classList.toggle("hidden", m === "general");
+    linksField.classList.toggle("hidden", m === "general");
+    genCard.classList.toggle("on", m === "general");
+    bountyCard.classList.toggle("on", m === "bounty");
+  }
+  const genCard = optionCard("General audit", "Audit any codebase — a local folder or repo, no program brief needed.", () => setMode("general"));
+  const bountyCard = optionCard("Bug bounty", "Triage a scoped program — paste the brief; scope, rules and submission drafts come from it.", () => setMode("bounty"));
+  const modeField = h("div", { class: "field" },
+    h("label", { class: "lbl" }, "Audit mode"),
+    h("div", { class: "opt-cards" }, genCard, bountyCard));
+  setMode("general");
+
+  return h("div", { class: "newrun" },
+    claudeDL, codexDL, geminiDL, mistralDL,
+    h("div", { class: "page-head" },
+      h("h1", {}, "Start an audit"),
+      h("p", {}, "Choose the code. Argo profiles it, hunts for vulnerabilities, and challenges every candidate before it becomes a finding. Live targets remain untouched.")),
+    h("div", { class: "card newrun-card" },
+      repoField,
+      screenCard, planSummary,
+      modeField,
+      briefField, linksField,
+      advToggle, adv, demoBanner, costBanner,
+      h("div", { class: "run-footer" },
+        h("span", { class: "faint", style: { fontSize: "13px" } }, "Demo data is synthetic. Choose a model backend for a real repository assessment."),
+        startBtn)),
+    recoCard);
+}
+
+function optionCard(title, desc, onclick) {
+  return h("div", { class: "opt-card", role: "button", tabindex: "0", onclick,
+    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onclick(); } } },
+    h("div", { class: "opt-title" }, title),
+    h("div", { class: "opt-desc" }, desc));
+}
+
+function field(label, control, help, required) {
+  return h("div", { class: "field" },
+    h("label", { class: "lbl" }, label, required ? h("span", { class: "req" }, " *") : null),
+    control, help ? h("div", { class: "help" }, help) : null);
+}
+function seg(options, current, onChange, dangerVals) {
+  const dangerSet = new Set(dangerVals || []);
+  const wrap = h("div", { class: "seg" });
+  options.forEach(([val, lab]) => {
+    const b = h("button", { "data-val": val, class: val === current ? "on" : "", onclick: () => {
+      [...wrap.children].forEach((c) => c.classList.remove("on", "danger"));
+      b.classList.add("on"); if (dangerSet.has(val)) b.classList.add("danger");
+      onChange(val);
+    } }, lab);
+    if (val === current && dangerSet.has(val)) b.classList.add("danger");
+    wrap.append(b);
+  });
+  return wrap;
+}
+const setSeg = (segEl, val) => { const b = segEl.querySelector(`[data-val="${val}"]`); if (b) b.click(); };
+
+// ------------------------------------------------------------------ SETTINGS view
+function settingsView() {
+  const STAGES = ["ingest", "research", "recon", "audit", "validate", "evidence", "report"];
+  const s = { runner: "mock", budget_usd: null, parallel: 3, audit_model: null, calibration: false, models: {} };
+
+  const runnerSeg = seg([["mock", "Demo · synthetic"], ["headless", "Claude"], ["codex", "Codex"], ["gemini", "Gemini"], ["mistral-api", "Mistral API"], ["mistral-vibe", "Mistral Vibe"]], "mock", (v) => s.runner = v, ["headless", "codex", "gemini", "mistral-api", "mistral-vibe"]);
+  const calSeg = seg([["false", "Off"], ["true", "Calibration"]], "false", (v) => s.calibration = v === "true");
+  const budgetEl = h("input", { type: "number", min: "0", placeholder: "none", oninput: (e) => s.budget_usd = e.target.value ? Number(e.target.value) : null });
+  const parallelEl = h("input", { type: "number", min: "1", max: "16", value: "3", oninput: (e) => s.parallel = +e.target.value || 3 });
+  const auditEl = h("input", { type: "text", list: "dl-set-models", placeholder: "default", oninput: (e) => s.audit_model = e.target.value.trim() || null });
+  const setDL = h("datalist", { id: "dl-set-models" });
+  api.models().then((mm) => {
+    const cl = (mm.backends || []).find((b) => b.id === "headless");
+    (cl ? cl.models : []).forEach((m) => setDL.append(h("option", { value: m.id }, m.label || "")));
+  }).catch(() => {});
+  const modelEls = {};
+  STAGES.forEach((st) => { modelEls[st] = h("input", { type: "text", list: "dl-set-models", placeholder: "default", oninput: (e) => { const v = e.target.value.trim(); if (v) s.models[st] = v; else delete s.models[st]; } }); });
+
+  const saveBtn = h("button", { class: "btn btn-primary", onclick: async () => {
+    saveBtn.disabled = true;
+    try { await api.saveSettings({ runner: s.runner, budget_usd: s.budget_usd, parallel: s.parallel, audit_model: s.audit_model, calibration: s.calibration, models: s.models }); toast("Settings saved"); }
+    catch (e) { toast(e.message, true); } finally { saveBtn.disabled = false; }
+  } }, "Save defaults");
+
+  function apply(d) {
+    s.runner = d.runner || "mock"; setSeg(runnerSeg, s.runner);
+    s.budget_usd = d.budget_usd ?? null; budgetEl.value = s.budget_usd ?? "";
+    s.parallel = d.parallel || 3; parallelEl.value = s.parallel;
+    s.audit_model = d.audit_model || null; auditEl.value = s.audit_model || "";
+    s.calibration = !!d.calibration; setSeg(calSeg, s.calibration ? "true" : "false");
+    s.models = d.models || {}; STAGES.forEach((st) => { modelEls[st].value = (s.models && s.models[st]) || ""; });
+  }
+  api.getSettings().then(apply).catch((e) => toast(e.message, true));
+
+  return h("div", { class: "settings-page" },
+    setDL,
+    h("div", { class: "page-head" }, h("h1", {}, "Settings"),
+      h("p", {}, "Defaults for new audits. Every run can still override them, and secrets remain per-run.")),
+    h("section", { class: "settings-section" },
+      h("div", { class: "settings-copy" },
+        h("h2", {}, "Run defaults"),
+        h("p", {}, "Set the ordinary starting point. Demo spends nothing, but only replays synthetic fixtures; choose a model backend for real audits.")),
+      h("div", { class: "settings-panel" },
+        h("div", { class: "grid-2" },
+          field("Default runner", runnerSeg, "Demo is a pipeline test, not a repository assessment. Real backends spend tokens; provider keys stay per-run."),
+          field("Default budget (USD)", budgetEl, "Per-run ceiling (stops new sessions once reached).")),
+        h("div", { class: "grid-2", style: { marginTop: "16px" } },
+          field("Parallel sessions", parallelEl),
+          field("Calibration", calSeg, "Force the strongest audit model.")),
+        field("Audit model override", auditEl, "Shortcut for the audit stage."))),
+    h("section", { class: "settings-section" },
+      h("div", { class: "settings-copy" },
+        h("h2", {}, "Model routing"),
+        h("p", {}, "Leave fields blank to let Argo use its stage-aware defaults.")),
+      h("div", { class: "settings-panel" },
+        h("div", { class: "grid-2" },
+          ...STAGES.map((st) => field(st[0].toUpperCase() + st.slice(1), modelEls[st]))))),
+    h("div", { class: "settings-actions" }, saveBtn));
+}
+
+// ------------------------------------------------------------------- RUN view
+function runView(id) {
+  const stateChipHost = h("span", {});
+  const costHost = h("span", {});
+  const modeBannerHost = h("div", {});
+  const cancelBtn = h("button", { class: "btn btn-danger hidden", onclick: async () => {
+    cancelBtn.disabled = true; cancelBtn.textContent = "Cancelling…";
+    try { await api.cancelRun(id); toast("Cancelling — stopping the active session"); }
+    catch (e) { toast(e.message, true); cancelBtn.disabled = false; cancelBtn.textContent = "Cancel"; }
+  } }, "Cancel");
+
+  const tlHost = h("div", { class: "timeline" });
+  const artHost = h("div", { class: "artifacts" });
+  const resultsHost = h("div", { style: { marginTop: "26px" } });
+
+  let resultsRendered = false;
+
+  function renderStatus(st) {
+    if (isDemoRun(st)) {
+      mount(modeBannerHost, h("div", { class: "banner demo-banner run-demo" },
+        icon("info", 18),
+        h("span", {}, h("strong", {}, "Synthetic fixture run. "),
+          "This screen exercises the pipeline with fixed demo data. It is not a security assessment of the selected repository.")));
+    } else if (st.runner) mount(modeBannerHost);
+    mount(stateChipHost, stateChip(st.state));
+    mount(costHost, costChip(st.cost_usd));
+    cancelBtn.classList.toggle("hidden", !["starting", "running"].includes(st.state));
+    renderTimeline(tlHost, st.stages || []);
+    renderArtifacts(artHost, st.artifacts || {});
+    if (["completed", "failed", "cancelled"].includes(st.state) && !resultsRendered) {
+      resultsRendered = true;
+      renderResults(resultsHost, id, st);
+    }
+  }
+
+  api.getRun(id).then(renderStatus).catch((e) => toast(e.message, true));
+  const close = streamRun(id, renderStatus, (st, err) => { if (err) toast("Live updates ended", true); if (st) renderStatus(st); });
+  teardown = () => close();
+
+  return h("div", {},
+    h("div", { class: "page-head" },
+      h("div", { class: "spread" },
+        h("h1", { class: "grow" }, "Audit run"),
+        costHost, stateChipHost, cancelBtn),
+      h("p", { class: "mono", style: { fontSize: "13px" } }, id)),
+    modeBannerHost,
+    h("div", { class: "card evidence-card" },
+      h("div", { class: "evidence-intro" },
+        h("h2", {}, "Evidence chain"),
+        h("p", {}, "Candidates move forward only when the next stage can support them. Missing proof remains visible instead of becoming certainty.")),
+      tlHost, artHost),
+    resultsHost);
+}
+
+function renderTimeline(host, stages) {
+  const prog = h("div", { class: "progress" });
+  const steps = stages.map((s) => h("div", { class: `step ${s.state}` },
+    h("div", { class: "node", title: s.state, "aria-label": `${s.name}: ${s.state}` }, s.state === "failed" ? "!" : ""),
+    h("div", { class: "lab" }, s.name)));
+  const n = stages.length;
+  let lastActive = -1;
+  stages.forEach((s, i) => { if (s.state === "done" || s.state === "running") lastActive = i; });
+  const frac = n > 1 && lastActive >= 0 ? lastActive / (n - 1) : 0;
+  prog.style.width = `calc((100% - 56px) * ${frac})`;
+  mount(host, prog, ...steps);
+}
+
+function renderArtifacts(host, a) {
+  const cards = [
+    ["Scope", a.scope ? "ready" : "—", a.scope],
+    ["Repo profile", a.repo_profile ? "ready" : "—", a.repo_profile],
+    ["Prompts", a.prompts || 0, a.prompts > 0],
+    ["Findings files", a.findings || 0, a.findings > 0],
+    ["Validated", a.validated_findings ? "ready" : "—", a.validated_findings],
+    ["Report", a.report ? "ready" : "—", a.report],
+    ["Drafts", a.drafts || 0, a.drafts > 0],
+  ];
+  mount(host, ...cards.map(([k, v, on]) =>
+    h("div", { class: "acard" + (on ? " on" : "") },
+      h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)))));
+}
+
+// ------------------------------------------------------- results (completed run)
+function renderResults(host, id, st) {
+  if (st.state === "failed") {
+    const err = st.error || "Unknown error";
+    const budget = /budget|ceiling|exceed|cost cap/i.test(err);
+    return mount(host, h("div", { class: "banner danger" }, icon("alert", 18),
+      h("span", {}, h("strong", {}, budget ? "Run stopped — budget reached. " : "Run failed. "), err,
+        budget ? h("div", { class: "help", style: { marginTop: "4px" } }, "Raise the per-run budget in Advanced and start a new run.") : null)));
+  }
+  if (st.state === "cancelled") {
+    return mount(host, h("div", { class: "banner info" }, "Run cancelled."));
+  }
+  if (!st.artifacts || !st.artifacts.report) {
+    // dry-run or report not produced: show prompts instead
+    const panel = h("div", { class: "card" });
+    mount(host, h("div", { class: "tabs" },
+      h("button", { class: "on" }, "Generated prompts")), panel);
+    api.prompts(id).then((ps) => mount(panel, ...ps.map(promptBlock))).catch((e) => toast(e.message, true));
+    return;
+  }
+
+  const tabs = ["Report", "Findings", "Questions", "Fixes", "Chat", "Drafts", "Artifacts"];
+  const panel = h("div", {});
+  const cache = {};
+  const tabBar = h("div", { class: "tabs" });
+  const simulated = isDemoRun(st);
+  let selection = 0;   // a slow tab must not overwrite one the user selected after it
+  function select(name, btn) {
+    const mine = ++selection;
+    [...tabBar.children].forEach((c) => c.classList.remove("on")); btn.classList.add("on");
+    mount(panel, h("div", { class: "skeleton", style: { height: "120px" } }));
+    loadTab(name, id, cache, simulated)
+      .then((node) => { if (mine === selection) mount(panel, node); })
+      .catch((e) => { if (mine === selection) mount(panel, h("div", { class: "empty" }, e.message)); });
+  }
+  tabs.forEach((name, i) => {
+    const b = h("button", { class: i === 0 ? "on" : "", onclick: () => select(name, b) }, name);
+    tabBar.append(b);
+  });
+  mount(host, h("div", { class: "card" }, tabBar, panel));
+  select("Report", tabBar.firstChild);
+}
+
+async function loadTab(name, id, cache, simulated = false) {
+  if (name === "Chat") return chatPanel(id);
+  if (name === "Fixes") return fixesPanel(id);
+  if (name === "Questions") return questionsPanel(id, simulated);
+  if (name === "Report") {
+    const md = cache.report || (cache.report = await api.report(id));
+    const div = h("div", { class: "md" });
+    div.innerHTML = renderMd(md);
+    div.querySelectorAll("h1").forEach((heading) => {
+      const replacement = document.createElement("h2");
+      replacement.className = "report-title";
+      replacement.innerHTML = heading.innerHTML;
+      heading.replaceWith(replacement);
+    });
+    return div;
+  }
+  if (name === "Findings") {
+    const doc = cache.validated || (cache.validated = await api.validated(id));
+    return findingsTable(doc, simulated);
+  }
+  if (name === "Drafts") {
+    const ds = cache.drafts || (cache.drafts = await api.drafts(id));
+    if (!ds.length) return h("div", { class: "empty" }, h("div", { class: "big" }, "No submission drafts"),
+      simulated ? "Demo drafts are generated only for fixture-confirmed results." : "Drafts are produced only for confirmed findings.");
+    return h("div", {}, ...ds.map((d) => {
+      const body = h("div", { class: "md", style: { marginTop: "8px" } });
+      body.innerHTML = renderMd(d.content);
+      return h("div", { class: "detail" }, h("h3", {}, d.name), body);
+    }));
+  }
+  // Artifacts
+  const buttons = [["Scope", "scope", "json"], ["Repo profile", "repo_profile", "json"],
+    ["Synthesis notes", "synthesis_notes", "md"], ["Validated findings", "validated_findings", "json"]];
+  const out = h("div", { style: { marginTop: "12px" } });
+  const bar = h("div", { class: "row" }, ...buttons.map(([lab, key, kind]) =>
+    h("button", { class: "btn btn-ghost", onclick: async () => {
+      try {
+        const data = await api.artifact(id, key);
+        if (kind === "md" && typeof data === "string") {
+          const d = h("div", { class: "md" }); d.innerHTML = renderMd(data);
+          mount(out, h("div", { class: "detail" }, d));
+        } else {
+          mount(out, h("div", { class: "detail" }, h("pre", { class: "mono", style: { whiteSpace: "pre-wrap", fontSize: "12.5px", margin: 0 } }, JSON.stringify(data, null, 2))));
+        }
+      } catch (e) { toast(e.message, true); }
+    } }, lab)));
+  return h("div", {}, bar, out);
+}
+
+function findingsTable(doc, simulated = false) {
+  const findings = (doc.findings || []).slice().sort((a, b) =>
+    sevRank(effSev(b)) - sevRank(effSev(a)) || confRank(effConf(b)) - confRank(effConf(a)));
+  const stats = doc.stats || {};
+  const active = new Set(SEVERITIES);
+  const wrap = h("div", {});
+
+  const summary = h("div", { class: "row" },
+    statChip(simulated ? "Fixture survivors" : "Survivors", findings.length),
+    statChip(simulated ? "Simulated confirmed" : "Confirmed", findings.filter((f) => verdict(f) === "confirmed").length),
+    statChip(simulated ? "Fixture needs runtime" : "Needs runtime check", findings.filter((f) => verdict(f) === "needs_runtime_verification").length),
+    statChip(simulated ? "Fixture dropped" : "Dropped", (doc.dropped || []).length));
+
+  const sevMap = countBy(findings, (f) => effSev(f));
+  const sevData = SEVERITIES.filter((s) => sevMap.get(s)).map((s) => ({ label: s, value: sevMap.get(s), color: SEV_COLOR[s] }));
+  const head = h("div", { class: "findings-head" },
+    findings.length ? donut(sevData, { noLegend: true, size: 132, thickness: 22, centerBottom: "findings" }) : null,
+    summary);
+
+  const filters = h("div", { class: "filters" }, ...SEVERITIES.map((s) => {
+    const c = h("span", { class: `pill sev-${s}`, onclick: () => { active.has(s) ? active.delete(s) : active.add(s); c.classList.toggle("off", !active.has(s)); draw(); } },
+      h("span", { class: "dot" }), s);
+    return c;
+  }));
+
+  const tableHost = h("div", {});
+  const detailHost = h("div", {});
+
+  function draw() {
+    const rows = findings.filter((f) => active.has(effSev(f)));
+    if (!rows.length) return mount(tableHost, h("div", { class: "empty" }, "No findings match the filter."));
+    const table = h("table", { class: "findings" },
+      h("thead", {}, h("tr", {}, ...["#", "Finding", "Severity", simulated ? "Fixture result" : "Verdict", "Location"].map((t) => h("th", {}, t)))),
+      h("tbody", {}, ...rows.map((f) => {
+        const tr = h("tr", { class: "frow", onclick: () => mount(detailHost, findingDetail(f, simulated)) },
+          h("td", {}, h("span", { class: "fid" }, f.id)),
+          h("td", {}, h("div", { class: "ftitle" }, f.title), h("div", { class: "fid" }, f.cwe || "")),
+          h("td", {}, sevPill(effSev(f))),
+          h("td", {}, resultVerdictPill(f, simulated)),
+          h("td", {}, h("span", { class: "floc" }, primaryRef(f))));
+        return tr;
+      })));
+    mount(tableHost, table);
+  }
+  if (!findings.length) {
+    mount(wrap, head, h("div", { class: "empty" }, h("div", { class: "big" }, "No findings survived validation")));
+    return wrap;
+  }
+  mount(wrap, head, filters, tableHost, detailHost);
+  draw();
+  return wrap;
+}
+
+function findingDetail(f, simulated = false) {
+  const v = f.validation || {};
+  const block = (k, val, mono) => val ? h("div", { class: "block" }, h("div", { class: "bk" }, k), h("div", { class: "bv" + (mono ? " mono" : "") }, val)) : null;
+  return h("div", { class: "detail" },
+    h("div", { class: "spread" }, h("h3", { class: "grow" }, f.title), sevPill(effSev(f)), resultVerdictPill(f, simulated)),
+    h("div", { class: "row", style: { marginTop: "8px" } },
+      h("span", { class: "pill" }, f.id), h("span", { class: "pill" }, f.cwe || ""),
+      f.owasp ? h("span", { class: "pill" }, f.owasp) : null),
+    block("Affected", (f.affected || []).join("\n"), true),
+    block("Vulnerable flow", f.vulnerable_flow, true),
+    block("Why vulnerable", f.why_vulnerable),
+    block("Exploit scenario", f.exploit_scenario),
+    block("Impact", f.impact),
+    block("Validated data flow", v.surviving_data_flow, true),
+    block("Validation rationale", v.rationale),
+    block("Recommended fix (guidance)", f.recommended_fix),
+    block("Live verification plan", f.live_verification_plan));
+}
+
+const statChip = (k, v) => h("div", { class: "acard", style: { minWidth: "120px", flex: "0 0 auto" } },
+  h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)));
+
+function promptBlock(p) {
+  const body = h("div", { class: "md", style: { marginTop: "8px" } });
+  body.innerHTML = renderMd(p.content);
+  return h("div", { class: "detail" }, h("h3", { class: "mono", style: { fontSize: "14px" } }, p.name), body);
+}
+
+// ------------------------------------------------------------------ HISTORY
+function historyView() {
+  const host = h("div", { class: "runlist" }, h("div", { class: "skeleton", style: { height: "70px" } }));
+  api.listRuns().then((runs) => {
+    if (!runs.length) return mount(host, h("div", { class: "empty" },
+      h("div", { class: "big" }, "No runs yet"), h("a", { href: "#/new" }, "Start your first audit →")));
+    const complete = runs.filter((r) => r.state === "completed").length;
+    const active = runs.filter((r) => !["completed", "failed", "cancelled"].includes(r.state)).length;
+    const demos = runs.filter(isDemoRun).length;
+    const real = runs.length - demos;
+    mount(host,
+      h("div", { class: "stat-row history-summary" },
+        statTile({ label: "Real audits", value: real, sub: "model-backed runs", accent: true }),
+        statTile({ label: "Synthetic demos", value: demos, sub: "excluded from metrics" }),
+        statTile({ label: "Completed", value: complete, sub: "all run types" }),
+        statTile({ label: "In progress", value: active, sub: "currently running" })),
+      h("div", { class: "list-heading" },
+        h("h2", {}, "Audits"),
+        h("span", {}, "Newest first")),
+      ...runs.map((r) => h("div", { class: "runrow", onclick: () => location.hash = `#/run/${encodeURIComponent(r.run_id)}` },
+        h("div", { class: "grow" },
+          h("div", { class: "rprog" }, r.program_name || "(unnamed run)"),
+          h("div", { class: "rid" }, r.run_id)),
+        isDemoRun(r) ? h("span", { class: "pill demo-pill" }, "synthetic demo") : null,
+        r.archetype ? h("span", { class: "pill" }, ARCH_LABELS[r.archetype] || r.archetype) : null,
+        r.target_type ? h("span", { class: "pill" }, r.target_type) : null,
+        costChip(r.cost_usd), stateChip(r.state))));
+  }).catch((e) => mount(host, h("div", { class: "empty" }, e.message)));
+  return h("div", {},
+    h("div", { class: "page-head" }, h("h1", {}, "Run history"),
+      h("p", {}, "Every run is kept under runs/. Click one to reopen its live status or results.")),
+    host);
+}
+
+// ------------------------------------------------------------------ chat panel
+function chatPanel(id) {
+  const root = h("div", {});
+  const list = h("div", { class: "chat-list" });
+  const input = h("textarea", { class: "chat-input", rows: 2,
+    placeholder: "Ask about the analysis — “why didn't you find X?”, “explain SQLI-001”, “generate a test for CWE-89”…" });
+  let busy = false;
+
+  const md = (t) => { const d = h("div", { class: "md" }); d.innerHTML = renderMd(t); return d; };
+  const bubble = (role, body) => h("div", { class: `chat-msg ${role}` },
+    h("div", { class: "chat-role" }, role === "user" ? "You" : "Analyst"), h("div", { class: "chat-body" }, body));
+  const scroll = () => { list.scrollTop = list.scrollHeight; };
+  const addUser = (t) => { list.append(bubble("user", h("div", { class: "chat-plain" }, t))); scroll(); };
+  const addAssistant = (t) => { list.append(bubble("assistant", md(t))); scroll(); };
+
+  async function send(text) {
+    text = (text || input.value).trim();
+    if (!text || busy) return;
+    busy = true; sendBtn.disabled = true; input.value = "";
+    addUser(text);
+    // Live activity (tool calls / interim messages) while the analyst works, on backends that
+    // expose it; otherwise the spinner alone, exactly as before.
+    const status = h("span", {}, " analyzing…");
+    const trail = h("div", { class: "chat-activity mono" });
+    const pending = bubble("assistant", h("div", {}, h("span", {}, h("span", { class: "spin" }), status), trail));
+    list.append(pending); scroll();
+    let steps = 0;
+    const onActivity = (t) => {
+      steps += 1;
+      status.textContent = ` working… ${steps} step${steps === 1 ? "" : "s"}`;
+      trail.append(h("div", { class: "chat-activity-line" }, t));
+      while (trail.childElementCount > 6) trail.firstChild.remove();
+      scroll();
+    };
+    try {
+      const res = await streamChat(id, text, onActivity);
+      pending.remove(); addAssistant(res.reply);
+      const vc = res.validated_candidate;
+      if (vc && vc.verdict) {                 // B1: a re-validated "why didn't you find X" candidate
+        list.append(h("div", { class: "detail" },
+          h("div", { class: "row", style: { alignItems: "center" } },
+            h("strong", { class: "mono", style: { fontSize: "13px" } }, "Re-validated candidate " + (vc.finding_id || "")),
+            verdictPill(vc.verdict)),
+          vc.rationale ? h("div", { class: "help", style: { marginTop: "6px" } }, vc.rationale) : null));
+        scroll();
+      }
+      if (res.generated && res.generated.length) {
+        const files = await api.generated(id).catch(() => []);
+        res.generated.forEach((name) => {
+          const f = files.find((x) => x.name === name);
+          list.append(h("div", { class: "detail" },
+            h("h3", { class: "mono", style: { fontSize: "13px", display: "flex", alignItems: "center", gap: "6px" } }, icon("plus", 13), name),
+            h("pre", { class: "mono", style: { whiteSpace: "pre-wrap", fontSize: "12.5px", margin: 0 } }, f ? f.content : "")));
+        });
+        scroll();
+      }
+    } catch (e) {
+      pending.remove(); addAssistant(e.message); toast(e.message, true);
+    } finally { busy = false; sendBtn.disabled = false; }
+  }
+
+  const chip = (label, prefill) => h("span", { class: "pill", style: { cursor: "pointer" },
+    onclick: () => { input.value = prefill; input.focus(); } }, label);
+  const chips = h("div", { class: "filters" },
+    chip("Explain a finding", "Explain finding "),
+    chip("Why didn't you find…", "Why didn't the audit find "),
+    chip("Generate tests for a CWE", "Generate a test suite that would catch "),
+    chip("What did you deprioritize?", "What surfaces did you deprioritize, and why?"));
+  const sendBtn = h("button", { class: "btn btn-primary", onclick: () => send() }, "Send");
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
+
+  api.getChat(id).then((msgs) => {
+    if (!msgs.length) list.append(h("div", { class: "empty" },
+      h("div", { class: "big" }, "Ask the analyst anything about this run"),
+      "It has the full context + read-only repo. Try a suggestion below."));
+    msgs.forEach((m) => (m.role === "user" ? addUser(m.content) : addAssistant(m.content)));
+  }).catch((e) => toast(e.message, true));
+
+  mount(root, list, chips, h("div", { class: "chat-inputrow" }, input, sendBtn),
+    h("div", { class: "help" }, "Cmd/Ctrl+Enter to send. Chat uses the run's runner (synthetic in Demo), is read-only on the repo, and writes any generated tests to a separate folder — never the target."));
+  return root;
+}
+
+// backend ids -> display labels (mirrors GET /models' backend list)
+const BACKEND_LABELS = { headless: "Claude", codex: "Codex", gemini: "Gemini", "mistral-api": "Mistral API", "mistral-vibe": "Mistral Vibe", mock: "Demo" };
+
+// ------------------------------------------------------------------ fixes panel (Phase 6)
+// F5 private review questions: architecture/business facts the source cannot settle. Answering is
+// free (no model call) and marks affected verdicts stale; re-validation spends model calls.
+function questionsPanel(id, simulated = false) {
+  const root = h("div", {});
+  const body = h("div", {});
+  const STATUS = {
+    needs_context: ["chip warn", "alert", "needs an answer"],
+    answered_pending_revalidation: ["chip warn", "info", "answered — re-validation pending"],
+    resolved: ["chip ok", "check", "resolved"],
+  };
+  const statusChip = (s) => {
+    const [cls, ic, label] = STATUS[s] || ["pill", "alert", s || "unknown"];
+    return h("span", { class: cls }, icon(ic, 13), h("span", {}, label));
+  };
+
+  async function act(btn, busy, fn) {
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = busy;
+    try { render(await fn()); } catch (e) { toast(e.message, true); }
+    finally { btn.disabled = false; btn.textContent = label; }
+  }
+
+  function answerForm(q) {
+    const answerEl = h("textarea", { placeholder: "Concise architecture / business answer (max 2000 chars)", maxLength: 2000, style: { minHeight: "70px" } });
+    const provEl = h("input", { type: "text", placeholder: "Source: owner reply, design doc, ticket… (required)", maxLength: 500 });
+    const btn = h("button", { class: "btn btn-primary", onclick: () => {
+      if (!answerEl.value.trim() || !provEl.value.trim()) return toast("Answer and provenance are both required", true);
+      act(btn, "Saving…", () => api.answerQuestion(id, q.id, answerEl.value, provEl.value));
+    } }, "Save answer");
+    return h("div", { style: { marginTop: "10px" } },
+      field("Answer", answerEl), field("Provenance", provEl), btn);
+  }
+
+  function card(q) {
+    return h("div", { class: "detail" },
+      h("div", { class: "row", style: { justifyContent: "space-between", alignItems: "center", gap: "8px" } },
+        h("h3", { style: { fontSize: "14px", margin: 0 } }, q.question), statusChip(q.status)),
+      h("div", { class: "help" }, q.why_source_cannot_settle),
+      (q.affected_finding_ids || []).length
+        ? h("div", { class: "row", style: { gap: "6px", flexWrap: "wrap", marginTop: "6px" } },
+            ...q.affected_finding_ids.map((f) => h("span", { class: "pill mono" }, f)))
+        : null,
+      q.answer
+        ? h("div", { class: "banner info", style: { marginTop: "10px" } },
+            h("span", {}, h("strong", {}, "Answer: "), q.answer, h("br"), h("em", {}, "Source: " + (q.answer_provenance || "—"))))
+        : answerForm(q));
+  }
+
+  function render(doc) {
+    const qs = (doc && doc.questions) || [];
+    if (!doc) {
+      const build = h("button", { class: "btn btn-primary", onclick: () => act(build, "Building…", () => api.buildQuestions(id)) },
+        "Build review questions");
+      return mount(body, h("div", { class: "empty" },
+        h("div", { class: "big" }, "No review questions for this run"),
+        "Build the queue from this run's findings: deterministic, no model call. It lists architecture facts the source cannot settle.",
+        h("div", { style: { marginTop: "12px" } }, build)));
+    }
+    if (!qs.length)
+      return mount(body, h("div", { class: "empty" }, h("div", { class: "big" }, "No open architecture questions"),
+        "Nothing in this run's findings depends on context the source cannot settle."));
+    const pending = qs.filter((q) => q.status === "answered_pending_revalidation").length;
+    const reval = h("button", { class: "btn btn-primary", onclick: () => {
+      if (!simulated && !confirm("Re-validate the affected findings now? This spends model calls on the run's backend.")) return;
+      act(reval, "Re-validating…", async () => (await api.revalidateContext(id, {})).questions);
+    } }, `Re-validate ${pending} answered`);
+    const head = h("div", { class: "row", style: { justifyContent: "space-between", alignItems: "center", marginBottom: "10px", gap: "12px" } },
+      h("div", { class: "help", style: { margin: 0 } },
+        "Private queue: answers are context with provenance, never technical proof, and never appear in the report. An answer marks affected verdicts stale and withholds their drafts until re-validation."),
+      pending ? reval : null);
+    mount(body, head, ...qs.map(card));
+  }
+
+  mount(root, body);
+  mount(body, h("div", { class: "skeleton", style: { height: "100px" } }));
+  api.questions(id).then(render).catch((e) => mount(body, h("div", { class: "empty" }, e.message)));
+  return root;
+}
+
+function fixesPanel(id) {
+  const root = h("div", {});
+  const body = h("div", {});
+
+  const verdict = (v) => {
+    if (!v) return h("span", { class: "pill" }, "not verified");
+    if (v.verified) return h("span", { class: "chip ok" }, icon("check", 13), h("span", {}, "verified — compiles, no new errors"));
+    const why = v.reason || (v.applied ? "build/verify failed" : "did not apply");
+    return h("span", { class: "chip warn" }, icon("alert", 13), h("span", {}, why));
+  };
+
+  function render(report, patches) {
+    const byId = Object.fromEntries((patches || []).map((p) => [p.name, p.content]));
+    if (!report || !report.fixes || !report.fixes.length)
+      return mount(body, h("div", { class: "empty" },
+        h("div", { class: "big" }, "No fixes proposed yet"),
+        "Generate proposed patches for the confirmed findings. Each is verified on an isolated copy — the target repo is never modified."));
+    const head = h("div", { class: "banner info" },
+      `${report.patched} patch(es) proposed · ${report.verified}/${report.patched} verified (apply + compile + no new errors). Detection-only: these are proposals for a maintainer, never auto-applied or submitted.`);
+    const cards = report.fixes.map((f) => {
+      const diff = f.patch ? byId[f.patch] : null;
+      return h("div", { class: "detail" },
+        h("div", { class: "row", style: { justifyContent: "space-between", alignItems: "center" } },
+          h("h3", { class: "mono", style: { fontSize: "13px", margin: 0 } }, `${f.finding_id} — ${f.title || ""}`),
+          verdict(f.verify)),
+        f.primary_file ? h("div", { class: "rid" }, f.primary_file) : null,
+        diff ? h("pre", { class: "mono diff", style: { whiteSpace: "pre-wrap", fontSize: "12.5px", marginTop: "8px" } }, diff)
+             : h("div", { class: "help" }, "No patch produced for this finding."),
+        f.verify && f.verify.new_errors && f.verify.new_errors.length
+          ? h("div", { class: "help", style: { color: "var(--danger, #e0556b)" } },
+              "Introduced errors: " + f.verify.new_errors.join(" · "))
+          : null);
+    });
+    mount(body, head, ...cards);
+  }
+
+  async function load(generate) {
+    mount(body, h("div", { class: "skeleton", style: { height: "100px" } }));
+    try {
+      if (generate) { genBtn.disabled = true; genBtn.textContent = "Generating + verifying…"; }
+      const report = generate ? await api.generateFixes(id, { verify: true })
+                              : await api.getFixes(id);
+      const patches = await api.patches(id).catch(() => []);
+      render(report, patches);
+    } catch (e) {
+      mount(body, h("div", { class: "empty" }, e.message));
+    } finally {
+      genBtn.disabled = false; genBtn.textContent = "Propose & verify fixes";
+    }
+  }
+
+  const genBtn = h("button", { class: "btn btn-primary", onclick: () => load(true) }, "Propose & verify fixes");
+  mount(root,
+    h("div", { class: "row", style: { justifyContent: "space-between", alignItems: "center", marginBottom: "10px" } },
+      h("div", { class: "help", style: { margin: 0 } },
+        "Proposes a root-cause patch per confirmed finding and verifies each on an isolated copy (applies? compiles? no new errors?). Demo output is synthetic; real runs use their selected backend."),
+      genBtn),
+    body);
+  load(false);
+  return root;
+}
+
+// ------------------------------------------------------------------ knowledge view
+function knowledgeView() {
+  const LABELS = { ...ARCH_LABELS, general: "General (always-applicable)" };
+  const host = h("div", {}, h("div", { class: "skeleton", style: { height: "140px" } }));
+  api.knowledge().then((idx) => {
+    const cards = Object.entries(idx).map(([k, items]) => h("div", { class: "card" },
+      h("h2", {}, LABELS[k] || k),
+      h("div", { class: "kgrid" }, ...(items || []).map((it) => h("div", { class: "krow" },
+        h("span", { class: "pill" }, it.cwe || ""),
+        h("div", {}, h("div", { class: "kname" }, it.name || ""),
+          it.note ? h("div", { class: "knote" }, it.note) : null))))));
+    mount(host, ...cards);
+  }).catch((e) => mount(host, h("div", { class: "empty" }, e.message)));
+  return h("div", {},
+    h("div", { class: "page-head" }, h("h1", {}, "Vulnerability index"),
+      h("p", {}, "The bug classes that most often hide real findings, by software archetype. This curated index is injected into recon as reference context — the agent still classifies the target and discovers on its own.")),
+    host);
+}
+
+// ------------------------------------------------------------------ costs view
+function costsView() {
+  const usd = (n) => "$" + Number(n || 0).toFixed(4);
+  const kv = (k, v) => h("div", { class: "acard" }, h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)));
+  const dataTable = (headers, rows) => rows.length
+    ? h("div", { class: "table-scroll" }, h("table", { class: "findings data-table" },
+        h("thead", {}, h("tr", {}, ...headers.map((x) => h("th", {}, x)))),
+        h("tbody", {}, ...rows.map((r) => h("tr", {}, ...r.map((c, i) =>
+          h("td", { class: i === 0 ? "floc" : "" }, String(c))))))))
+    : h("div", { class: "empty" }, "No data yet — run a real (headless) audit to populate this.");
+  const cardOf = (title, body) => h("div", { class: "card" }, h("h2", {}, title),
+    h("div", { style: { marginTop: "12px" } }, body));
+
+  const host = h("div", {}, h("div", { class: "skeleton", style: { height: "120px" } }));
+  Promise.all([api.costs(), api.models().catch(() => null)]).then(([c, mm]) => {
+    const t = c.totals;
+    const usd2 = (n) => "$" + Number(n || 0).toFixed(2);
+    const head = h("div", { class: "stat-row" },
+      statTile({ label: "Total spent", value: usd2(t.cost_usd), sub: `${t.runs} runs` }),
+      statTile({ label: "Avg / run", value: usd(t.avg_cost_per_run), sub: "mean cost", accent: true }),
+      statTile({ label: "Runs", value: t.runs, sub: "with cost data" }),
+      statTile({ label: "LLM calls", value: t.calls, sub: "total" }));
+    const costCharts = h("div", { class: "dash-grid" },
+      chartCard("Cost by model", barsH((c.by_model || []).slice(0, 8).map((m) => ({ label: m.model, value: m.cost_usd })), { color: "var(--accent)", fmt: usd2 }), "top 8"),
+      chartCard("Cost by stage", barsH((c.by_stage || []).map((s) => ({ label: s.stage, value: s.cost_usd })), { color: "var(--primary)", fmt: usd2 })));
+    const cheapest = c.cheapest_model_per_1k_output
+      ? h("div", { class: "banner info", style: { marginTop: "16px", marginBottom: "4px" } },
+          icon("bolt", 16),
+          h("span", {}, "Most cost-effective by output tokens: ", h("strong", {}, c.cheapest_model_per_1k_output)))
+      : null;
+    const models = dataTable(["Model", "Calls", "Cost", "$/call", "$/1k out", "%"],
+      c.by_model.map((m) => [m.model, m.calls, usd(m.cost_usd), usd(m.avg_cost_per_call),
+        m.cost_per_1k_output == null ? "—" : usd(m.cost_per_1k_output), m.pct_of_total + "%"]));
+    const stages = dataTable(["Stage", "Calls", "Cost", "$/call", "% of total"],
+      c.by_stage.map((s) => [s.stage, s.calls, usd(s.cost_usd), usd(s.avg_cost_per_call), s.pct_of_total + "%"]));
+    const runs = dataTable(["Run", "Calls", "Cost"],
+      c.recent_runs.map((r) => [r.run_id, r.calls, usd(r.cost_usd)]));
+    const archCard = (c.by_archetype && c.by_archetype.length)
+      ? cardOf("By archetype — cost per software type", dataTable(
+          ["Archetype", "Runs", "Calls", "Cost", "Avg / run"],
+          c.by_archetype.map((a) => [a.label || a.archetype, a.runs, a.calls,
+            usd(a.cost_usd), usd(a.avg_cost_per_run)])))
+      : null;
+    let pricingCard = null;
+    if (mm) {
+      const backends = h("div", {},
+        h("div", { class: "hint", style: { marginBottom: "8px" } }, "Backends"),
+        h("div", { class: "row" }, ...(mm.backends || []).map((b) =>
+          h("div", { class: "acard", style: { flex: "1 1 200px", minWidth: "180px" } },
+            h("div", { class: "k" }, b.label),
+            h("div", { class: "v", style: { fontSize: "14px" } }, "cost: ", b.cost),
+            b.default ? h("div", { class: "help", style: { margin: "2px 0 0" } }, "default: " + b.default) : null))));
+      const priceTbl = (mm.pricing && mm.pricing.length)
+        ? dataTable(["Model", "$ / 1M input", "$ / 1M output"],
+            mm.pricing.map((p) => [p.model, "$" + p.input_per_mtok, "$" + p.output_per_mtok]))
+        : h("div", { class: "help" }, "No price table.");
+      pricingCard = cardOf("Model pricing & backends", h("div", {}, backends,
+        h("div", { class: "help", style: { margin: "8px 0" } },
+          "Claude Code reports real USD per call. Codex (OpenAI / OSS), Gemini and the Mistral API report tokens, so their cost is ESTIMATED from this table (local/open-source models ≈ $0; Mistral models without a published price show as unknown). Mistral Vibe reports its own estimate."),
+        priceTbl));
+    }
+    mount(host, head, costCharts, cheapest, cardOf("By model", models),
+      cardOf("By stage — where the money goes", stages), archCard, cardOf("Recent runs", runs),
+      pricingCard);
+  }).catch((e) => mount(host, h("div", { class: "empty" }, e.message)));
+
+  return h("div", {},
+    h("div", { class: "page-head" }, h("h1", {}, "Costs"),
+      h("p", {}, "Observed economics from your local ledger — real per-call costs, not estimates. This data lives only on this machine (the ledger is git-ignored, served on localhost); it is never bundled with the app or shared. Synthetic demo runs cost $0; figures populate as you do real model-backed audits. This also feeds the budget hint in “Let the pipeline choose”.")),
+    host);
+}
+
+// ------------------------------------------------------------------ benchmarks view (Phase 7)
+function benchmarkView() {
+  const pct = (n) => (Number(n || 0) * 100).toFixed(1) + "%";
+  const kv = (k, v) => h("div", { class: "acard" }, h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)));
+  const table = (headers, rows) => h("table", { class: "findings" },
+    h("thead", {}, h("tr", {}, ...headers.map((x) => h("th", {}, x)))),
+    h("tbody", {}, ...rows.map((r) => h("tr", {}, ...r.map((c, i) =>
+      h("td", { class: i === 0 ? "floc" : "" }, String(c)))))));
+  const cardOf = (title, body) => h("div", { class: "card" }, h("h2", {}, title),
+    h("div", { style: { marginTop: "12px" } }, body));
+  const prf = (m) => [pct(m.precision), pct(m.recall), pct(m.f1)];
+
+  const host = h("div", {}, h("div", { class: "skeleton", style: { height: "120px" } }));
+  Promise.all([api.benchmark().catch(() => null), api.benchmarkAb().catch(() => null),
+               api.benchmarkCross().catch(() => null), api.refusalProbe().catch(() => null),
+               api.quality().catch(() => null)]).then(([rep, ab, cross, refusal, qual]) => {
+    let crossCard = null;
+    if (cross && cross.totals_by_backend) {
+      const rows = Object.entries(cross.totals_by_backend).map(([name, m]) =>
+        [BACKEND_LABELS[name] || name, pct(m.precision), pct(m.recall), pct(m.f1),
+         "$" + Number(m.cost_usd_total || 0).toFixed(4), Math.round(m.mean_latency_ms || 0) + " ms"]);
+      crossCard = cardOf(`Cross-backend comparison — “${cross.suite}” (${cross.tier}-tier)`, h("div", {},
+        table(["Backend", "P", "R", "F1", "Cost", "Mean latency"], rows),
+        h("div", { class: "help", style: { marginTop: "10px" } },
+          "Same suite, once per backend, comparable model tier — generated by ", h("code", {}, "argo bench-cross"),
+          ". Distinct from the A/B card above (same backend, two audit models).")));
+    }
+    let refusalCard = null;
+    if (refusal && refusal.backends) {
+      const rows = Object.entries(refusal.backends).map(([name, m]) =>
+        [BACKEND_LABELS[name] || name, m.trials, m.flagged, pct(m.refusal_flag_rate),
+         m.refusal_recovery_rate == null ? "—" : pct(m.refusal_recovery_rate)]);
+      refusalCard = cardOf(`Refusal-rate probe — ${refusal.tier}-tier, ${refusal.trials_per_prompt} trial(s) × ${refusal.prompt_count} prompts`, h("div", {},
+        table(["Backend", "Trials", "Flagged", "Flag rate", "Recovery rate"], rows),
+        h("div", { class: "help", style: { marginTop: "10px" } },
+          "How often each backend's OWN safety classifier false-positives on a legitimate, authorized security-audit prompt (", h("code", {}, "argo refusal-probe"),
+          ") — NOT jailbreak/adversarial testing. Recovery rate is of the flagged calls only; “—” means nothing was ever flagged.")));
+    }
+    const qualityCard = () => {
+      const ar = qual && qual.accept_rate;
+      if (!ar || !ar.judged) return null;   // no triager feedback yet
+      const rate = ar.accept_rate == null ? "—" : pct(ar.accept_rate);
+      const recall = qual.benchmark && qual.benchmark.recall != null ? pct(qual.benchmark.recall) : "—";
+      return cardOf("Real-world quality (A2)", h("div", {},
+        h("div", { class: "artifacts" },
+          kv("Accept-rate", rate), kv("Judged (n)", ar.judged),
+          kv("Accepted", ar.accepted), kv("Benchmark recall", recall)),
+        h("div", { class: "help", style: { marginTop: "10px" } },
+          "Triager accept-rate (human precision proxy, from the Fleece registry via ", h("code", {}, "argo feedback"),
+          ") paired with benchmark recall. Small n is noisy.")));
+    };
+    if (!rep) return mount(host, qualityCard() || h("div", {}), crossCard, refusalCard, h("div", { class: "empty" },
+      h("div", { class: "big" }, "No benchmark report yet"),
+      h("div", {}, "Run a suite from the CLI: "),
+      h("pre", { class: "mono", style: { marginTop: "8px" } }, "argo bench --suite benchmarks --runner mock"),
+      h("div", { class: "help" }, "Headless measures real model quality (costs money); mock checks the harness for free.")));
+    const t = rep.totals;
+    const head = h("div", { class: "artifacts" },
+      kv("Precision", pct(t.precision)), kv("Recall", pct(t.recall)),
+      kv("F1", pct(t.f1)), kv("Cases", t.cases));
+    const counts = h("div", { class: "banner info" },
+      `Suite “${rep.suite}” · TP ${t.tp} · FP ${t.fp} · FN ${t.fn}. Labels are treated as exhaustive: an unmatched reported finding is a false positive.`);
+    const patch = rep.patch_quality
+      ? h("div", { class: "banner info" }, `Patch quality (Phase 6): ${rep.patch_quality.verified} / ${rep.patch_quality.patched} proposed fixes verified (${pct(rep.patch_quality.verified_rate)}).`)
+      : null;
+    const cases = cardOf("Per case", table(["Case", "Archetype", "P", "R", "F1", "Missed", "Spurious"],
+      rep.cases.map((c) => [c.name, ARCH_LABELS[c.archetype] || c.archetype || "—",
+        pct(c.precision), pct(c.recall), pct(c.f1),
+        (c.missed || []).join(", ") || "—", (c.spurious || []).join(", ") || "—"])));
+    const byArch = cardOf("By archetype", table(["Archetype", "P", "R", "F1", "TP", "FP", "FN"],
+      Object.entries(rep.by_archetype).map(([k, m]) => [ARCH_LABELS[k] || k, ...prf(m), m.tp, m.fp, m.fn])));
+    const byCwe = cardOf("By CWE", table(["CWE", "P", "R", "F1", "TP", "FP", "FN"],
+      Object.entries(rep.by_cwe).map(([k, m]) => [k, ...prf(m), m.tp, m.fp, m.fn])));
+    let abCard = null;
+    if (ab && ab.delta_b_minus_a) {
+      const d = ab.delta_b_minus_a;
+      const sign = (n) => (n > 0 ? "+" : "") + (n * 100).toFixed(1) + "pp";
+      abCard = cardOf(`A/B — audit model ${ab.audit_model_b} (B) vs default (A)`,
+        table(["Metric", "A", "B", "Δ (B−A)"],
+          [["Precision", pct(ab.a.totals.precision), pct(ab.b.totals.precision), sign(d.precision)],
+           ["Recall", pct(ab.a.totals.recall), pct(ab.b.totals.recall), sign(d.recall)],
+           ["F1", pct(ab.a.totals.f1), pct(ab.b.totals.f1), sign(d.f1)]]));
+    }
+    mount(host, head, counts, patch, qualityCard(), cases, byArch, byCwe, abCard, crossCard, refusalCard);
+  }).catch((e) => mount(host, h("div", { class: "empty" }, e.message)));
+
+  return h("div", {},
+    h("div", { class: "page-head" }, h("h1", {}, "Benchmarks"),
+      h("p", {}, "Findings quality — precision / recall / F1 against labeled suites, sliced by archetype and CWE, plus cross-backend cost/latency/quality and refusal-rate comparisons. Generated by ", h("code", {}, "argo bench"), " / ", h("code", {}, "bench-cross"), " / ", h("code", {}, "refusal-probe"), "; this page is read-only.")),
+    host);
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }

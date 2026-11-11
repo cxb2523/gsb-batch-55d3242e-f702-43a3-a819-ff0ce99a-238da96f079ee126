@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "argo-audit"
+version = "0.15.1"
+description = "Argo — AI source-static security-audit pipeline for bug-bounty programs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Luigi Colluto", email = "luigicolluto2006@gmail.com" }]
+keywords = ["security", "bug-bounty", "static-analysis", "llm", "audit"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
+dependencies = [
+  "jinja2>=3.1",
+  "jsonschema>=4.0",
+  "pydantic>=2.0",
+  "pyyaml>=6.0",
+  "typer>=0.12",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "python-multipart>=0.0.33",  # server/: repo .zip upload (FastAPI File/UploadFile); `argo serve` fails to start without it
+  "httpx>=0.27",            # runner=mistral-api (argo/mistral_api.py)
+    # 0.26 can access-violate on Windows while traversing larger parse trees.
+    "tree-sitter>=0.25,<0.26",
+  "tree-sitter-python>=0.25",
+  "tree-sitter-javascript>=0.25",
+  "tree-sitter-typescript>=0.23",
+  "tree-sitter-c-sharp>=0.23",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+# After `pip install -e .` the `argo` command is available on every OS
+# (pip writes the platform-appropriate launcher). Without installing, use `python -m argo.cli`.
+argo = "argo.cli:app"
+
+[tool.setuptools]
+packages = ["argo", "argo.stages", "server"]
+
+[tool.setuptools.package-data]
+argo = ["prompts/*", "data/*.yaml"]
+
+# pytest config lives in pytest.ini (kept separate; do not duplicate here).

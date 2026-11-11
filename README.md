@@ -1,0 +1,366 @@
+# Argo — LLM-native static vulnerability detection
+
+[![Tests](https://github.com/gigioneggiando/argo/actions/workflows/tests.yml/badge.svg)](https://github.com/gigioneggiando/argo/actions/workflows/tests.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/gigioneggiando/argo)](https://github.com/gigioneggiando/argo/releases)
+
+> *Argus Panoptes, the all-seeing watchman — a hundred eyes on your code.*
+
+**Live findings:** [overview](https://gigioneggiando.com/argo) · [complete archive](https://gigioneggiando.com/argo/findings) · [guide for AI agents](https://gigioneggiando.com/argo/llms.txt) · [Wiki](https://github.com/gigioneggiando/argo/wiki) · [Discussions](https://github.com/gigioneggiando/argo/discussions) · [Changelog](CHANGELOG.md)
+
+**Using an AI agent?** Start with [AGENTS.md](AGENTS.md) and the
+[agent operating guide](docs/agent-guide.md): installation, a free fixture demo,
+backend/privacy/cost choices, real audits, recovery, and evidence-based result review.
+The demo uses `--runner mock`; `--dry-run` and `--smoke` with real backends can spend tokens.
+
+Before a paid audit, use `argo screen ./repo` for a deterministic read-only fingerprint, `argo plan
+./repo --objective balanced` for an explainable cost/time range, and `argo show-routing` to inspect
+the exact per-stage backend/model selection. Advanced runs can mix providers with repeated
+`--stage-runner`/`--stage-model` flags; run provenance records both requested and actually served
+models.
+
+## Real, disclosed, independently verified
+
+Not a benchmark score — pull requests, published advisories, and real CVEs, on real open-source projects.
+
+**27** projects · **97** public records · **66** public PRs · **24** published advisories · **86** resolved records · **13** CVEs listed · **8** languages represented\*
+
+These totals come from the public archive (snapshot: 6 November 2026). The 97 entries are public records, not 97 distinct vulnerabilities; related advisories, CVEs and backports can refer to the same issue. Private reports are excluded.
+
+### Selected public results
+
+| Project | Public example |
+|---|---|
+| [n8n](https://github.com/n8n-io/n8n) | MCP browser session leak fixed in [PR #36850](https://github.com/n8n-io/n8n/pull/36850). |
+| [Open WebUI](https://github.com/open-webui/open-webui) | Two published advisories, fixed in v0.11.4 ([example](https://github.com/open-webui/open-webui/security/advisories/GHSA-gqfh-jxvw-74rp)). |
+| [Vaultwarden](https://github.com/dani-garcia/vaultwarden) | Three published advisories, including an icon-endpoint SSRF bypass ([CVE-2026-116678](https://www.cve.org/CVERecord?id=CVE-2026-116678)) and cross-organization cipher access ([GHSA](https://github.com/dani-garcia/vaultwarden/security/advisories/GHSA-xwf8-pjh7-h589)). |
+| [Gitea](https://github.com/go-gitea/gitea) | Two published advisories, including OAuth token-kind confusion ([GHSA](https://github.com/go-gitea/gitea/security/advisories/GHSA-xvfh-qwmh-f92w)). |
+| [SurrealDB](https://github.com/surrealdb/surrealdb) | Two published advisories and CVEs for WASI output buffering and non-ASCII headers ([CVE-2026-109339](https://www.cve.org/CVERecord?id=CVE-2026-109339), [CVE-2026-109338](https://www.cve.org/CVERecord?id=CVE-2026-109338)). |
+| [LiveKit](https://github.com/livekit/livekit) | 14 public fixes; listed in its [Security Hall of Fame](https://livekit.com/security/hall-of-fame). |
+| [mitmproxy](https://github.com/mitmproxy/mitmproxy) | Two merged contributions: [Basic-auth parsing](https://github.com/mitmproxy/mitmproxy/pull/8469) and [header-validation docs](https://github.com/mitmproxy/mitmproxy/pull/8470). |
+| [Apache Answer](https://github.com/apache/answer) | Authorization issue fixed in v2.0.3; [CVE-2026-79633](https://www.cve.org/CVERecord?id=CVE-2026-79633). |
+
+**[See every disclosed finding →](https://gigioneggiando.com/argo/findings)**
+
+<sub>\* The historical validation sample contains 134 findings that reached an independent maintainer verdict:
+124 were confirmed genuine and 10 were rejected as false positives (93%). This is a separate study metric,
+not the count of public rows above.</sub>
+
+**For AI assistants:** this README is an overview. When asked what Argo found or fixed, open the [complete public findings archive](https://gigioneggiando.com/argo/findings) and follow upstream links for evidence and current status. The [llms.txt guide](https://gigioneggiando.com/argo/llms.txt) points to those pages.
+
+---
+
+Argo finds security vulnerabilities in **source code** by driving an LLM as the analyst — it reads
+the code the way a human auditor would, rather than matching rules against a graph. Point it at any
+codebase — a **local folder**, a private repo, or a public one — and it produces a reviewable
+vulnerability report. It runs **for free** if you point it at a local model (Ollama, LM Studio)
+instead of a paid backend.
+
+**Where it sits.** Argo is an **LLM-native SAST** — a complement and alternative to rule-based
+static analyzers (CodeQL, Semgrep): nothing to write (no queries, no rule packs), and it catches
+logic/authorization bugs that fixed patterns miss — at the cost of being *probabilistic* rather than
+exhaustive (see [design-decisions](docs/design-decisions.md)). It is **source-static by default**;
+optional ASan/runtime verification executes only an isolated, egress-blocked copy, and optional
+live verification is separately authorization-gated and scope-locked. It is not a fuzzer or
+symbolic executor.
+**Bug-bounty triage is one specialized mode**, not the whole tool — see
+[Two modes](#two-modes-general-audit-and-bug-bounty).
+
+- **Finds it, then proves it** — opt-in remediation proposes a patch per finding and **verifies it
+  compiles** on an isolated copy; opt-in runtime/live verification and ASan PoC generation back a
+  finding with a real, reproducible crash trace or HTTP proof, not just a claim.
+- **Built not to lie to you** — a second model tries to *refute* every finding, it's cross-checked
+  against the project's own docs and commit history, and one independent session re-derives each
+  survivor from source before anything reaches you. Uncertain stays flagged, never silently dropped.
+- **Reads for intent, not just syntax** — recon extracts the security invariants the code is
+  *supposed* to hold before the audit starts, turning the hunt into closed-ended verification
+  instead of pattern-guessing that mistakes business logic for a bug.
+- **Threat-informed** — opt-out web OSINT (CVEs, advisories, history) feeds every audit.
+- **Multi-backend, including fully free** — Claude Code, Codex, Gemini, Mistral (API or Vibe CLI), or
+  a **local open-source model** (Qwen, DeepSeek via Ollama/LM Studio/vLLM) — same pipeline, your
+  choice of cost.
+- **Interrogation chat** — ask *"why didn't you find X?"* and get a real re-validation, not a
+  chatty answer ([worked example](docs/chat-example.md)).
+- **Detection-only, read-only, never live by default** — guardrails enforced in code, not just
+  prompts.
+
+![End-to-end pipeline flow](docs/diagrams/pipeline_flow.svg)
+
+---
+
+## It works like an expert reviewer, not a linter
+
+This is easy to oversell, so here's the honest version: Argo isn't a claim that expert judgment is
+unnecessary — every practice below is borrowed from how a careful human security researcher
+actually works, and a human still decides what gets reported. What it claims is narrower: it
+follows that discipline **consistently, on every run**, so what reaches you has already been
+through a first pass of the scrutiny an experienced reviewer would apply, not raw model output.
+
+It works out what the code is *supposed* to do before it looks for what's wrong, classifies the
+software and threat-informs itself before writing a single audit prompt, re-audits each area for
+what a first read missed, then actively tries to break every finding before it's allowed to
+survive. A genuinely uncertain finding says so — kept with a concrete open question attached, never
+force-labeled "confirmed" just to look complete. See a
+[real, unedited transcript](docs/chat-example.md) of it correcting its own false positive and
+admitting a false negative, mid-conversation.
+
+None of this makes Argo infallible — it's a probabilistic tool, and says so throughout these docs
+(see [design-decisions.md](docs/design-decisions.md)). See it working on real, unmodified
+open-source code, not a curated demo: **[live findings](https://gigioneggiando.com/argo/)**.
+
+---
+
+## Two modes: general audit and bug bounty
+
+Argo runs in two modes over the **same** multi-stage engine:
+
+| | **General code audit** (default) | **Bug-bounty triage** |
+|---|---|---|
+| **Input** | a folder or repo — **no brief** | a program brief (`--brief`) + links + repo |
+| **Scope** | source-only, synthesized from the code (zero-token ingest) | parsed from the brief (assets, RoE, exclusions) |
+| **For** | your own / private / personal code, OSS review, CTFs, research | scoped programs with safe harbor |
+| **Extras** | — | submission drafts, scope filtering, cross-run resubmission tracking |
+
+Auditing your own code is the common case: omit `--brief`, point `--repo` at a **local folder**, and
+the repo is mounted read-only and never pushed anywhere (a local / OSS model keeps the source
+fully on-device; a cloud backend sends it to its API to analyze). Bug-bounty mode adds the
+program-specific scaffolding on top.
+
+---
+
+## Principles and limits (read this first)
+
+Argo is for **authorized** security review — your own code, bug-bounty programs with safe harbor,
+CTFs, or research. Three constraints are enforced in the orchestrator, not left to the prompts:
+
+1. **Never auto-submit.** The pipeline stops at drafts; submission is always a human action.
+2. **Never contact live hosts by default**, even for `source_and_live` targets — analysis is static,
+   on the source, and live verification steps are emitted as a text plan you run yourself inside the
+   program rules (no DoS, no scanning). The **one** opt-in exception is the gated `argo live` stage
+   (default **off**, requires `--i-have-authorization`): for **authorized** engagements it makes
+   bounded, **in-scope-only**, read-only, capped, audit-logged requests to confirm findings — every
+   request scope-locked to a registered in-scope asset (out-of-scope/unknown hosts hard-blocked).
+   See [guardrails §2c](docs/guardrails.md#2c-the-opt-in-live-exception-the-live-stage-in-scope-hosts-only).
+3. **Read-only repo** in every session: the pipeline never patches anything.
+
+Additionally, prohibited techniques declared in scope (e.g. "no DoS") are propagated into every
+generated prompt, and prompt rendering fails if they are missing (re-inserted verbatim if a model
+paraphrases them — see [guardrails](docs/guardrails.md)).
+
+---
+
+## Project layout
+
+```
+argo/
+  cli.py
+  models.py            # pydantic models for scope + findings
+  runner.py            # AgentRunner interface (Claude headless · Codex · Gemini · mock · fallback)
+  mistral_api.py · mistral_vibe.py   # the two Mistral backends
+  stages/{ingest,target_memory,incremental,research,recon,audit,sca,second_opinion,validate,
+          corroborate,deep_verify,asan_poc,freshness,runtime,live,evidence,review_questions,
+          compose,report}.py
+  grounding.py·fixes.py·verify.py·benchmark.py·chat.py·costs.py·archetype.py·model_catalog.py
+  prompts/             # the assets, version-controlled in git
+  ledger.py            # SQLite findings + cost ledger
+server/ · webapp/      # HTTP API + no-build web UI
+runs/<RUN_ID>/         # scope.json, repo/, repo_profile.json, prompts/, findings/, REPORT.md
+```
+
+---
+
+## Inputs: how to set up a program (bug-bounty mode)
+
+> For a **general code audit** you need none of this — just `argo pipeline --repo ./your-code`
+> (see [Two modes](#two-modes-general-audit-and-bug-bounty)). The inputs below apply to **bug-bounty
+> mode**, where a program brief defines the scope and rules.
+
+Per program, three separate things land in three different places.
+
+- **Program description** -> a text file passed with `--brief`. Paste the whole program page
+  from the platform (scope, rules, rewards, exclusions, "no DoS").
+- **Useful links** (site, docs, security page, advisory history) -> a text file, **one per
+  line**, passed with `--links`. These are NOT the code.
+- **Code repository** (e.g. the official GitHub) -> **not a link**, it is the codebase to
+  analyze, passed with `--repo`.
+
+Mnemonic: if it is something the agent must **read to understand** (site, docs, advisories) ->
+`links.txt`. If it is the thing it must **analyze** (the code) -> `--repo`.
+
+Example. Program folder:
+
+`brief.md`
+```
+ACME CMS — Bug Bounty Program
+Scope: app.acme.com, api.acme.com, the acme/acme-cms repository
+Out of scope: *.staging.acme.com, third-party plugins
+Rules: no DoS / volumetric testing, no social engineering, max 10 req/s on live
+Rewards: Critical $$$, High $$, ...
+```
+
+`links.txt`
+```
+https://acme.com
+https://docs.acme.com
+https://acme.com/security
+https://acme.com/security/advisories
+```
+
+Run:
+```
+argo ingest --brief brief.md --links links.txt --repo https://github.com/acme/acme-cms
+```
+
+Stage 2 takes the links from scope and injects them at the top of every custom prompt, so the
+prompts start out already knowing where to read docs and advisories. Full `scope.json` shape and
+every field: [docs/architecture.md](docs/architecture.md).
+
+---
+
+## Usage
+
+```
+argo pipeline --brief ... --links ... --repo ...               # 1-5, stops before submission
+argo pipeline --brief ... --repo ... --verify                  # + deep-verify before reporting
+argo pipeline --brief ... --repo ... --verify --asan-poc        # + real ASan crash traces for C/C++ survivors
+argo pipeline --brief ... --repo ... --second-opinion 1         # + one independent blind re-audit merged in
+argo pipeline --repo ./my-code                                 # local/personal review — NO brief, NO URL
+```
+
+**Auditing your own / private local code?** Omit `--brief` and point `--repo` at a **local folder**
+(it does not need to be a git repo, and is **never pushed anywhere**). Argo synthesizes a minimal
+**source-only** scope from the folder and audits it. A **cloud backend** (Claude / Codex / Gemini /
+Mistral) sends the source to that provider's API to analyze it — only a **local / OSS model**
+(`--codex-oss`, or a local vLLM server) keeps everything **fully on-device**.
+
+Pick a backend (default `headless` = Claude Code):
+```
+argo pipeline ... --runner codex                                  # Codex CLI / OpenAI
+argo pipeline ... --runner codex --codex-oss --codex-local-provider ollama --codex-model qwen3.8:27b
+argo pipeline ... --runner gemini                                 # Gemini CLI / Google
+argo pipeline ... --runner mistral-api --no-research --no-corroborate   # Mistral API
+argo pipeline ... --runner mistral-vibe --no-research --no-corroborate  # Mistral Vibe CLI
+```
+
+Low-cost modes:
+```
+argo pipeline ... --runner mock   # exercises the whole glue with fixtures, zero tokens
+argo pipeline ... --dry-run       # runs ingest+recon, shows generated prompts, then STOPS
+argo compare-recon --baseline runs/BASE --candidate runs/CAND  # offline bounded recon diff
+```
+
+For a controlled vuln-index ablation, repeat the same pinned dry run with `--no-vuln-index`, then
+use `compare-recon`. It warns when the commit, non-index prompt inputs, or served backend/model do
+not match. Structural counts are review aids, not precision/recall evidence; see
+[prompt synthesis](docs/prompt-synthesis.md#changing-the-meta-prompt-safely-validation-methodology).
+
+Every command, every flag, with more examples: **[docs/cli-reference.md](docs/cli-reference.md)**.
+
+---
+
+## Web UI
+
+A no-build web interface (paste the program, point at the repo, watch the argo run live, read the
+results, then chat with the analysis) ships in `webapp/` and is served by the API:
+
+```
+python -m argo.cli serve --open    # starts + opens http://127.0.0.1:8000
+```
+
+It defaults to the free **mock** runner; switch to a real run (with a budget) from the Advanced
+panel. See [docs/ui.md](docs/ui.md) and [docs/api.md](docs/api.md).
+
+---
+
+## The pipeline, stage by stage
+
+Pipeline stage numbers follow execution order: **Stage 0 Ingest** creates `scope.json`;
+**Stage 1 Research** consumes it and runs before **Stage 2 Recon**. Full detail, data flow, and
+the `AgentRunner` abstraction are in **[docs/architecture.md](docs/architecture.md)**.
+
+| Stage | What it does |
+|---|---|
+| 0 Ingest | Parses the brief into `scope.json`; clones the repo read-only. |
+| Target memory | Private, revision-bound facts from earlier runs of the same target, used as recon hints, never as evidence. |
+| Incremental review *(opt-in)* | `--incremental-base REF`: records the diff and invalidates facts about changed code before recon. |
+| 1 Research *(opt-out)* | Uses Stage 0 scope for web OSINT (CVEs, advisories, project history) before recon. |
+| 2 Recon + synthesis | Classifies the software, extracts security invariants + baseline-correct references, writes custom audit prompts. |
+| 3 Audit | Per-prompt agent sessions emit findings; a completeness-critic re-pass catches what a first read missed. |
+| SCA *(opt-out)* | Flags dependency-pinned versions with known advisories. |
+| Second opinion *(opt-in)* | N independent blind recon+audit passes, merged in before validate. |
+| 4 Validate | Dedup and citation grounding (a cited file that exists nowhere is dropped; an unmapped symbol is kept and flagged), then adversarial validation — a fresh session tries to refute each survivor. Downgrade-don't-delete: only provable contradictions get dropped. |
+| Corroborate *(opt-out)* | Cross-checks survivors against the project's own docs and VCS history — catches "already fixed" and "documented by design". |
+| Verify *(opt-in, deep)* | One full independent session per survivor re-derives it from source and reasons across the whole set — split / merge / correct. |
+| ASan PoC *(opt-in, C/C++)* | Model writes a harness; a **fixed, non-model** step compiles and runs it under AddressSanitizer in an isolated container — a real sanitizer crash trace, not a judgment call. |
+| Freshness check *(opt-in)* | Flags later commits that touched a cited file, so a finding is re-checked before it is sent. |
+| Runtime *(opt-in, sandboxed)* | Builds the target into an egress-blocked container and confirms findings with a real HTTP PoC — never the program's live hosts. |
+| Evidence gate | Deterministically summarizes existing static/deep/ASan/runtime/live/corroboration evidence immediately before reporting. It adds no model call or probe; open obligations and contradictions stay visible, and blocking errors suppress drafts without deleting findings. |
+| Review questions *(opt-in)* | A private queue of architecture questions the source cannot settle; answers (with provenance) re-validate only the affected findings. |
+| Compose *(opt-in)* | Links findings into attack paths only on exact, same-context capability matches, for human review; never changes severity. |
+| 5 Report | `REPORT.md`, sorted by verified severity, plus one DRAFT submission per confirmed finding. |
+
+---
+
+## Backends & model strategy
+
+Same pipeline, swappable engine — pick what you have: `--runner headless` (Claude Code) ·
+`--runner codex` (Codex CLI → OpenAI, or `--codex-oss --codex-local-provider ollama|lmstudio` for
+**local open-source models** like Qwen/DeepSeek, fully free and on-device) · `--runner gemini`
+(Gemini CLI → Google, tiered pro/flash/flash-lite per stage like Claude) · `--runner mistral-api`
+(Mistral API, Argo's own sandboxed tool loop, any OS) · `--runner mistral-vibe` (Mistral Vibe
+CLI under an isolated, read-only config) · `--runner mock` (free
+fixtures). Backends and accounts chain transparently on a rate limit or transient failure, so a long
+run self-heals instead of stalling. Full model-per-stage defaults, the resilience/fallback design,
+and the cross-model study: **[docs/backends.md](docs/backends.md)**.
+
+---
+
+## Operational tips
+
+- **A run that stops (crash, Ctrl+C, a rate limit) is not lost.** Every stage writes its output
+  atomically, so `argo resume --run RUN_ID` continues from the first unfinished stage. Details:
+  [cli-reference.md § Recovering a stopped run](docs/cli-reference.md#recovering-a-stopped-run).
+- Keep prompts under git and record which version each run used: you can A/B test them and see
+  which produce accepted findings.
+- The SQLite ledger avoids re-reporting the same bug across runs/programs and tracks your hit rate.
+- Each run's llm_log.jsonl records a redaction-safe backend/account label, so fallback usage and
+  Codex account rate limits can be audited without adding full credential paths or secrets to the
+  per-call log.
+- The most useful metric to watch is the ratio of validation-confirmed findings to triager-accepted
+  findings: if they diverge, tune the validation prompt.
+- Always check whether a given program permits automated/AI tooling before running it.
+
+Development setup, the mock-runner-first testing approach, and what the suite covers:
+**[docs/testing.md](docs/testing.md)** and **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+---
+
+## Further documentation
+
+This README is the conceptual overview. Deeper, implementation-level docs live in [`docs/`](docs/):
+
+| Doc | What's in it |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Module map, data flow, the `AgentRunner` abstraction, `RunContext`, ledger schema, dedup algorithm |
+| [docs/prompt-synthesis.md](docs/prompt-synthesis.md) | The archetype-driven prompt maker (Stage 2), the specificity self-check, reuse from the legacy generator, safe meta-prompt changes |
+| [docs/cli-reference.md](docs/cli-reference.md) | Every command and flag, with examples (`--smoke`, `--budget`, caps, `--calibration`, …) |
+| [docs/guardrails.md](docs/guardrails.md) | The non-negotiable guardrails and **exactly where each is enforced in code** |
+| [docs/determinism-and-guardrails.md](docs/determinism-and-guardrails.md) | **Anti-hallucination**: every deterministic gate and hard physical limit that constrains the LLM — mechanical diffs, ground-truth verification, budget/timeout/request caps, scope-lock asserts, commit-pin reproducibility |
+| [docs/design-decisions.md](docs/design-decisions.md) | **Why** Argo is LLM-direct with **no CPG/AST engine**, what it uses instead, when we'd revisit, and threats to validity (paper-facing) |
+| [docs/backends.md](docs/backends.md) | **Multi-backend**: run on Claude Code, the Codex CLI (OpenAI), the Gemini CLI (Google), Mistral (API or Vibe CLI), or local/open-source models — the abstraction, per-backend guardrail mapping, cost, cross-model study |
+| [docs/headless-runner.md](docs/headless-runner.md) | Real Claude Code integration: flags used, the JSON envelope, caps, error handling, partial recovery, the `--smoke` run |
+| [docs/runtime-verification-study.md](docs/runtime-verification-study.md) | The **opt-in, sandboxed runtime verification** design: the loopback-only sealed-container safety model, the propose→validate→execute→interpret flow, and the R1–R4 plan |
+| [docs/api.md](docs/api.md) | The HTTP API (`server/`) — backend for the web UI: endpoints, run lifecycle, live status/SSE, artifact whitelist |
+| [docs/ui.md](docs/ui.md) | The web UI (`webapp/`) — `python -m argo.cli serve`, the no-build stack, the views |
+| [docs/chat-example.md](docs/chat-example.md) | The interrogation chat — a real worked transcript (grounded explanation, false-positive self-correction, honest false negatives) |
+| [docs/roadmap.md](docs/roadmap.md) | Planned UI + advanced features: per-feature analysis, phased build order, todo list |
+| [docs/configuration.md](docs/configuration.md) | `PipelineConfig` reference, per-stage models, budgets/caps |
+| [docs/testing.md](docs/testing.md) | How to run the suite, what it covers, mock vs. headless |
+| [docs/releasing.md](docs/releasing.md) | The versioning convention and how a release is cut |
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE). Argo is **detection-only** and intended for
+**authorized** security testing (bug-bounty programs with safe harbor, your own code, CTFs, or
+research). You are responsible for staying within the scope and rules of engagement of any program
+you point it at.

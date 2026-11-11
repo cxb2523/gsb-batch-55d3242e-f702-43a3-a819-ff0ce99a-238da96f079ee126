@@ -1,0 +1,1036 @@
+# Roadmap — UI & advanced features on top of the pipeline
+
+Status: active. This document analyzes each requested feature (feasibility / utility / priority
+/ needed?), proposes a phased build order, and tracks the todo list. The pipeline (CLI + stages +
+`AgentRunner` + ledger) is the engine; everything here sits **on top** of it and must keep its
+guardrails intact (no live host, no patching the target, read-only repo, no auto-submit).
+
+## 2026-10 model-routing/planning tranche
+
+Implemented in the current branch: a versioned provider catalog with lifecycle/pricing metadata;
+requested-versus-served model provenance and fail-closed mismatch handling; Codex per-stage routing;
+modern Gemini defaults; mixed-provider stage runners; Claude-native effort selection; offline
+`screen` fingerprints; explainable `plan` objectives and cost/time ranges; credential-free routing
+profiles; and `show-routing`/CLI documentation. The existing FastAPI + vanilla SPA now consumes
+the shared screen/plan/model-catalog endpoints and exposes the same per-stage controls as the CLI;
+no new frontend framework was introduced. Remaining evidence work is data-dependent: expand the
+frozen benchmark corpus, run repeated cross-provider trials, and only then change provisional
+defaults.
+
+### Remaining follow-ups after the 2026-10 tranche
+
+These are deliberately recorded as follow-ups rather than silently inferred as complete:
+
+- **Corpus expansion — 19 cases (2026-11-06).** 14 cases / 43 labels added to `benchmarks/corpora/`
+  from maintainer verdicts (fixed, CVE'd or publicly fixed), owner-reviewed, all commits verified
+  upstream; each case lists every clear-verdict finding at its commit. Coverage: DoS 14, memory
+  safety 11, access control 7, SSRF / crypto / auth 3 each, injection and path 1 each; 2 Critical,
+  13 High, 22 Medium, 6 Low. Still open: negative (`kind: "safe"`) cases, which stay private for
+  now, and further cases as held findings become public (fixed or advisory published).
+- **Repeated cross-provider matrix:** run documented N≥3 comparisons on the same pinned corpus and
+  settings across Claude, Codex, Gemini, and selected local/open-weight models (start with Qwen and
+  DeepSeek), including effort variants and mixed-provider validation. First confirm `bench-cross`
+  can run and record Codex OSS/local-provider configurations; extend it only if needed. Pin the exact
+  checkpoint, quantization, runtime, and hardware; report precision/recall/F1, wall time, absolute
+  provider cost, and cost per accepted finding. Separate local provider spend ($0) from runtime/
+  resource costs. Run only with approved budget and comparable access.
+- **Measured defaults:** use those results to decide whether built-in profiles should change. Until then
+  profile routing remains marked `provisional` and no quality claim is made from one run.
+- **Optional product backlog:** streaming chat replies (B2: live activity shipped 2026-11-06 for Claude/
+  Codex/Gemini/Mistral API; Vibe pending), per-run subprocess isolation (C2), and additional CI/Fast
+  profiles remain lower-priority work (CI integration shipped 2026-11-06 as `argo sarif` + `argo gate`,
+  see `docs/ci.md`; `cost-saver` serves as the CI profile, so no duplicate profile was added); they
+  are not prerequisites for the shipped routing/planning tranche.
+
+### Runner resilience — fallback partial-work recovery (analysis 2026-11-03; follow-ups shipped)
+
+Studied what happens when a backend produces no output mid-audit and the fallback fires. Findings and
+the rejected transcript-replay idea are documented in [backends.md](backends.md#fallback-and-partial-work-recovery).
+Summary: Argo salvages partial scratch artifacts per focus; the common failures (429, moderation)
+leave nothing to salvage and cost ~no tokens. Replaying the interrupted session's transcript into the
+fallback was evaluated and **rejected** (nothing useful to read on the common failures; the recoverable
+case is already covered by scratch salvage; re-feeding a moderation-flagged transcript can re-trigger
+moderation). The three higher-ROI follow-ups were implemented 2026-11:
+
+- **Incremental/streaming findings in `audit`** (#60): each finding is checkpointed to the scratch
+  findings file as it is produced, so a partial always exists to salvage even if the session dies late.
+- **Per-focus resumable audit** (#58): a fully-failed focus is retried on its own on resume, without
+  re-running the focuses that already succeeded; durable per-focus state lives in `status.json`.
+- **Severity-gated deep verification** (#59, `--verify-high`): auto-escalate validation-confirmed
+  High/Critical survivors to `deep_verify` — detailed in the next entry (`asan_poc`/`runtime` remain
+  separately opt-in).
+
+### Severity-gated deep verification (implemented 2026-11-03)
+
+`argo pipeline --verify-high` escalates only validation-confirmed High/Critical survivors to the
+existing offline, full-repository `deep_verify` stage before ASan/runtime/report. It is off by
+default and costs one unbatched agentic session per selected finding; full `--verify` remains the
+explicit all-survivor mode. ASan and runtime remain separately opt-in because they require an
+eligible finding plus Docker/launcher prerequisites.
+
+## Precision & depth uplift — ✅ DONE (2026-06-19)
+
+Triggered by a head-to-head: a 3-prompt, multi-pass manual Claude audit of Umbraco-CMS surfaced
+~50 credible findings (incl. runtime-verified + SCA) vs Argo's 12 (a near-subset). Root cause was
+**not** model capability but **methodology** — the manual prompts were saturated with ground truth
+(exact invariants, a baseline-correct reference to diff every sibling against, enumerated variant
+families, explicit FP carve-outs). Shipped, mirroring that into the automated pipeline:
+
+- **Deep ground-truth recon** — recon emits `ground_truth.json` + bakes INVARIANT CHECKLIST /
+  BASELINE-CORRECT REFERENCES / VARIANT FAMILIES / FP CARVE-OUTS into every audit prompt
+  (`prompts/00_…`, `prompts/01_…`, `stages/recon.py`).
+- **Enumeration forcing-function** — audit must emit a `VARIANT_HUNT_LOG` (row per family member),
+  plus a **completeness-critic** loop-until-dry re-pass (`--critic-passes`, default 1).
+- **Downgrade-don't-delete validate** — `refuted` only for code-contradicted findings; carve-outs +
+  baseline refs injected so the validator stops refuting real bugs (`stages/validate.py`, `prompts/02_…`).
+- **SCA stage** — dependency manifests → known-vuln pins (`stages/sca.py`, `--sca/--no-sca`).
+- **Drift-repair** — a malformed audit finding is repaired + kept (flagged), never a whole-focus loss.
+
+Validation: re-run the full pipeline on Umbraco-CMS (Claude, no budget) and measure recall/precision
+vs the ~50 reference findings. Tests: `tests/test_uplift.py` (147 total, all green).
+
+## Constraints that shape every decision (read first)
+
+1. **Cost.** A full real run was ~**$34** (recon Opus + 3 Sonnet audits + ~26 Opus validations).
+   A UI that invites "click to run" must have: a **cost preview**, a hard **budget** control
+   (already in the engine), a cheap default tier, and `--runner mock` for free dry-runs. Cost is a
+   first-class UX concern, not an afterthought.
+2. **Run time.** Real runs take **minutes to ~30+ min**. The "loading screen" must show a **stage
+   timeline + live cost + partial results as they land** — not a blind spinner. The engine's
+   *files-are-the-source-of-truth* design makes streaming partial artifacts almost free (show
+   `scope.json` after ingest, the generated prompts after recon, each focus's findings as it
+   finishes).
+3. **Guardrails.** The runner is already the single chokepoint (read-only repo, no network/mutation
+   tools). Any new execution path (other model backends, static-analysis tools, test generation)
+   must route through or mirror that chokepoint. Test generation writes **new** files to an
+   artifacts dir — it must never modify the target repo.
+4. **The `AgentRunner` is already swappable.** Multi-backend is *architecturally* prepared; the
+   real cost of adding a backend is re-validating the guardrails + sandbox for it, not the interface.
+
+## Per-feature analysis
+
+| Feature | Feasibility | Utility | Needed? | Priority |
+|---|---|---|---|---|
+| **Backend API + job orchestration** | High | — (enabler) | **Yes** (prerequisite for all UI) | **P0** |
+| **Core UI** (paste links/brief/repo → run → live progress → results) | High | High | **Yes** (the ask) | **P0/P1** |
+| **Settings page** over existing knobs (budget, Claude models, caps, mock) | High | Med-High | Useful (engine works on defaults) | **P2** |
+| **"Let the AI choose"** recommended config | High (pure heuristic) | Med-High (less friction) | Nice | **P2** |
+| **Interactive chat layer** (explain / "why not found" / test-gen) | High (synergistic) | **High** | High-value, not strictly needed | **P3** |
+| **Vulnerability index per archetype** | High (partly exists) | Med-High | Partly redundant — value is curation + UI | **P4** |
+| **Light static metadata** (AST / call-graph via tree-sitter) | Med | Med | Useful context, cheap | **P4** |
+| **Multi-backend runners** (Codex / open-source) | Med (per backend) | Med (cost / lock-in) | Not needed (Claude works) | **P5** |
+| **Deep static analysis** (CPG / PDG / CFG, e.g. Joern) | Low-Med (heavy, per-language) | Uncertain on top of a strong LLM | Experimental | **P5** |
+
+### Notes that change the priorities
+
+- **Vuln index already half-exists.** The meta-prompt carries archetype-keyed vulnerability classes
+  and `repo_profile.json` emits `historical_bug_classes`. The new work is a **curated, persistent
+  knowledge base** (consistent across runs, helps weaker models) + **surfacing it in the UI** — not
+  building it from scratch. Use it as "also consider", never "only these" (don't suppress novel finds).
+- **CPG/PDG: best as a *validation* aid, not raw context.** Feeding a whole code-property-graph to
+  an LLM is impractical (huge). The value is mechanical taint precision the LLM lacks: let the LLM
+  propose sources/sinks, let the graph engine find/confirm paths, feed **query results** to the
+  *validation* stage to confirm/refute a finding's data flow. Prefer **parse-only** tooling
+  (tree-sitter: AST, call graph — no build, respects "no code execution") over build-based CPG
+  (Joern needs to compile → runs build scripts → safety + setup cost). Start light (AST/call-graph),
+  defer full CPG/PDG until there's evidence the LLM is missing flows it would catch.
+- **"Let the AI choose" needs no LLM call.** A heuristic over repo size (LOC), language, archetype,
+  and stated target value can pick models/budget/parallelism. Cheap, deterministic, good default.
+- **Chat layer directly attacks the core failure mode.** Bug-bounty value is dominated by **false
+  negatives** (bugs never surfaced). A chat that re-investigates "why didn't you find X?" with the
+  user's domain knowledge + the run's full context is the highest-leverage *quality* feature.
+- **Test generation is allowed, patching is not.** Generating a test suite that *would catch* a
+  CWE is a new artifact for the human — fine, as long as it writes to `generated_tests/` and the
+  target repo stays read-only. This is a guardrail nuance to enforce in code, not just prompt.
+
+## Phased build order
+
+Dependency-first, value-and-readiness next. Each phase is independently shippable.
+
+### Phase 0 — Backend API & job orchestration (foundation) — ✅ DONE
+Goal: drive a run programmatically with live progress; everything else hangs off this.
+See [api.md](api.md). Implemented in `argo/progress.py` + `server/`.
+- [x] Pipeline emits structured progress: `runs/<id>/status.json` per stage (state, timestamps,
+      live cost, ready artifacts) via `ProgressReporter`; `run_pipeline` takes an optional reporter
+      + cancel event (no behavior change when absent — all existing tests still green).
+- [x] FastAPI service (`server/app.py`): `POST /runs`, `GET /runs`, `GET /runs/{id}`,
+      `GET /runs/{id}/events` (SSE), `POST /runs/{id}/cancel`, `GET /runs/{id}/report`,
+      `GET /runs/{id}/artifacts/{name}`, `GET /runs/{id}/{prompts,findings,drafts}`.
+- [x] Background job manager (`server/jobs.py`): daemon-thread runs, cancellation at stage
+      boundaries. (`runner=mock` is the default → zero-token by default.)
+- [x] Map request → `PipelineConfig`. Ledger in WAL mode for concurrent read (API) + write (job).
+- [x] `python -m argo.cli serve` command; API tests on the mock runner (`tests/test_api.py`).
+- [x] Surface the budget abort in the UI — the run view shows a distinct "Run stopped — budget reached"
+      banner (matches the engine's "Per-run budget … reached" / "session exceeded … cost cap" errors).
+- [x] **Mid-stage cancellation** (backlog **C1**) — the runner kills the in-flight CLI process tree
+      on Cancel (`AgentRunner._exec`/`_kill_tree`); the orchestrator marks it cancelled.
+- [ ] _Later:_ subprocess isolation per run (backlog **C2**).
+
+### Phase 1 — Core UI (the MVP) — ✅ DONE
+Goal: a non-CLI user pastes 3 inputs, clicks start, watches progress, reads results.
+See [ui.md](ui.md). Implemented in `webapp/` (no-build: vanilla ES modules + modern CSS, served
+by the API), tested in `tests/test_api.py`.
+- [x] Frontend scaffold — **no build step** (vanilla ES modules + CSS, hash router, vendored
+      `marked`), served by FastAPI at `/app`. Reliability over toolchain.
+- [x] Input form (description / links / repo) + Advanced (runner, budget, audit model, parallel,
+      dry-run); client-side validation.
+- [x] Cost-aware launch: default runner **Mock (free)**; switching to Real reveals a cost warning.
+- [x] Live run view: SSE stage timeline (pulsing active stage), live cost, **artifact cards that
+      reveal as files land** (scope → prompts → per-focus findings → validated → report → drafts);
+      Cancel button.
+- [x] Results: rendered `REPORT.md`; findings table (sortable + severity filter + detail drawer);
+      drafts; raw artifacts viewer. (Dry-run shows the generated prompts.)
+- [x] Run history list (re-open any past run).
+- [x] **Repo zip upload** (backlog **C3**) — `POST /uploads` (safe extract) + an Upload .zip button.
+- [ ] _Later:_ richer in-browser visual polish pass.
+
+### Phase 2 — Settings & "Let the AI choose" — ✅ DONE
+Goal: full configurability + a one-click recommended config. Plus a **light/dark theme** toggle.
+- [x] Settings page bound to `PipelineConfig` (runner, budget, parallelism, audit model,
+      calibration, **per-stage models**); persisted server-side (`server/settings.py` →
+      `GET/PUT /settings`); the New Run form loads them as defaults.
+- [x] Per-run override panel (the Advanced section in New Run, incl. a calibration toggle).
+- [x] "Let the AI choose": deterministic recommender (`server/recommend.py`, `POST /recommend`) —
+      a quick/standard/thorough tier nudged by a quick **local** repo LOC measurement; returns a
+      config + rationale, applied to the form with one click. Runner stays Mock (never auto-spend).
+- [x] **Light + dark theme** with a topbar toggle (persisted, respects `prefers-color-scheme`,
+      no flash). Tests: `tests/test_api.py` (settings roundtrip, recommend tiers, per-stage models).
+
+### Phase 3 — Interactive chat / interrogation layer — ✅ DONE
+Goal: turn a one-shot report into a conversation that attacks false negatives.
+Implemented in `argo/chat.py` + `server/` (`GET/POST /runs/{id}/chat`, `GET .../generated`)
++ a Chat tab in the UI. See [ui.md](ui.md), [api.md](api.md).
+- [x] Chat endpoint: an `AgentRunner` session seeded with the run's artifacts (scope, repo_profile,
+      synthesis_notes, validated_findings) + **READ-ONLY** repo; history persisted to
+      `runs/<id>/chat.jsonl`; chat uses the run's runner (free for mock runs) and its cost is
+      added to the run total.
+- [x] Canned actions in the UI: "explain a finding", "why didn't you find…", "generate tests for a
+      CWE", "what did you deprioritize?".
+- [x] Test-suite generation: written to `runs/<id>/generated/` only — the target repo stays
+      read-only (verified: generated files never land in `repo/`). Served via `GET .../generated`.
+- [x] **"why-not-found" → candidate → re-validate** (backlog **B1**) — `chat.ask` re-validates a
+      model-proposed `CANDIDATE_FINDING.json` via `validate._validate_one`; verdict in the UI.
+- [~] Streaming replies (backlog **B2**): live activity shipped (Claude, Codex, Gemini, Mistral API); Vibe pending.
+
+### Phase 4 — Context enrichment — ◑ PARTIAL (vuln index done; AST metadata deferred)
+Goal: raise recall/quality with cheap, structured context; surface it in the UI.
+- [x] Curated archetype→vuln knowledge base (`argo/data/vuln_index.yaml`: 8 archetypes, ~50
+      CWE/vuln-class entries). Loader in `argo/knowledge.py`; **injected into recon** as
+      additive reference ("apply the relevant classes, do NOT limit yourself to them").
+- [x] UI: a **Vuln index** page (`#/knowledge`) browsing the index by archetype; `GET /knowledge`.
+- [x] **Stage-1 web research / threat intel** (`stages/research.py`, opt-out `--research`, default
+      on): public web OSINT (CVEs, advisories, the project's security history, the curated links) →
+      `research_brief.md` + `threat_intel.json`, **injected into recon** so the generated audit
+      prompts are threat-targeted. The **only** networked stage — bounded to OSINT, no repo, never
+      the live in-scope hosts (see [guardrails.md](guardrails.md#2a-the-bounded-exception-the-osint-stages-research--corroborate)).
+      UI toggle + `research` API flag + `research_brief`/`threat_intel` artifacts.
+- [x] **Validation-only light static metadata** via **tree-sitter** — bounded parse-only
+      context for Python, JavaScript/JSX, TypeScript/TSX, and C#: enclosing symbol, calls in that
+      symbol, name-matched possible callers, and a small local definition/use slice. It is injected
+      only into Stage 4 validation, never recon/audit, so it cannot originate findings or silently
+      turn syntax into a vulnerability claim. It never builds or executes the target; prompts label
+      the result as syntactic evidence only. It cannot establish deployment/configuration or other
+      operational preconditions; keep those open unless the source or supplied scope proves them.
+      Deep CPG/PDG/CFG remains deferred.
+- [ ] _Measure_ the index's impact with repeated matched dry-run pairs (see prompt-synthesis.md).
+      The offline comparison engine and `--no-vuln-index` ablation switch are implemented; the
+      actual fixed-commit/model/budget experiment and downstream quality measurement remain pending.
+
+### Phase 5 — Advanced / experimental (gated by demand + measured ROI)
+- [x] **Multi-backend runners — DONE.** `CodexRunner` (`runner=codex`) runs the Codex CLI for
+      **OpenAI** models, and **local / open-source** models via `--codex-oss --codex-local-provider
+      ollama|lmstudio`. The guardrails were re-expressed onto Codex's OS sandbox (read-only repo /
+      writable scratch / no network except research) and re-validated (`tests/test_codex.py`), with a
+      real Codex smoke. Cost is token-estimated (Codex reports tokens, not USD). See
+      [backends.md](backends.md). (OpenAI + OSS both ship through the one Codex backend; a separate
+      native `OpenSourceRunner` is unnecessary.)
+- [ ] **DECIDED AGAINST (for now)** — deep static analysis (CPG/PDG/CFG, e.g. Joern) as a data-flow
+      validation aid. Two hard reasons (see [design-decisions.md](design-decisions.md) §2): build-based
+      CPG must **compile the target**, conflicting with the no-code-execution / read-only guardrail;
+      and bolting a graph on **confounds the study** (can't tell LLM findings from graph findings).
+      Would only follow the parse-only AST step above, sandboxed, as a confirm/refute aid — gated on
+      benchmark evidence, never as raw context.
+
+### Phase 6 — Remediation (fix) pipeline — ✅ DONE (opt-in, separate from the audit)
+The audit pipeline stays **detection-only** (a hard guardrail). A *separate, opt-in* remediation
+mode turns confirmed findings into **proposed fixes for human review** — never auto-applied to the
+target, never submitted. The target repo is **never** mutated: all work happens on an **isolated
+copy** under `runs/<id>/fix_workspace/`.
+- [x] A `remediate` flow (`argo/fixes.py`, `argo fix <run_id>` CLI): for each confirmed finding,
+      generate a **patch as a reviewable unified diff** into `runs/<id>/patches/` (model runs with
+      read-only repo + artifact tools; the diff is produced, not applied in place).
+- [x] A **verify** stage (`argo/verify.py`) — the user's hard requirement: apply each patch to a
+      throwaway copy, then **(1) confirm it still builds/compiles** and **(2) confirm it introduces
+      no NEW errors** vs. a pre-patch baseline. Build/compile runs **locally** (auto-detected per
+      language: `python -m py_compile`/`ruff`, `tsc`/`node --check`, `go build`, `cargo check`, …)
+      or **in Docker** (`--docker <image>`) for a clean, isolated toolchain. A patch that fails to
+      apply, fails to compile, or adds a new error is flagged `verified: false` and quarantined.
+- [x] UI: a **Fixes** results tab — "Propose & verify fixes" shows each patch (diff) with its
+      verify verdict (✓ verified / ⚠ reason). API: `POST /runs/{id}/fixes`, `GET …/fixes`,
+      `GET …/patches`. CLI: `argo fix --run <id>`.
+- [x] Guardrail: writes only to `patches/`; verification copies the repo and restores write bits on
+      the **copy** — the source mount is **never** modified; nothing is applied in place; no PR.
+- [ ] _Later:_ richer fixes (multi-file, test-included), a "regenerate this patch" loop, and PR-draft
+      export; today's fix is one minimal root-cause diff per finding.
+- [x] **Diff fidelity on large real repos — ✅ DONE (2026-07-15).** On a real ChatPlugin run
+      (Java, deep multi-module paths), 7/11 model-generated unified diffs failed `git apply` with
+      "corrupt patch" — the model miscounted multi-hunk `@@` line ranges (paths were correct, files
+      existed; the 4 simpler single-hunk diffs applied + verified). Fixed: the remediation session now
+      writes the change into `FIX.json` — a **full rewrite** (`new_content`) or, for **large files**,
+      search/replace **`edits`** (each `search` must match exactly once, applied by
+      `fixes._apply_edits`) — and Argo computes the unified diff **mechanically** (`difflib`,
+      `fixes._mechanical_diff`), so the model never authors (or miscounts) hunk headers. A raw `*.diff`
+      is still accepted as a legacy fallback; the mock runner emits `FIX.json`. Tests:
+      `tests/test_fixes.py` (multi-hunk-applies-and-compiles, new-file, no-op, search/replace edits).
+
+### Phase 7 — Benchmarks & evaluation — ✅ DONE (core harness)
+Measure quality so prompt/model changes are decisions, not guesses. Implemented in
+`argo/benchmark.py` + `argo bench` CLI + `GET /benchmark` + a **Benchmarks** UI page. A suite lives
+under `benchmarks/<case>/` (`case.json` + `expected_findings.json`); see [benchmarks/README.md](../benchmarks/README.md).
+- [x] **Per-run archetype captured** (prerequisite): recon records the canonical archetype into
+      `meta.json` (`argo/archetype.py`).
+- [x] **Findings quality**: **precision / recall / F1** by matching validated findings against
+      labeled corpora (normalized-CWE + file-suffix + optional line tolerance; labels treated as
+      exhaustive). Sliced **by archetype** and **by CWE**. Bundled `acme-widgets` mock case scores
+      the harness for free; add real labeled repos as new case dirs.
+- [x] **Patch quality** (Phase 6 tie-in): `--fixes` folds in the share of confirmed findings whose
+      proposed fix **verified** (applies + compiles + no new errors).
+- [x] A repeatable harness + an **A/B mode** (`--ab-audit-model`): run the suite under two configs
+      and report the precision/recall/F1 delta (B − A).
+- [x] **Seeded-bug corpora at scale** (backlog **A1**) — provenance + `--parallel-cases` + corpus recipe.
+- [x] **Re-audit the patched copy** (backlog **A3**) — `patch_quality.re_audit_confirmed_rate`, `--re-audit`.
+- [x] **Triager accept-rate** (backlog **A2**) — `argo feedback`/`argo quality`, `GET /quality`, `quality.json`.
+- [x] **Cross-backend comparison** (shipped v0.5.0, 2026-08-17) — `argo bench-cross` runs the same
+      suite once per backend (Claude/Codex/Gemini) and reports cost/latency/precision/recall/F1
+      side by side (`compare_backends()`), distinct from `--ab-audit-model`'s same-backend A/B.
+      `argo refusal-probe` measures how often each backend's own safety classifier false-positives
+      on a legitimate, authorized audit prompt (`refusal_flag_rate`/`refusal_recovery_rate`) — see
+      [docs/backends.md](backends.md) and [benchmarks/README.md](../benchmarks/README.md).
+
+### Phase 8 — Cost model & economics — ✅ DONE (cost side; quality side needs Phase 7)
+Turn the ledger into guidance. Implemented in `argo/costs.py` + `GET /costs` + a **Costs** UI page.
+- [x] **Observed** economics from `llm_calls` (real `total_cost_usd`, not a static price list):
+      totals + **average cost per run**, **by-model** (calls, cost, $/call, **$/1k output tokens**,
+      share), **by-stage** (where the money goes), recent-run costs, and the **cheapest model per
+      1k output tokens**.
+- [x] Fed back into "Let the AI choose": the recommendation's rationale appends your observed
+      average run cost. UI: a **Costs** page (`#/costs`).
+- [x] **By-archetype** cost breakdown: recon now records the classified archetype in `meta.json`
+      (`argo/archetype.py` + `stages/recon._capture_archetype`); `/costs` groups per-run cost by it.
+      This is also the data the Phase-7 benchmarks group/calibrate on.
+- [ ] _Later (needs Phase 7):_ the **cost/quality frontier** (cheapest config that *holds quality*)
+      requires ground-truth quality metrics to pair with these costs.
+
+### Phase 9 — Dynamic / runtime analysis (opt-in, sandboxed) — ✅ R1–R4 DONE
+> Full design in **[runtime-verification-study.md](runtime-verification-study.md)**. Motivated by the
+> Umbraco head-to-head: the reference audit's edge was 5 **HTTP-level live confirmations**. Runtime
+> verification is **opt-in** (`--runtime`, default off), best-effort (graceful skip), and preserves
+> the core guardrail — it builds the OSS target from the cloned source into an **ephemeral,
+> egress-blocked, loopback-only** container and probes only that local instance, never the program's
+> live hosts (same model as `verify.py`'s `--network=none` builds).
+> Phases (all shipped): **R1** safe harness (sealed sandbox + `assert_loopback_only`/
+> `validate_probe_plan`; proven live on Umbraco) → **R2** LLM proposes+interprets probe plans
+> (validated; proven live) → **R3** launcher auto-detection (explicit / `argo-runtime.json` / repo
+> Dockerfile) → **R4** verdicts rendered in `REPORT.md`. Decisions: user-recipe-first provisioning,
+> Docker required (else skip), read-only probes by default. (Benchmark `runtime_confirmed_rate`
+> deferred — needs a runtime recipe per labeled case.)
+
+Goal: extend Argo beyond **static** detection toward a **confirm-by-running** capability, so a
+finding can be backed by an observed runtime signal (a crashing input, a triggered assertion, an
+exploited path) rather than a static hypothesis alone. This is the natural complement to the
+LLM-native SAST: static finds the *candidate*, dynamic *proves* it.
+
+This is a **deliberate boundary expansion**, so it must be designed carefully against the current
+guardrails — today **no code execution** is a hard rule. The design constraints:
+- **Opt-in and isolated.** Like Phase 6 (fix-verify), it runs only on an **isolated copy**, never the
+  source mount, and never against the program's **live in-scope hosts** (that stays prohibited).
+  Execution happens in a **locked-down sandbox** (offline container, `--network=none`, resource caps).
+- **LLM proposes, harness runs.** The model writes the harness (a unit test, a fuzz target, a PoC
+  script for a candidate finding); the sandbox executes it and feeds the **observed result** back to
+  validation to confirm/refute — the model never gets an execution primitive directly.
+- **Where it pays off.** Turns `needs_runtime_verification` findings into confirmed ones; gives the
+  benchmark a ground-truth signal; raises precision without a second model. Closest existing seam:
+  Phase 6's `verify.py` already builds/compiles an isolated copy — runtime analysis generalizes that
+  from "compiles" to "executes a generated harness".
+- **Why it's later, not now.** It crosses the static-only line that currently makes Argo safe to point
+  at any repo. It needs a hardened sandbox story before it ships, and it should be **clearly separated**
+  (a distinct opt-in mode) so the default tool stays static-only. Until then, Argo emits the
+  `live_verification_plan` text for a human to run.
+
+### Phase 10 — Live target interaction (opt-in, scope-locked) — ✅ L1–L3 DONE
+> Full safety model in **[guardrails.md §2c](guardrails.md#2c-the-opt-in-live-exception-the-live-stage-in-scope-hosts-only)**.
+> The deliberate, heavily-gated relaxation of the "never a live host" rule, for **authorized**
+> bug-bounty engagements whose RoE permit automated interaction. The live analog of Phase 9's runtime
+> sandbox: same propose→validate→execute→interpret shape, but the target is the **real in-scope host**
+> instead of loopback — so the validators are **inverted and tightened**. **Off by default**, and the
+> `argo live` command additionally requires an explicit `--i-have-authorization` acknowledgement.
+
+Goal: let the agent do **bounded live recon/verification** against the program's in-scope assets to
+**confirm findings and cut false positives** — exactly the edge a human researcher gets from touching
+the target — without ever leaving the authorized envelope. Why it's a separate, gated mode (not the
+default): it crosses the single hardest standing guardrail, so it stays opt-in, scope-locked, capped,
+and audit-logged, and the default tool remains 100% offline against the program's hosts.
+
+- **L1 — read-only live recon — ✅ DONE.** Hand-written `runs/<id>/live_probe_plan.json` →
+  RoE-authorization gate (`assert_live_authorized`: `automation_allowed` + `safe_harbor` + declared
+  `prohibited_techniques`) → **in-scope-only scope-lock** (`assert_inscope_only`: absolute URL whose
+  host is a registered in-scope asset; out-of-scope/unknown/loopback hard-blocked; no wildcard
+  overmatch) → read-only methods + anti-DoS caps (`validate_probe_plan`, oversized plan rejected whole)
+  → a **fixed stdlib executor** (not a model shell) runs it with a rate cap, writing `live_results.json`
+  + a full `live_audit_log.jsonl`. CLI: `argo live --run <id> --i-have-authorization`. Stage:
+  `argo/stages/live.py`; config `live_enabled`/`live_allow_writes`/`live_max_requests`/
+  `live_min_request_interval_s`/`live_request_timeout_s`/`live_max_payload_bytes` (all off/conservative
+  by default). Tests: `tests/test_live.py` (gates + executor against an in-scope loopback server).
+- **L2 — LLM-proposed live probe plan — ✅ DONE.** With no hand-written plan, an **offline** LLM
+  session (`stages/live._generate_plan`, prompt `06_live_probe_prompt.md`) writes a plan from the
+  validated findings — using **absolute in-scope URLs** (the inverse of R2's loopback-relative paths) —
+  then the **same** deterministic gates run before any request; a second offline session
+  (`_interpret`, `07_live_interpret_prompt.md`) judges each finding `live_confirmed/refuted/inconclusive`
+  from the observations and attaches a `validation.live` block to `validated_findings.json`. Both
+  sessions are network-free (`stage="live"` gets no network tools); only the fixed executor reaches the
+  host. Still read-only. Mock-runner tested end-to-end (generate→gate→execute→interpret→attach).
+- **L3 — state-changing probes — ✅ DONE.** Behind the **second** opt-in (`--allow-writes` /
+  `live_allow_writes`), POST/PUT/PATCH are permitted for **non-destructive** confirmations only, with
+  extra rails (`guardrails.assert_live_write_policy`): **DELETE is never allowed** even in write mode,
+  state-changing requests are capped **separately** by `live_max_writes` (`--max-writes`, default 5),
+  and each mutation's **body is recorded** in the audit log. The propose prompt (06) is hardened for
+  writes (no DELETE, prefer a throwaway benign value, declare `expect`). Tests in `tests/test_live.py`
+  (DELETE blocked, write cap, writes-without-opt-in blocked, body audited, run aborts on DELETE).
+- **Executor hardening — ✅ DONE.** The live runner was strengthened for robustness + precision:
+  a tool-identifying `User-Agent`; a **redirect guard** that never auto-follows (each `3xx` is
+  re-validated in-scope before following, off-host redirects recorded not chased, writes never
+  re-followed); **idempotent-only retries** with backoff honoring `Retry-After` (writes never retried);
+  **response-header + redirect-chain evidence** capture; and **differential `control` probing** (a
+  baseline request per probe, gated like any request, so the interpret stage judges the *difference* —
+  the biggest false-positive cut for access-control findings). Config: `live_max_retries`,
+  `live_max_redirects`, `live_user_agent`. Tests in `tests/test_live.py`.
+- [x] Live verdicts now surface through F1's proof level/evidence source/obligation rendering in
+      `REPORT.md` and drafts (2026-10-04). _Later:_ an authenticated live session (cookie/login step)
+      reusing the runtime probe's auth-step shape.
+
+## Deferred-feature backlog — feasibility & implementation plan (code-audited 2026-06-18)
+
+### G. Gemini backend — ✅ DONE (shipped v0.4.0, 2026-08-17)
+Gemini is now a full 3rd provider in the `AgentRunner`/`FallbackRunner` chain (alongside Claude +
+Codex) — `GeminiRunner`, `--runner gemini`. Superseded the 2026-06-26 investigation below (kept as
+history): the blocker there was the raw-API path and the then-broken `gemini` CLI; the real fix was
+wrapping the **agentic** `gemini` CLI directly (stdin-only prompt delivery, `--skip-trust`,
+`--include-directories`, `--approval-mode yolo`), tiered per stage like Claude
+(`DEFAULT_GEMINI_STAGE_MODELS`), fully composable into `--fallback` and multi-account resilience.
+Guardrails map onto Gemini's **Policy Engine** (a named-tool denylist, same dialect as Claude's —
+not `--sandbox`, which was found to have a hard, unreliable Docker/Podman dependency during
+empirical verification). Moderation detection is a heuristic (no structured field exposed by the
+CLI) that feeds the same `_classify_failure_text` marker-matching machinery the other two backends
+use. Full detail: [docs/backends.md](backends.md#gemini-specifics-runner--gemini).
+
+<details>
+<summary>Original 2026-06-26 investigation (superseded, kept for history)</summary>
+
+Findings from the first attempt, before the CLI itself was revisited:
+- **The API key WORKS** — a raw `generativelanguage.googleapis.com/.../generateContent` call returns
+  HTTP 200 with clean JSON + `usageMetadata` (tokens for cost). An AI-Studio key (new `AQ.Ab8…`
+  format) is fine.
+- **The `gemini` CLI (v0.49) was broken at the time** — `gemini -p -o json` returned a persistent
+  **503** across models; it routed to the deprecated Code Assist / Antigravity path (Google cut the
+  free Code-Assist tier **2026-06-18** and was migrating users to Antigravity / Antigravity CLI).
+  This had resolved by the time of the real v0.4.0 implementation attempt.
+- The raw-API-only, text-only fallback idea (serving `validate`/`sca` only) was considered but
+  dropped once the real CLI worked agentically end to end — no need for a text-only carve-out.
+
+</details>
+
+Each item below was verified against the current code (exact files, functions, signatures, and
+blockers). Effort is **S/M/L**; "paper value" rates how much it strengthens the research artifact.
+**Recommended order: the evaluation block (A) first — it is what the paper's results section needs;
+the chat depth block (B) next; the run-infra block (C) is low-value for a local single-user tool.**
+
+### A. Evaluation & benchmark (paper-critical)
+
+#### A1 — Seeded-bug benchmark corpora at scale — effort **M (mostly data)** · paper value **High** — ✅ ENGINE DONE
+- **Shipped:** `Case` provenance (`corpus_id`, `cve_ids`, `seeded_from`, surfaced in `cases[].provenance`),
+  optional `brief` (local-audit cases), `run_suite(..., parallel_cases=N)` + `argo bench --parallel-cases`,
+  and a documented corpus recipe in `benchmarks/README.md`.
+- **Reproducible commit pinning (2026-07-15):** `case.json` gains an optional `commit`; `acquire_repo`
+  (and the whole `run_pipeline`/`argo pipeline --commit` path) fetches/checks out that exact revision,
+  so a **URL-backed** CVE case is reproducible instead of cloning the (possibly-fixed) default head. URL
+  corpora live under a **separate** suite `benchmarks/corpora/` so the default `benchmarks/` mock harness
+  stays offline (ingest clones `repo` even on the mock runner). First real case shipped:
+  `benchmarks/corpora/gguf-tools-oob/` (antirez/gguf-tools @ `fdfafbed766d`, 6 confirmed heap-OOB /
+  integer-overflow labels, several fixed upstream). Tests: `tests/test_benchmark.py`
+  (offline-default-suite, corpora commit+labels, `acquire_repo` pins a commit).
+- **Remaining = data**: curate more real labeled CVE/seeded cases into `benchmarks/corpora/` (ongoing;
+  the Fleece registry of confirmed findings is the natural source of labels).
+- **Feasibility: high; the engine seam already exists.** `benchmark.load_suite(suite_dir)` globs every
+  `<case>/case.json` + `expected_findings.json`, so the harness already runs an **unlimited** number of
+  labeled cases and slices precision/recall/F1 by archetype and CWE (`run_suite`, `_aggregate`,
+  `score_run`). The remaining gap is **labeled data**, not code: the repository currently carries five
+  frozen real cases plus the offline `acme-widgets` mock; reaching the planned 10–20 case tranche still
+  requires additional ground-truth review and licensing/permission checks.
+- **Files:** `benchmarks/<new-case>/` (data — the bulk of the work); `argo/benchmark.py` (small
+  additions); `argo/models.py` (none); `benchmarks/README.md` (document the corpus convention).
+- **Implementation:**
+  1. Curate real labeled cases: pinned OSS repos at a vulnerable commit (CVE checkouts) or seeded-bug
+     forks, each a `case.json` (`name`, `brief`, `repo` = local path or URL, `archetype`) +
+     `expected_findings.json` (`label`, `cwe`, `file`, `line`, `line_tolerance`, `aliases`, `severity`).
+  2. Extend `case.json` (optional, additive) with provenance: `seeded_from`, `cve_ids`, `corpus_id` —
+     `Case` is a dataclass; add fields with defaults, surface them in the report `cases[]` entries.
+  3. Parallelize cases in `run_suite` (currently sequential) with a bounded pool, mirroring the
+     `ThreadPoolExecutor` already used in `stages/validate.py`. Cost-gate behind `--runner mock` for
+     harness CI; headless only when measuring real quality.
+- **Hypotheses evaluated:** (a) "we need a corpus registry/versioning" — **not for v1**; pinning the repo
+  commit in `case.json` + git-tracking the `benchmarks/` tree gives reproducibility for free. (b) "label
+  quality must be measured" — worth a `kind: "safe"` negative-label convention (already honored by
+  `score_run`) to catch over-reporting, but a full label-QA metric is over-engineering now.
+- **Risk:** real runs cost money and are non-deterministic — report cost-per-case and run N≥3 for
+  variance. Keep labels exhaustive (the scorer treats unmatched reported findings as FP).
+
+#### A2 — Real triager accept-rate (the real-world precision signal) — effort **M** · paper value **High** — ✅ DONE
+- **Shipped:** `findings_ledger` gains `triager_accepted/feedback/ts` (auto-migrated on open);
+  `Ledger.record_triager_feedback()` + `Ledger.accept_rate()` (sliced by severity); `quality.py`
+  pairs accept-rate with benchmark recall into `quality.json`. Channels: `argo feedback`
+  (single or `--import` a Fleece export) and `argo quality`, plus `GET /quality` and a **Real-world
+  quality** card on the Benchmarks page. Fleece stays the source of truth — no private data in the
+  public repo.
+- **Feasibility: medium; needs a new feedback channel + ledger columns.** Today `findings_ledger`
+  (`argo/ledger.py`) stores `program_name, run_id, dedup_key, title, verdict, validated_severity` and
+  `prior_sightings()` detects cross-run resubmissions — but there is **no accept/reject feedback** and no
+  accept-rate query. This metric is the human-judged precision the paper pairs with benchmark recall.
+- **Cross-repo note:** the real accept/reject data lives in **Fleece** (the private findings registry).
+  The clean design is: Fleece is the source of truth for triager outcomes; Argo ingests them into the
+  ledger (or reads a `quality.json` exported by Fleece) and computes the rate — **no private data in the
+  public repo**.
+- **Files:** `argo/ledger.py` (schema + methods), `argo/benchmark.py` (surface the metric),
+  `server/app.py` (optional `POST /runs/{id}/feedback`), a new `quality.json` writer, `docs/*`.
+- **Implementation:**
+  1. `ALTER`/migrate `findings_ledger`: add `triager_accepted INTEGER NULL`, `triager_feedback TEXT`,
+     `triager_ts TEXT` (nullable, back-compatible).
+  2. `Ledger.record_triager_feedback(program_name, dedup_key, run_id, accepted, feedback=None)` and
+     `Ledger.compute_accept_rate(program_name=None, run_id=None) -> {accepted, rejected, rate, by_verdict}`.
+  3. Feed from Fleece (CLI importer or a small endpoint); emit `quality.json` pairing
+     accept-rate (precision proxy) with benchmark recall — the paper's headline two-number result.
+- **Hypotheses evaluated:** (a) "build a triager API/webhook" — **no**; for a single analyst a CLI
+  importer from Fleece is simpler and keeps the boundary clean. (b) "use it as a feedback loop to retune
+  audits" — out of scope for v1; record-and-report first.
+- **Risk:** small-sample accept-rates are noisy; report n alongside the rate; never publish per-program
+  Fleece data from the public repo.
+
+#### A3 — Re-audit the patched copy ("is the bug actually gone?") — effort **M–L** · paper value **High** — ✅ DONE
+- **Shipped:** `verify_patch(..., on_patched=hook)` runs a focused **unbiased** re-audit on the patched
+  copy (`fixes._reaudit_patched`); `_still_present` matches on normalized CWE + file (line-lenient) →
+  `verify.re_audit.confirmed_fixed`. Folded into `fixes_report` and the benchmark as
+  `patch_quality.re_audit_confirmed_rate`. Exposed via `argo fix --re-audit`, `argo bench --fixes
+  --re-audit`, and the API `re_audit` flag. Reported as a probabilistic signal *alongside* the build
+  check (honest caveat in the docs), never instead of it.
+- **Feasibility: medium; a real seam exists but `verify.py` is currently standalone.** `verify_patch(repo_dir,
+  patch, *, docker, build_cmd, timeout_s)` copies the repo, applies the diff, and checks
+  *applies + compiles + no new errors* (`_check`, `_norm_errors`). It does **not** re-run the audit, so a
+  "verified" patch only means "didn't break the build", not "fixed the vuln". `fixes.generate_fixes(ctx, …)`
+  already has the `RunContext` and writes `patches/<id>.diff` + `fixes_report.json`.
+- **Files:** `argo/verify.py` (accept a re-audit callback or `RunContext`), `argo/fixes.py` (wire the
+  re-audit after verify), `argo/stages/audit.py` (a scoped single-target audit entry), `argo/benchmark.py`
+  (`re_audit_confirmed_rate`), `argo/ranking.py` (reuse `dedup_key`/matching).
+- **Implementation:**
+  1. Add a scoped re-audit: run Stage-3 audit on the **patched isolated copy**, restricted to the
+     finding's affected file(s)/prompt, producing findings.
+  2. Confirm the fix: the original finding's `dedup_key` (file+line+cwe) must be **absent** from the
+     re-audit output → `re_audit_confirmed = True`. Reuse the benchmark `_matches`/`dedup_key` logic.
+  3. Extend the verdict shape with `re_audit_confirmed` and aggregate `re_audit_confirmed_rate` into
+     `patch_quality` in `benchmark.py`; gate behind a `--re-audit` flag (cost).
+- **Hypotheses evaluated:** (a) "finding-gone ⇒ fixed" is **probabilistic** — the model could simply fail
+  to re-surface the bug for unrelated reasons (false "fixed"). Mitigations: re-audit with the *same*
+  generated audit prompt that found it (not a fresh recon), require the line-shift-aware match, and report
+  it as a *signal* not proof. (b) "re-audit the whole repo" — too costly/noisy; scope to affected files.
+  (c) the strongest version is the **Phase-9 dynamic** check (run a PoC that no longer triggers) — note A3
+  as the static bridge to that.
+- **Risk:** doubles audit cost per fixed finding; non-determinism — pair with the build-check, never
+  replace it; keep the source mount untouched (work on the copy, as `verify.py` already does).
+
+### B. Chat depth
+
+#### B1 — "Why didn't you find X?" → candidate finding → re-validate — effort **S–M** · paper value **Med** — ✅ DONE
+- **Shipped:** the chat analyst may write a `CANDIDATE_FINDING.json` for a concrete missed-vuln
+  hypothesis; `chat.ask` re-validates it with the pipeline's `validate._validate_one` (isolated,
+  read-only, refute-first) and appends the verdict (`validated_candidate` in the response, a pill in
+  the UI). Non-mutating — it is an interactive probe, never added to `validated_findings.json`. The
+  model (not a regex) decides when to propose a candidate. `_coerce_candidate` backfills partial
+  hypotheses so they still validate.
+- **Feasibility: HIGH — the hard part already exists.** `stages/validate._validate_one(ctx, scope,
+  scope_json_text, finding)` validates a **single `Finding` in isolation** (builds code excerpts, runs the
+  adversarial `02_adversarial_validation_prompt.md` in a fresh `work_dir`, returns a `Validation`) with **no
+  dependency on the `findings/` directory**. `chat.ask(ctx, message)` already runs a read-only model turn
+  and returns `{reply, generated, cost_usd}`. This directly attacks the dominant failure mode (false
+  negatives) and is the most valuable chat feature.
+- **Files:** `argo/chat.py` (detect the intent, synthesize the candidate, call `_validate_one`),
+  `argo/models.py` (`Finding` — already importable, `extra="allow"`), no API/schema change (same
+  `POST /runs/{id}/chat`), optional `webapp/js/app.js` chip wording.
+- **Implementation:**
+  1. In `chat.ask`, when the message matches a "why didn't you find …" intent, run one model turn that
+     emits a **candidate `Finding` JSON** (the model proposes id/title/cwe/affected/flow/why/impact) for the
+     hypothesis the user raised.
+  2. Construct `Finding.model_validate(candidate)` and call `_validate_one(ctx, scope, scope_json_text,
+     finding)`; append the resulting verdict + rationale (confirmed / refuted / needs-runtime) to the chat
+     reply, and optionally write a `candidate_<id>.json` into `generated/`.
+  3. Keep it **non-mutating**: nothing is added to `validated_findings.json`; it is an interactive probe.
+- **Hypotheses evaluated:** (a) "append the candidate to the run's findings and re-run the whole validate
+  stage" — **no**; `_validate_one` on the single candidate is cheaper, isolated, and avoids rewriting
+  canonical artifacts. (b) "auto-extract the finding from the user's prose deterministically" — let the
+  model synthesize the `Finding` (more robust than regex), then schema-validate.
+- **Risk:** a user-led candidate can coax a false "confirmed" — keep the adversarial validator's
+  refute-first framing (unchanged) and label these as **interactive probes**, not pipeline findings.
+
+#### B2 — Streaming chat replies — effort **L** · paper value **Low (UX only)** — ◑ LIVE ACTIVITY SHIPPED (2026-11-06)
+- **Shipped:** live *activity* rather than tokens. Runners take an optional `on_activity` sink (set like
+  `cancel_event`, propagated by `FallbackRunner`) and report one-line progress while a session runs:
+  Codex from its `--json` events through the existing streaming `_exec(on_stdout_line=...)` tee (the
+  session guard still sees every line), Mistral API from its native loop, and Claude by switching to
+  `--output-format stream-json --verbose` ONLY when a sink is attached (its final `result` event is
+  the same envelope as `--output-format json`, verified against claude 2.1.319). Gemini likewise
+  switches to `stream-json`; its result event lacks the text and uses flat token stats, so
+  `_gemini_stream_envelope` rebuilds the json envelope (verified end to end against gemini CLI 0.66). `chat.ask(on_activity=)`,
+  `POST /runs/{id}/chat/stream` (NDJSON over POST; ends with the plain call's payload), and the chat
+  panel shows the step count and last actions. Results, ledger and guardrails are unchanged. **Pending:** Vibe (`--output streaming`; needs a
+  Mistral key to capture its event format).
+- **Original analysis (2026-06; the blocking-subprocess premise is outdated since `_exec` streams):**
+  **Feasibility: low-to-medium; a real architectural blocker.** Every backend uses a single **blocking**
+  `subprocess.run()` and returns one complete `LLMResult`; there is **no token-callback or streaming path**
+  anywhere (`runner.py` `_invoke` for Headless/Codex; `chat.ask` is one call; `POST /chat` returns a dict;
+  the webapp `await api.sendChat`). The SSE machinery exists only for run status (`/runs/{id}/events`).
+- **Files:** `argo/runner.py` (new streaming invoke via `subprocess.Popen` + line parsing; Claude Code
+  supports `--output-format stream-json`, Codex emits JSONL on stdout — today parsed only post-exit),
+  `argo/chat.py` (`ask_streaming` async generator), `server/app.py` (`GET /runs/{id}/chat/stream`
+  StreamingResponse), `webapp/js/api.js` (`streamChat` via EventSource), `webapp/js/app.js` (progressive
+  render in `chatPanel`).
+- **Hypotheses evaluated:** (a) "add streaming to the core `run()`" — **don't**; add a *separate*
+  `run_streaming()` so the blocking pipeline contract (cost logging, caps, partial recovery) is untouched.
+  (b) value is purely perceived latency for one user — **defer** behind A and B1.
+- **Risk:** async refactor touches the guardrail chokepoint; must preserve ledger logging + per-session
+  caps that currently live in the blocking `run()`.
+
+### C. Run infrastructure (low value for a local single-user tool)
+
+#### C1 — Mid-stage cancellation — effort **M** · paper value **None** — ✅ DONE
+- **Shipped:** the runner runs each CLI as a **cancellable subprocess** (`AgentRunner._exec`): a
+  pump thread does `communicate`, the main thread polls `self.cancel_event` and, on Cancel,
+  `_kill_tree` kills the whole process tree (`taskkill /T` on Windows, `killpg` on POSIX) and raises
+  `RunnerCancelled`. The orchestrator wires `cancel_event` onto the runner and normalizes a mid-stage
+  `RunnerCancelled` to a cancellation (status → cancelled). The UI shows "Cancelling…". Timeout path
+  unchanged. So Cancel during a 20-min audit now stops it immediately, not at the next boundary.
+- **Feasibility: medium.** `cancel_event` is checked only at **stage boundaries** (`orchestrator._check_cancel`),
+  and the runner's `subprocess.run()` is never interrupted, so a click during a long audit takes effect only
+  at the next boundary. Need to thread `cancel_event` into `runner.run`, switch to `subprocess.Popen` + poll,
+  and kill the process group (Windows `CREATE_NEW_PROCESS_GROUP`/`creationflags`; Unix `preexec_fn=os.setsid`
+  + `killpg`), then mark the running stage cancelled in `progress.py` and a "Cancelling…" state in the UI.
+- **Verdict:** real but low priority — boundary cancellation already works for a single local user.
+
+#### C2 — Per-run subprocess isolation — effort **M–L** · paper value **None**
+- **Feasibility: medium.** Runs are in-process daemon threads (`server/jobs.py`, which itself notes
+  "in-process threads are enough" for a local single-user tool). Moving to `multiprocessing.Process` (PID
+  tracked in `status.json`, killable) buys crash-isolation and clean mid-run kill, but adds IPC/serialization
+  complexity. **Defer** unless Argo is ever exposed multi-user (then pair with auth).
+
+#### C3 — Repo ZIP upload from the UI — effort **M** · paper value **Low (UX)** — ✅ DONE
+- **Shipped:** `POST /uploads` (multipart) extracts a repo `.zip` into a staging dir under
+  `runs_dir` via `server/uploads.extract_zip` — hardened against **path traversal** (every member
+  must resolve inside the dest), **zip bombs** (entry-count + uncompressed-size caps), and symlinks
+  (skipped); the returned `repo` path then drives a normal `POST /runs` (ingest copies it read-only).
+  The New Run form has an **⬆ Upload .zip** button. `python-multipart` added to requirements.
+- **Feasibility: medium.** No multipart anywhere: `RunRequest.repo` is a string, `api.startRun` sends JSON,
+  the New Run field is a text input, and `acquire_repo(source, dest, *, is_url)` only clones a URL or
+  `copytree`s a local dir. Need a `multipart/form-data` endpoint (or `POST /runs/upload`), a temp-dir unzip
+  with **zip-bomb / path-traversal guards** (entry count, total size, no `..`/absolute members), then pass
+  the unzipped path to ingest with `is_url=False`. **Low value:** the server already resolves a typed local
+  path on the same machine, so upload mainly helps a future remote deployment.
+
+### D. Resilience & cost transparency — ✅ DONE (D1/D2 shipped 2026-07-28; motivated by real recurring
+operator pain across this campaign's runs on Claude Pro/Max plans — see `docs/design-decisions.md`
+for how this differs from the Phase-8 retrospective cost report, which is done)
+
+Two related problems observed repeatedly in practice, both solvable mostly by **exposing state Argo
+already tracks at the right moment**, not by building new tracking:
+
+1. On Claude Pro/Max, a real run frequently outlives the rolling session-limit window. Today, once
+   every configured fallback backend is exhausted, the stage just fails
+   (`RunnerError("all fallback backends exhausted")`) and the run sits dead until a human notices,
+   waits past the reset time, and hand-writes a one-off script that re-enters the pipeline at the
+   right stage on the existing `run_id` — this exact pattern has been repeated from scratch on
+   nearly every large target this campaign has run (bonjour, coturn, mitmproxy, jsoup, Pumpkin, ...).
+2. There is no way to know a run's likely cost **before** starting it — only the hard `--budget`
+   ceiling (aborts mid-run once exceeded) and the Phase-8 `/costs` page (retrospective, after runs
+   complete). Users learn the number from the final summary, after the spend already happened.
+
+#### D1 — `argo resume` (generalize the hand-written "finisher script" pattern) — effort **M** ·
+operator value **High** · paper value **Low** - DONE (2026-07-28)
+- **What already exists, unused for this:** `argo/runner.py:883-887` (`_extract_session_reset_hint`)
+  already regex-parses a reset time out of the raw error text (e.g. "resets 1:50pm (Europe/Rome)")
+  but only logs it today — the parsed value is discarded. `argo/progress.py`'s `ProgressReporter`
+  already persists per-stage state (`pending/running/done/failed/skipped`) plus the raw error string
+  to `status.json` on every stage boundary (`fail_stage`). Every pipeline stage is already an
+  independent, resumable function taking an existing `ctx` (`do_ingest` … `do_report` in
+  `argo/orchestrator.py:34-83`), and the CLI already exposes each one standalone with `--run RUN_ID`
+  (`recon`/`run`/`sca`/`validate`/`corroborate`/`verify`/`report` in `argo/cli.py`). This is
+  precisely the primitive every hand-written `finish_<target>.py` in this campaign has used — it was
+  never generalized into the tool itself.
+- **Proposed:** (a) attach the parsed reset hint to the raised error (e.g. `RunnerError.retry_after`)
+  so `status.json` gains a machine-readable field, not just human text; (b) a
+  `resume_pipeline(ctx, from_stage=None)` in `orchestrator.py` that reads `status.json`, finds the
+  first non-`done` stage, and resumes `run_pipeline`'s stage sequence from there — turning every
+  future "write a finisher script" into `argo resume --run ID`; (c) `--wait [--max-wait 12h]`: if the
+  failed stage's `retry_after` is in the future, sleep (with periodic status prints) until then + a
+  small buffer and retry automatically — bounded, Ctrl+C-safe (state is file-based, so aborting a
+  wait loses nothing and `argo resume` is always re-invokable later); (d) as a side effect, fix a
+  real existing bug this campaign hit on the jsoup run: `FallbackRunner._disabled`
+  (`argo/runner.py:899`) is permanent for the process's whole lifetime once a backend trips a
+  retryable limit, so a long finisher process can never switch back to a backend that recovered
+  mid-run — once `retry_after` is tracked, re-arm a disabled backend once `now() > retry_after`
+  instead of never.
+- **Verdict:** build (a)+(b) first — they alone eliminate the recurring finisher-script busywork with
+  no new waiting behavior. (c) is a genuine nice-to-have on top; (d) is a real bug fix that falls out
+  for free once (a) exists. Explicitly deferred: a persistent daemon/OS-service that resumes runs
+  after the whole process exits (surviving a reboot) — real infra (cron/Task Scheduler, a job queue)
+  disproportionate to "one user, occasional multi-hour waits"; `--wait` inside one long-lived process
+  covers the actually-observed need.
+
+- **Shipped note (2026-07-28):** `argo resume --run ID [--wait] [--max-wait DURATION]` now loads the run's persisted `config.json`, resumes from the first non-done configured stage, records `retry_after` in `status.json`, and re-arms fallback backends after parseable reset hints.
+- **Additional hardening shipped with D1:** ingest now persists the full effective `PipelineConfig` to `config.json`, and no-status `is_error` runner envelopes now raise `RunnerError` so fallback/retry paths are exercised instead of returning garbage output.
+- **Post-implementation review fix:** `parse_retry_after`'s timezone-name lookup only caught `ZoneInfoNotFoundError`, but `zoneinfo.ZoneInfo` raises plain `ValueError` for a malformed key (path-traversal-shaped, embedded NUL, ...) — an untrusted-looking reset-hint string could have crashed the fallback chain it exists to protect. Broadened the catch; regression test in `tests/test_resume.py`.
+- **Follow-up shipped (2026-08-10):** the "run sits dead until a human notices" problem this section
+  originally motivated D1 with is now smaller in practice, not just easier to recover from. Three
+  changes, complementing (not replacing) `argo resume`: (a) every stage's canonical output write is
+  now atomic (`context.atomic_write_json`), so a kill mid-write can no longer hand a resumed run a
+  corrupt file to choke on; (b) `RunnerError` gained a classified `failure_kind`
+  (`moderation_flagged`/`credits_exhausted`/`rate_limited`/`timeout`/`unknown_retryable`), letting
+  `FallbackRunner` apply a failure-appropriate cooldown instead of one flat 5-minute default — and
+  fixing a real bug where Codex's "produced no output at all" failure (the exact shape an immediate
+  moderation flag or credit exhaustion takes) was NOT retryable at all, so a configured fallback was
+  never even attempted on it; (c) `_run_stage_sequence` now auto-retries a still-failing stage
+  in-process (bounded, honors the failure's own reset hint up to a cap) before giving up — the
+  deliberately-deferred "resume after the whole process exits" daemon idea from D1's own verdict
+  above is still out of scope, but a large share of what used to need it turns out not to need the
+  process to exit at all. See [architecture.md](architecture.md#the-agentrunner-abstraction) and
+  [cli-reference.md](cli-reference.md#recovering-a-stopped-run) for the full mechanics.
+
+#### D2 — `argo estimate` (preflight cost range before spending anything) — effort **S–M** ·
+operator value **High** · paper value **Med** (implements the cost-preview constraint the roadmap's
+own "Constraints that shape every decision" section already states but never built)
+- **What already exists, unused for this:** `argo/ledger.py`'s `Ledger` already aggregates
+  `cost_by_model`, `cost_by_stage`, `recent_run_costs`; `argo/costs.py`'s `cost_report` already
+  buckets `avg_cost_per_run` **by archetype** (`argo/archetype.py`'s 11 canonical categories,
+  classified by recon and persisted in `meta.json`) across every run Argo has ever done. This is
+  real historical data with no new tracking required — only a new read path, surfaced before the
+  audit stage instead of only after `report`.
+- **Proposed:** (a) `argo estimate --repo <path/url> [--critic-passes N] [--second-opinion N]
+  [--corroborate/--no-corroborate] [--verify]` runs only `ingest`+`recon` (already the two cheap,
+  pre-audit stages) to get real LOC/file-count + the recon-classified archetype, looks up historical
+  cost for that archetype, and prints a **range from observed variance** (e.g. "archetype=
+  web_api_cms, N=7 past runs: $18-$61, median $34; this config historically runs ~1.6x baseline
+  based on stage-cost-share -> estimated $30-$95"), not a false-precision point number; (b) cold-start
+  fallback when an archetype has no history yet: a rough estimate from `cost_by_model`'s own observed
+  $/1k-output-tokens times the real first-audit-prompt token count (recon already has the repo, so
+  this isn't a guess) times stage/pass multipliers, clearly labeled "rough" vs. the confident
+  historical range; (c) surface the same estimate automatically right after `recon` in a normal
+  `argo pipeline` run, before `audit` (the first real spend), requiring `--yes` or an interactive
+  confirm to proceed unless `--budget` was already set explicitly.
+- **Verdict:** do this one first if only building one of D1/D2 — smaller new-code surface (almost
+  pure aggregation over existing data), and (unlike D1) every run benefits, not just the ones that
+  hit a session limit.
+
+- **Shipped note (2026-07-28):** `argo estimate --repo ...` now runs ingest+recon only, keeps the
+  resulting run directory for reuse, and prints either an archetype-specific historical range or a
+  clearly labeled cold-start rough estimate. `argo pipeline` prints the same estimate after recon
+  and before audit; it asks for confirmation only in an interactive TTY when neither `--yes` nor an
+  explicit `--budget` was supplied. Small refactor: the web-only `_run_archetypes()` scan moved from
+  `server/app.py` into shared `argo/archetype.py::run_archetypes()` so CLI and API use the same
+  run_id-to-archetype mapping.
+
+**Cross-cutting note:** recording each `retry_after` observation into the ledger alongside D1(a) is
+cheap and would let D2 eventually also answer "if you hit a limit on this plan, expect to wait ~X" —
+closing the loop between the two items instead of shipping them as unrelated features.
+
+### E. Multi-branch freshness check (reduce false "already fixed" duplicates) — ✅ DONE (2026-07-28,
+motivated by the open62541 disclosure — see `docs/design-decisions.md` /
+`disclosure-precision-lessons` case notes for the full incident)
+
+**What's missing today:** Argo has no automated pass that diffs the audited tree against upstream
+before finalizing a report. The `design_context_block` helper in `argo/rendering.py` injects
+maintainer-confirmed by-design priors into prompts, and corroborate's own prompt asks the model to
+consider issue-tracker context — but there is no coded step that actually checks "has this exact code
+path already been changed since we pinned our commit," on any branch.
+
+**Concrete motivating case:** open62541's maintainer classified 6/22 findings as duplicates. Verified
+by hand: 2 were fixed on a **private branch/internal advisory 2+ months before our audit** — genuinely
+uncatchable. But 1 (`maxPublishReqPerSession` cap) was fixed and merged to the project's `1.4`
+**maintenance branch 7 days before** our audit commit on `master` — fully public, fully checkable,
+just on a sibling branch we never looked at. Multi-branch release maintenance (a stable branch gets a
+fix before it's forward-merged to `master`/`dev`) is common in C/embedded/industrial-protocol projects,
+which are exactly the kind of target this campaign has increasingly favored.
+
+**Proposed:** a `freshness_check(ctx)` pass, run late (after `audit`, before `report` — cheap since it
+only needs `git log -- <file>` per already-cited finding path, not a full re-audit): (a) enumerate every
+finding's cited file path(s); (b) discover sibling branches worth checking — for a `git` target, `git
+branch -r` filtered to version-looking names (`\d+\.\d+`, `stable`, `release/*`, `lts`) plus whatever
+the target's own `SECURITY.md`/`CONTRIBUTING.md` states about supported branches (open62541's literally
+lists "master/1.5/1.4/1.3"); (c) for each finding, `git log <other-branch> -- <path>` since a
+reasonable lookback window (e.g. 6-12 months, or since the audited commit's date minus N days) and
+flag if a commit touches the same lines/function name — not proof of a fix, just a "check this before
+reporting" flag surfaced to the human/finalization step, since only a human (or a much deeper model
+pass) can tell a coincidental touch from an actual fix; (d) do the same single-branch check (audited
+branch only) against commits made *after* the pinned commit but *before* report-send time, covering the
+plain "we pinned early, upstream moved on before we finished" case, which is cheaper and even more
+likely to matter on long-running audits.
+
+**Explicit non-goal:** this cannot and should not try to catch privately-tracked/unmerged fixes (the
+open62541 case's other 2 verified duplicates) — that information is by design not available to an
+external auditor, human or AI, and no amount of engineering closes that gap. Frame this as "catch the
+same-tree-just-different-branch case," not "eliminate false positives from vendor-side duplicates."
+
+**Verdict:** implemented as an opt-in, best-effort `freshness_check` stage; still informational only.
+Post-implementation review caught one real gap in the "audited branch" half of the check: a
+pinned-commit checkout (the common case for reproducible audits) leaves the local repo on a
+detached HEAD, so guessing the audited branch from `symbolic-ref`/the remote's default branch
+silently picks the WRONG branch whenever the actual audited branch isn't the remote's default
+(e.g. auditing `dev` on a repo whose default is `master`) — exactly the multi-branch scenario this
+feature exists for. Fixed by persisting the raw `--commit` argument as given (branch/tag/sha, before
+resolution) into `meta.json` as `RunMeta.requested_ref`, and having `freshness.py` prefer it over
+guessing whenever it isn't sha-shaped. Covered by
+`test_audited_branch_uses_requested_ref_on_detached_head` in `tests/test_freshness.py`.
+
+## Next-generation analysis backlog — cumulative reasoning (proposed 2026-10-04)
+
+This block follows a code-level comparison with Causal Security's public description of Cipher.
+The useful lesson is not "add more agents" or copy its enterprise connector surface: Argo already
+has ground-truth recon, adversarial validation, corroboration, deep verify, sandboxed runtime/live
+checks, and fix verification. The remaining high-value gap is to make those artifacts cumulative,
+machine-checkable, and composable across findings and runs.
+
+Build order: **F1 evidence contract → F2 target memory → F3 attack paths → F4 incremental review**.
+F5 can ship independently after F1. Do not claim value from any item until the evaluation below
+shows an improvement at a fixed model, commit, prompt version, and token budget.
+
+### F1 — Unified claim/evidence contract — ✅ SHIPPED (first complete slice, v0.8.0, 2026-10-05) · priority **P0**
+
+**Current gap.** `Finding`, `validation`, `verification`, ASan, runtime, live, corroboration, and
+maintainer feedback all express different kinds of evidence, but no authoritative object links an
+exact security claim to its preconditions, proof obligations, supporting/contradicting evidence,
+negative control, remaining uncertainty, and attained proof level. A model confidence label is not
+the same thing as empirical proof.
+
+**Proposed:**
+- Extend the finding contract with `claim`, `attacker_start`, `preconditions`,
+  `capabilities_gained`, `proof_obligations`, `evidence[]`, `remaining_uncertainty`, and an
+  orthogonal technical `proof_level` (`hypothesis`, `source_supported`,
+  `independently_rederived`, `runtime_observed`, with `end_to_end_proven` reserved),
+  plus separate `claim_status` and `external_status`.
+- Normalize existing validate/deep-verify/ASan/runtime/live/corroborate outputs into that evidence
+  ledger instead of replacing their richer native artifacts.
+- Add a deterministic claim-consistency gate before report: every material impact must have a
+  supported path; runtime confirmation must cite the decisive observation (and a differential
+  control where applicable); unresolved preconditions remain visible; chain-derived impact cannot
+  be silently assigned to one component.
+- Render proof level and open obligations in `REPORT.md` and drafts. A deterministic source proof
+  may remain reportable when runtime provisioning is infeasible; runtime is stronger evidence, not
+  a universal requirement.
+
+**Non-goals:** another generic LLM validation pass, forcing all findings through runtime, or
+collapsing severity/confidence/proof into one misleading score.
+
+**Implemented slice (shipped in v0.8.0).** `models.py` and the additive findings schema carry the
+claim, attacker start, preconditions, capabilities, typed obligations/evidence, uncertainty,
+consistency issues, technical proof level, claim status, and external disposition. The
+deterministic/idempotent `stages/evidence.py` gate runs immediately before report and summarizes
+native validation, corroboration, deep verify, ASan, runtime, live, and current-run ledger feedback
+without replacing their richer artifacts. A runtime/live result needs an explicit interpreter
+assessment and a decisive captured observation; expectation matching and raw HTTP bodies never
+promote proof. Maintainer feedback remains an external disposition, never technical evidence.
+Claim/revision/artifact snapshots flag stale normalization. Conflicts remain reviewable but block
+drafts; legacy findings are upgraded additively, and resuming from evidence reruns the gate and
+report.
+
+**Deliberately deferred:** richer domain-specific obligation types (beyond the typed generic
+contract), automatic correction of the prose claim after deep-verify `corrected`, and F3's
+cross-finding capability-edge proof. Those require measured examples and must not be guessed by this
+deterministic slice.
+
+**Acceptance signal:** fewer post-report factual/severity corrections and fewer runtime-refuted
+"confirmed" findings, without reducing recall on the labeled corpora.
+
+### F2 — Persistent target memory / security model — priority **P0** · effort **L** · repeat-run value **High**
+
+**Current gap.** The ledger detects a repeated `dedup_key` and imports Fleece accept/reject outcomes
+for quality metrics; `--accepted-risks` can inject design context manually. A new run still
+re-derives most architecture, threat-model, false-lead, and maintainer-intent knowledge from
+scratch, and Fleece feedback does not automatically inform recon/validation.
+
+**Proposed:**
+- Introduce a canonical target identity and a private persistent store for typed entities and
+  relations: components, entry points, identities/roles, data, trust boundaries, invariants,
+  known-correct baselines, accepted design decisions, false leads, findings, variants, fixes, and
+  unresolved questions.
+- Every fact carries provenance, confidence, visibility (`private`/`public`), commit validity,
+  freshness, and explicit invalidation conditions. Changed or unprovable facts become `stale`, not
+  silently trusted.
+- Seed recon/validate/corroborate with only relevant, still-valid facts; write back new facts after
+  a run. Import sanitized vendor outcomes from Fleece while keeping Fleece the source of truth and
+  never publishing private correspondence from the Argo repository.
+- Start with SQLite/JSON and a small query layer. This is a security knowledge model, not a
+  code-property graph; do not introduce Neo4j/Joern or persist source text merely to call it a graph.
+
+**Acceptance signal:** on a second audit of the same target, materially fewer repeated false leads
+and less recon cost, while deliberately changed invariants are invalidated and re-checked rather
+than inherited.
+
+**Initial vertical slice (shipped in v0.9.0):** canonical remote/local target identities; an atomic
+private JSON store; exact-commit freshness and fail-closed staleness; a reviewable per-run seed
+snapshot; and deterministic recon capture of entry points, boundaries, questions, invariants,
+baselines, and false-lead carve-outs. Prior facts are recon hints, never evidence. Deliberately
+deferred: Fleece outcome import, cross-stage query/ranking, and seeding validate/corroborate until
+repeat-run measurements justify each extra trust edge.
+
+### F3 — Evidence-gated attack-path composition and blast radius — priority **P1** · effort **L** · depth value **High**
+
+**Current gap.** Audit prompts ask agents to correlate realistic exploit chains, and deep verify
+can compare/merge sibling findings, but the schema stores findings individually. There is no typed
+way to prove that the capability gained from finding A satisfies a precondition of finding B, so
+chains are prose that cannot be validated, ranked, or reproduced as a unit.
+
+**Proposed:**
+- Use F1's `attacker_start`, `preconditions`, and `capabilities_gained` to build candidate paths over
+  components, identities, data, and trust boundaries from F2.
+- Add an opt-in `compose` stage after deep verify/runtime and before report. It may emit
+  `attack_paths.json`, but every edge must reference evidence and preserve tenant, identity,
+  deployment, and configuration consistency.
+- Independently verify each proposed edge and the end-to-end path. Missing deployment context or an
+  unproven capability makes the path `inconclusive`, never an automatic severity multiplier.
+- Compute root-cause/blast-radius summaries: which fix collapses which paths, variants, and exposed
+  assets. Rank remediation by paths removed, not merely by the largest isolated CVSS label.
+
+**Non-goals:** adding severities together, hallucinating reachability between repositories, or
+turning several unrelated Medium findings into a Critical narrative.
+
+**Acceptance signal:** recover known multi-step cases as valid paths while rejecting seeded chains
+whose adjacent capabilities or identities do not actually match.
+
+**Initial vertical slice (shipped in v0.9.0):** opt-in deterministic `compose` after F1 evidence;
+it emits a bounded `attack_paths.json` only where active source-supported findings have an exact
+normalized capability→precondition binding and matching non-`unknown` attacker, principal, tenant,
+deployment, and configuration declarations. The artifact is fingerprinted, omitted from a stale
+report, and cannot alter severity, proof, drafts, or submission state. Deferred: independent
+edge re-verification, F2-backed trust/data relations, and remediation/blast-radius ranking pending
+repeatable evaluation cases.
+
+### F4 — Context-preserving incremental / PR review — priority **P1** · effort **L** · operational value **High**
+
+**Dependency:** F2 and preferably F3. A raw diff-only scanner is explicitly not the goal.
+
+**Proposed:**
+- Treat a commit/PR diff as an invalidation trigger over the persistent target model: changed
+  symbols/files, affected invariants, callers/callees, roles, deployment relations, prior findings,
+  and attack paths form the review neighbourhood.
+- Re-evaluate that neighbourhood against the whole-system context, persist the new state, and emit
+  exactly which prior facts were retained, invalidated, or re-proved.
+- Keep scheduled/manual full-scope audits as a recall backstop; incremental mode must never claim
+  that an unchanged file implies an unchanged security property.
+
+**Acceptance signal:** lower cost/latency than a full rerun on representative PRs while still
+catching seeded cross-file and cross-service regressions whose vulnerable line was not directly in
+the diff.
+
+**Initial vertical slice (shipped in v0.9.0):** `--incremental-base` adds a deterministic stage
+before recon. It requires a Git base ancestor, records changed files, candidate symbols declared in
+those files, and a bounded textual
+neighbourhood, and classifies prior target-memory facts as retained only at the exact current
+revision, directly invalidated when a changed path is named, or stale/unproven. Recon receives this
+only as a prioritization plan with the whole
+repository still available. Deferred: semantic caller/callee extraction, fact-level re-proof,
+Fleece/attack-path dependency invalidation, and measured latency/recall comparison against full runs.
+
+### F5 — Explicit architecture questions + optional context pack — priority **P1** · effort **S–M** · precision value **Med–High**
+
+**Current gap.** `accepted_risks` supplies context before a run, but when intent remains ambiguous
+the pipeline can only infer, refute, or leave a generic runtime unknown. It cannot ask one precise
+question whose answer resolves several findings and becomes durable target knowledge.
+
+**Proposed:**
+- Emit `review_questions.json` entries containing one concise question, the affected findings/facts,
+  why source cannot settle it, and the conservative status used while unanswered (`needs_context`).
+- Allow unattended runs to continue; questions are a review queue, not a mandatory interactive
+  pause. Answers are schema-validated, written into F2 with provenance, and invalidate dependent
+  verdicts for targeted re-validation.
+- Define an optional, connector-neutral `context-pack` for architecture diagrams/notes, role and
+  service inventories, exported IAM/IaC facts, and business invariants. Prefer this bounded import
+  format before building direct AWS/Azure/Jira/Slack connectors.
+
+**Non-goals:** exposing private target context in public artifacts, accepting an answer as truth
+without provenance, or building broad enterprise connectors before measured demand exists.
+
+**Acceptance signal:** fewer by-design/threat-model rejections from maintainers, with each avoided
+error attributable to a question or context fact rather than to extra unguided model calls.
+
+**Initial vertical slice (shipped in v0.9.0):** strict, size-bounded connector-neutral context
+packs with per-claim provenance and credential-pattern rejection; raw content is injected only into
+offline model calls and excluded from reports, drafts, saved audit prompts, online OSINT, and the
+artifact API. Opt-in deterministic question generation groups only architecture-shaped uncertainty
+already present in recon/findings and never pauses a run. Provenance-bearing answers enter the
+same-revision F2 memory and current private context as `claimed` facts, mark dependent verdicts for
+re-validation, and suppress their stale drafts. Targeted re-validation of only the affected
+findings shipped as `argo revalidate-context`; answer entry in the HTTP API and web UI (Questions tab)
+shipped 2026-11-06. Deferred: measured maintainer-rejection reduction.
+
+### F6 — Public Argo research/editorial site — OWNER INTENT · priority **P2** · effort **M**
+
+Build an original Argo-designed editorial presence for public technical research, comparable in
+purpose (not design or copied content) to `causalsecurity.com/research`. Reuse the existing GitHub
+Pages public-findings deployment and advisory index where sensible rather than creating a second
+disconnected publication surface. Articles should have stable slugs, author/date/updated metadata,
+descriptions, categories/tags, canonical/OpenGraph/structured-data SEO, RSS/Atom, and explicit links
+to public advisories/CVEs/fixes and reproducible public artifacts.
+
+The publication boundary is non-negotiable: content must be generated only from an explicit public
+allow-list after advisory publication/embargo release. Private Fleece records, draft GHSA material,
+vendor correspondence, unredacted run artifacts, credentials, private target/source data, and
+unpublished evidence must live outside the Pages build inputs and must never be inferred as public
+from a filename or repository presence. Add a deterministic pre-deploy embargo/private-data check,
+fail the build closed on uncertain visibility, and keep editorial approval/manual publish as the
+final gate. No external wiki update is part of F1; wiki work happens only after the feature PR merges.
+
+### R1 — Awesome AI Hacking Agents feature reconnaissance — OWNER INTENT · priority **P1** · effort **M**
+
+Inspect every repository listed by Awesome AI Hacking Agents and produce a dated comparison matrix
+covering concrete capabilities, evaluation evidence, safety model, maturity, and integration cost.
+Deduplicate forks and marketing-only entries. Translate only demonstrated gaps into Argo proposals,
+each with an acceptance metric and an explanation of why the present pipeline cannot cover it. Do
+not copy agent counts, branding, or enterprise connectors merely because another tool has them.
+
+### Evaluation and safety gates for F1–F6
+
+- Replay a fixed set of accepted, rejected, runtime-refuted, by-design, and chained historical
+  findings with identical commits/models/budgets; compare each feature cumulatively and in ablation.
+- Primary metrics: maintainer-judged precision, benchmark recall, proof-obligation completeness,
+  runtime-refutation rate, severity corrections, repeated-false-lead rate, valid chains recovered,
+  cost/time per accepted finding, and root-cause compression (`paths removed per fix`).
+- Preserve the existing defaults: source-first, no auto-submission, no autonomous production write,
+  and no live interaction without the existing explicit authorization gates.
+- F1 implementation aligned stale documentation that described runtime/live as future or said the
+  target was never executed; docs now distinguish the source-static default, isolated runtime/ASan,
+  and tightly gated live modes before relying on the proof taxonomy.
+
+### Backend/account attribution — ✅ DONE
+
+Every LLM invocation now records a redaction-safe backend/account label in the run log. Expanded
+account chains include a stable index; directory labels keep only the basename, while API-key
+accounts use a generic marker. This makes fallback and rate-limit behavior auditable without
+adding credentials or full account paths to the per-call log, and without changing prompts,
+findings, or verdicts.
+
+## Historical decisions — resolved
+
+- **UI stack:** FastAPI plus the existing vanilla SPA. Screening, planning, model catalog, routing,
+  and profiles use the same core services as the CLI; there is no second planning implementation.
+- **Deployment posture:** local/personal first and unauthenticated. The service must not be exposed
+  beyond localhost without authentication because it orchestrates agents over arbitrary repos.
+- **Cost posture:** mock/zero-token checks remain the default for development; real runs use an explicit
+  budget and confirmation, with planner estimates and per-run/session guards enforcing the boundary.
+- **Multi-backend:** Codex, Gemini, and Claude ship with deterministic per-stage routing and provenance;
+  mixed-provider routing is opt-in and remains subject to the same guardrails.
+
+The next work is evidence collection (corpus expansion and repeated, approved benchmark matrices),
+not another architecture-selection pass.
