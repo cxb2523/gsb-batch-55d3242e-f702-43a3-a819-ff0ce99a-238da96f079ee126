@@ -1,0 +1,60 @@
+# ============================================================
+# ROLE DEFINITIONS — what each role can access in iblai-ontology.
+#
+# Role *assignment* (who has which role) is managed in the ibl.ai platform and
+# arrives on each MCP request via the `X-Iblai-Role` header. This file only
+# defines what a given role is permitted to access (Component 3, Option A).
+#
+# The higher-ed sample roles (FinancialAidCounselor, AcademicAdvisor, Registrar,
+# Student) live in roles.higher-ed.example.yaml alongside tools.higher-ed.example.yaml.
+# ============================================================
+roles:
+  default:
+    display_name: "Authenticated User (No Role Assigned)"
+    memory_paths:
+      - /ontology/courses/_index.md
+      - /ontology/courses/by-dept/**
+    mcp_toolsets: []
+    cache_tables: []
+    agents:
+      - general-info-agent
+
+  DataAnalyst:
+    display_name: "Data Analyst"
+    memory_paths:
+      - /ontology/**
+    mcp_toolsets:
+      - admin-analytics-tools
+      - client-postgres-tools
+      - client-mysql-tools
+    cache_tables:
+      - "*"
+    agents:
+      - analytics-agent
+
+  Executive:
+    display_name: "University Executive"
+    memory_paths:
+      - /ontology/**
+    mcp_toolsets:
+      - "*"
+    cache_tables:
+      - "*"
+    concurrency_limits:
+      max_records_per_query: 1000
+      max_export_rows: 500
+    agents:
+      - executive-dashboard-agent
+
+  IblaiOntologyAdmin:
+    display_name: "Ontology Administrator"
+    memory_paths:
+      - /ontology/_audit/**
+    mcp_toolsets:
+      - admin-analytics-tools
+      - client-postgres-tools
+      - client-mysql-tools
+    cache_tables:
+      - sync_runs
+      - audit_log
+    admin_dashboard: true

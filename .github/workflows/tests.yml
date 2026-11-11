@@ -1,0 +1,24 @@
+name: Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # setup-uv publishes no floating major tag.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install (dev group + django + auto-ontology extras)
+        run: uv sync --locked --extra django --extra auto-ontology
+
+      - name: Run tests
+        run: uv run --locked pytest -q

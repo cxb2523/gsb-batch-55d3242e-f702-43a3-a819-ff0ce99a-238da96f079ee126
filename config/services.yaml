@@ -1,0 +1,8 @@
+# ============================================================
+# services.yaml: the connected services `ontology doctor` checks the
+# environment of, by catalog key. Empty by default: services are added
+# with `ontology service add` or in the Ontology Frontend and kept in the
+# service registry, which is the database, or the ibl.ai platform with
+# ONTOLOGY_DATA_STORE=dm (where this file is not read).
+# ============================================================
+services: []
