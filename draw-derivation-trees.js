@@ -63,10 +63,194 @@ var pl;
 			obj[name] = value;
 	};
 
+	// Built-in default styles. These are the historical hard-coded defaults and
+	// are also the fallback used when a theme cannot be loaded.
+	var default_styles = function() {
+		return {
+			"font-size": 14,
+			"font-family": "Monospace, Courier New",
+			"border-width": 2,
+			"border-color": "#43207a",
+			"padding": 5,
+			"margin-x": 10,
+			"margin-y": 20,
+			"order": {
+				"radius": 15,
+				"background-color": "#43207a",
+				"border-width": 4,
+				"border-color": "#43207a",
+				"font-color": "#ffffff"
+			},
+			"state": {
+				"background-color": "#e0ccfd",
+				"border-width": 4,
+				"border-color": "#43207a",
+				"font-color": "#43207a"
+			},
+			"answer": {
+				"background-color": "#a7e3a7",
+				"border-width": 4,
+				"border-color": "#0b6a0d",
+				"font-color": "#0b6a0d"
+			},
+			"error": {
+				"background-color": "#ecc2c2",
+				"border-width": 4,
+				"border-color": "#881717",
+				"font-color": "#881717"
+			}
+		};
+	};
+
+	var is_plain_object = function( value ) {
+		return value !== null && typeof value === "object" && !Array.isArray( value );
+	};
+
+	// Merge source into base, with source values taking precedence. Nested
+	// sections (order, state, answer, error) are merged recursively so a
+	// partial caller style keeps the values provided by the theme.
+	var merge_styles = function( base, source ) {
+		if( !is_plain_object( source ) )
+			return base;
+		for( var key in source ) {
+			if( !source.hasOwnProperty(key) || typeof source[key] === "undefined" )
+				continue;
+			if( is_plain_object( source[key] ) ) {
+				var nested = is_plain_object( base[key] ) ? base[key] : {};
+				base[key] = merge_styles( nested, source[key] );
+			} else if( source[key] !== null && typeof source[key] !== "object" ) {
+				base[key] = source[key];
+			}
+		}
+		return base;
+	};
+
+	// Precedence: built-in defaults < theme < explicit caller styles.
+	var compose_styles = function( caller_styles, theme ) {
+		var styles = default_styles();
+		if( theme )
+			merge_styles( styles, theme );
+		if( caller_styles )
+			merge_styles( styles, caller_styles );
+		if( typeof styles["font"] === "undefined" )
+			styles["font"] = styles["font-size"] + "px " + styles["font-family"];
+		return styles;
+	};
+
+	var theme_url = function( name, options ) {
+		if( typeof options.themeUrl === "string" )
+			return options.themeUrl.replace( "{name}", name );
+		var base = typeof options.themePath === "string" ? options.themePath : "themes/";
+		return base + ( /\.json$/i.test( name ) ? name : name + ".json" );
+	};
+
+	var parse_theme = function( data, url ) {
+		var theme = data;
+		if( typeof theme === "string" ) {
+			try {
+				theme = JSON.parse( theme );
+			} catch( e ) {
+				throw new Error( "Could not parse theme \"" + url + "\": " + e.message );
+			}
+		}
+		if( !is_plain_object( theme ) )
+			throw new Error( "Theme \"" + url + "\" does not contain a JSON object" );
+		return theme;
+	};
+
+	var report_theme_error = function( options, error, url ) {
+		if( typeof options.onThemeError === "function" ) {
+			try {
+				options.onThemeError( error, options.theme, url );
+			} catch( e ) {
+				// A failing error handler must not stop the tree from being drawn.
+			}
+		}
+	};
+
+	var load_theme = function( options ) {
+		var name = options.theme;
+		// Themes may also be supplied directly by the caller (handy when
+		// fetch/XHR is unavailable, e.g. embedding or automated tests).
+		if( is_plain_object( options.themes ) && options.themes.hasOwnProperty( name ) )
+			return Promise.resolve( options.themes[name] ).then(function( theme ) {
+				return parse_theme( theme, name );
+			});
+		var url = theme_url( name, options );
+		if( typeof fetch === "function" ) {
+			return Promise.resolve( fetch( url ) ).then(function( response ) {
+				if( !response )
+					throw new Error( "Could not load theme \"" + url + "\"" );
+				if( typeof response.ok === "boolean" && !response.ok )
+					throw new Error( "Could not load theme \"" + url + "\" (HTTP " + response.status + ")" );
+				if( typeof response.text === "function" )
+					return Promise.resolve( response.text() ).then(function( text ) {
+						return parse_theme( text, url );
+					});
+				if( typeof response.json === "function" )
+					return Promise.resolve( response.json() ).then(function( json ) {
+						return parse_theme( json, url );
+					});
+				return parse_theme( response, url );
+			});
+		}
+		if( typeof XMLHttpRequest !== "undefined" ) {
+			return new Promise(function( resolve, reject ) {
+				var request = new XMLHttpRequest();
+				request.open( "GET", url, true );
+				request.onreadystatechange = function() {
+					if( request.readyState !== 4 )
+						return;
+					if( ( request.status >= 200 && request.status < 300 ) || request.status === 0 ) {
+						try {
+							resolve( parse_theme( request.responseText, url ) );
+						} catch( e ) {
+							reject( e );
+						}
+					} else {
+						reject( new Error( "Could not load theme \"" + url + "\" (HTTP " + request.status + ")" ) );
+					}
+				};
+				request.onerror = function() {
+					reject( new Error( "Could not load theme \"" + url + "\"" ) );
+				};
+				try {
+					request.send();
+				} catch( e ) {
+					reject( e );
+				}
+			});
+		}
+		return Promise.reject( new Error( "No mechanism available to load theme \"" + url + "\"" ) );
+	};
+
+	var device_pixel_ratio = function() {
+		var ratio = 1;
+		if( typeof window !== "undefined" && typeof window.devicePixelRatio === "number" )
+			ratio = window.devicePixelRatio;
+		return ratio > 0 && isFinite( ratio ) ? ratio : 1;
+	};
+
 	var init = function( thread, max, canvas, styles, options ) {
 		styles = styles ? styles : {};
 		options = options ? options : {};
 		options.session = thread.session;
+		// A theme is loaded asynchronously; the tree is drawn exactly once, and
+		// only after every style value is known. Anything that fails during
+		// loading falls back to the built-in defaults.
+		if( options.theme ) {
+			var url = theme_url( options.theme, options );
+			return load_theme( options ).then(function( theme ) {
+				return compose_styles( styles, theme );
+			}, function( error ) {
+				report_theme_error( options, error, url );
+				return compose_styles( styles, null );
+			}).then(function( resolved_styles ) {
+				return new Promise(function( resolve, reject ) {
+					begin( thread, max, canvas, resolved_styles, options, { resolve: resolve, reject: reject } );
+				});
+			});
+		}
 		set_style( styles, "font-size", 14 );
 		set_style( styles, "font-family", "Monospace, Courier New" );
 		set_style( styles, "font", styles["font-size"] + "px " + styles["font-family"] );
@@ -97,42 +281,65 @@ var pl;
 		set_style( styles["error"], "border-width", 4 );
 		set_style( styles["error"], "border-color", "#881717" );
 		set_style( styles["error"], "font-color", "#881717" );
+		begin( thread, max, canvas, styles, options );
+	};
+
+	var begin = function( thread, max, canvas, styles, options, callbacks ) {
 		// Get parent node
 		var parent = thread.points[0];
-		if(typeof parent === "undefined")
+		if(typeof parent === "undefined") {
+			if( callbacks )
+				callbacks.resolve();
 			return;
+		}
 		// Get answer states
 		var answers = [];
 		var format_success = thread.format_success;
 		var format_error = thread.format_error;
 		var deb = thread.debugger;
 		var id = function(x) { return x };
+		var finish = function( error ) {
+			if( callbacks ) {
+				if( error )
+					callbacks.reject( error );
+				else
+					callbacks.resolve();
+			} else if( error ) {
+				throw error;
+			}
+		};
 		var after = function() {
 			thread.format_success = format_success;
 			thread.format_error = format_error;
 			thread.debugger = deb;
-			answers = thread.debugger_states;
-			// Set pointers to child nodes
-			for(var i = 0; i < answers.length; i++) {
-				var state = answers[i];
-				var child = null;
-				while( state != null ) {
-					state.text_goal = state.goal === null ? "□" : state.goal.toString( options );
-					state.text_substitution = clear_substitution(state.substitution).toString( options );
-					state.width = width;
-					if(state.children == null)
-						state.children = [];
-					if( child != null && !contains(child, state.children) )
-						state.children.push( child );
-					child = state;
-					state = state.parent;
+			try {
+				answers = thread.debugger_states;
+				// Set pointers to child nodes
+				for(var i = 0; i < answers.length; i++) {
+					var state = answers[i];
+					var child = null;
+					while( state != null ) {
+						state.text_goal = state.goal === null ? "□" : state.goal.toString( options );
+						state.text_substitution = clear_substitution(state.substitution).toString( options );
+						state.width = width;
+						if(state.children == null)
+							state.children = [];
+						if( child != null && !contains(child, state.children) )
+							state.children.push( child );
+						child = state;
+						state = state.parent;
+					}
 				}
+				// Set preorder id
+				set_preorder_id( parent, 0 );
+				// Get nodes by level
+				var levels = get_states_by_level( parent );
+				draw( levels, canvas, styles );
+			} catch( e ) {
+				finish( e );
+				return;
 			}
-			// Set preorder id
-			set_preorder_id( parent, 0 );
-			// Get nodes by level
-			var levels = get_states_by_level( parent );
-			draw( levels, canvas, styles );
+			finish();
 		};
 		thread.format_success = id;
 		thread.format_error = id;
@@ -148,8 +355,7 @@ var pl;
 		var font_size = styles["font-size"];
 		var radius = styles["order"]["radius"];
 		// Get container, canvas and context
-		var src = document.getElementById(src);
-		var canvas = typeof canvas_id === "string" ? document.getElementById(canvas_id) : canvas_id;
+		var canvas = typeof canvas_id === "string" && typeof document !== "undefined" ? document.getElementById(canvas_id) : canvas_id;
 		var ctx = canvas.getContext("2d");
 		// Maximum width of each level
 		var maxwidth = tree.map(function(a){return a.reduce(function(b,c){return b + c.width(ctx, styles["font"], margin_x, padding)}, 0)}, 0);
@@ -159,12 +365,23 @@ var pl;
 		var unifier_height = (padding * 3) + ((font_size + 2) * 2);
 		var level_height = (radius * 2) + (margin_y * 2) + unifier_height;
 		var height = level_height * tree.length - (2 * radius);
-		// Set canvas properties
-		ctx.height = height;
-		ctx.width = width;
-		canvas.height = ctx.height;
-		canvas.width = ctx.width;
-		
+		// Set canvas properties. The backing store is scaled by the device pixel
+		// ratio while the CSS size keeps the layout dimensions, so text and
+		// lines stay sharp on high-density displays. Reading the ratio on every
+		// draw makes a later call pick up a changed devicePixelRatio.
+		var ratio = device_pixel_ratio();
+		canvas.width = Math.round( width * ratio );
+		canvas.height = Math.round( height * ratio );
+		if( canvas.style ) {
+			canvas.style.width = width + "px";
+			canvas.style.height = height + "px";
+		}
+		// Resizing the canvas resets the context; map drawing coordinates back
+		// to CSS pixels.
+		if( typeof ctx.setTransform === "function" )
+			ctx.setTransform( 1, 0, 0, 1, 0, 0 );
+		ctx.scale( ratio, ratio );
+
 		// CLEAR CANVAS
 		ctx.clearRect(0, 0, width, height);
 		

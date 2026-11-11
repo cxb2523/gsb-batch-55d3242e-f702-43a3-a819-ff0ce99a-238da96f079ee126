@@ -13,11 +13,16 @@ Include the script [draw-derivation-trees.js](draw-derivation-trees.js) in your 
 
 ## Usage
 
-This tool adds a new method `draw(max_answers, canvas, styles)` to the `pl.type.Session` and `pl.type.Thread` prototypes. This method must be called after querying a goal (with the method `query( goal )`).
+This tool adds a new method `draw(max_answers, canvas, styles, options)` to the `pl.type.Session` and `pl.type.Thread` prototypes. This method must be called after querying a goal (with the method `query( goal )`).
 
 - **max_answers**: maximum number of answers to find in the derivation (to avoid infinite trees).
 - **canvas**: identifier of the canvas HTML object, or canvas object.
-- **styles** (optional): JavaScript object with style properties. The default styles are shown below.
+- **styles** (optional): JavaScript object with style properties. The default styles are shown below. When a theme is used, these values override the theme.
+- **options** (optional): an object with the following properties:
+  - **theme**: name of a theme. The file `themes/<name>.json` is loaded asynchronously and used as the base style. When a theme is requested, `draw` returns a Promise that resolves once the tree has been drawn.
+  - **themePath**: directory used to resolve theme files (default `themes/`). `themeUrl` may be used instead to provide a complete URL template (`{name}` is replaced by the theme name).
+  - **themes**: optional map of preloaded theme objects, keyed by theme name. Useful when `fetch`/`XMLHttpRequest` is not available.
+  - **onThemeError**: function called as `onThemeError( error, themeName, url )` when a theme cannot be loaded or parsed. The tree is still drawn with the built-in default styles (merged with any explicit `styles`), so an error never prevents rendering.
 
 ```js
 {
@@ -57,6 +62,30 @@ This tool adds a new method `draw(max_answers, canvas, styles)` to the `pl.type.
 
 ```
 
+### Themes
+
+A theme is a JSON object with the same shape as `styles`. The files in the
+[themes](themes) directory are ready to use:
+
+```js
+session.draw( 10, "derivation", {}, { theme: "monokai" } ).then( function() {
+  // The tree has been drawn with themes/monokai.json
+} );
+```
+
+A missing theme file or malformed JSON does not interrupt drawing: the tree
+falls back to the built-in default styles, and `options.onThemeError` is
+invoked if provided.
+
+### High-DPI displays
+
+The canvas backing store is sized from `window.devicePixelRatio` (1 when not
+available) and the drawing context is scaled accordingly, while
+`canvas.style` keeps the CSS dimensions calculated by the layout. Text and
+lines therefore stay sharp on retina/high-density screens, and the PNG
+exported by clicking the canvas keeps the full backing-store resolution.
+Calling `draw` again after the device pixel ratio changes uses the new ratio.
+
 ## Example
 
 ```html
@@ -83,3 +112,9 @@ This tool adds a new method `draw(max_answers, canvas, styles)` to the `pl.type.
 ```
 
 ![Derivation tree](/examples/powerset.png)
+
+A complete, runnable theme sample (with a vendored `core.js` and a
+`themes/monokai.json` file) is available in
+[examples/theme-sample](examples/theme-sample). Serve the repository over HTTP
+(for example `npx http-server .`) and open
+`examples/theme-sample/index.html`; themes are fetched relative to the page.

@@ -1,0 +1,44 @@
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Derivation tree with a theme</title>
+    <script type="text/javascript" src="core.js"></script>
+    <script type="text/javascript" src="../../draw-derivation-trees.js"></script>
+    <script id="program.pl" type="text/prolog">
+        powerset([], []).
+        powerset([_|T], P) :- powerset(T, P).
+        powerset([H|T], [H|P]) :- powerset(T, P).
+    </script>
+    <style>
+      body { font-family: sans-serif; margin: 2em; }
+      canvas { border: 1px solid #ccc; max-width: 100%; }
+      #status { margin-top: 1em; color: #555; }
+      #status.error { color: #881717; }
+    </style>
+  </head>
+  <body>
+    <h1>Derivation tree &mdash; monokai theme</h1>
+    <!-- The theme is fetched from themes/monokai.json, relative to this page. -->
+    <canvas id="derivation"></canvas>
+    <p id="status">Loading theme&hellip;</p>
+    <script type="text/javascript">
+      var session = pl.create();
+      session.consult( "program.pl" );
+      session.query( "powerset([1,2,3], X)." );
+      session.draw( 10, "derivation", { "font-size": 16 }, {
+        theme: "monokai",
+        onThemeError: function( error, theme, url ) {
+          var status = document.getElementById( "status" );
+          status.className = "error";
+          status.textContent = "Could not load theme \"" + theme + "\" (" + url + "): " +
+            error.message + " &mdash; using built-in default styles.";
+        }
+      } ).then(function() {
+        var status = document.getElementById( "status" );
+        if( !status.className )
+          status.textContent = "Rendered with the monokai theme " +
+            "(caller font-size override: 16px). Click the canvas to export a PNG.";
+      });
+    </script>
+  </body>
+</html>
