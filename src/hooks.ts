@@ -27,7 +27,13 @@ export function useSound(soundName: SoundName, defaultOptions: SoundOptions = {}
   const [isLoaded, setIsLoaded] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const soundRef = useRef<Howl | null>(null);
-  const activeSoundsRef = useRef<Array<{ id: number; loop: boolean; resolver?: () => void }>>([]);
+  // Each entry tracks one concrete playback (Howler sound id). `paused` lets us
+  // distinguish instances that were paused from ones that already ended and
+  // therefore must not be replayed on resume().
+  const activeSoundsRef = useRef<Array<{ id: number; loop: boolean; paused: boolean; resolver?: () => void }>>([]);
+  // Prevent re-registering an "end" listener when the same cached Howl instance
+  // is claimed again after being released.
+  const listenedHowlsRef = useRef<WeakSet<Howl>>(new WeakSet());
 
   // Get sound enabled state from context if available, fall back to global state
   let enabled = isSoundEnabled();
@@ -36,6 +42,11 @@ export function useSound(soundName: SoundName, defaultOptions: SoundOptions = {}
     if (soundContext) enabled = soundContext.enabled;
   } catch (_e) { /* SoundContext may not be available */ }
 
+  // Keep the latest value available inside async callbacks so that enabling/
+  // disabling sounds while a promise is in flight takes effect immediately.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
   // Lazy loading approach - only load the sound when needed
   const ensureLoaded = useCallback(async (): Promise<Howl> => {
     if (soundRef.current) return soundRef.current;
@@ -43,22 +54,30 @@ export function useSound(soundName: SoundName, defaultOptions: SoundOptions = {}
     try {
       const howl = await claimSound(soundName);
 
-      // Set up event listeners
-      howl.on("end", (id) => {
-        const soundIndex = activeSoundsRef.current.findIndex((sound) => sound.id === id);
-        if (soundIndex >= 0) {
+      // Set up event listeners once per Howl instance (the instance is shared
+      // between hook consumers, so each consumer needs its own listener).
+      if (!listenedHowlsRef.current.has(howl)) {
+        listenedHowlsRef.current.add(howl);
+
+        howl.on("end", (id) => {
+          const soundIndex = activeSoundsRef.current.findIndex((sound) => sound.id === id);
+          if (soundIndex < 0) return;
+
           const sound = activeSoundsRef.current[soundIndex];
+          activeSoundsRef.current.splice(soundIndex, 1);
 
           if (sound.resolver) sound.resolver(); // Resolve sound (eg. created in play())
-          if (!sound.loop) activeSoundsRef.current.splice(soundIndex, 1);
-        }
 
-        // Only update isPlaying state if no active sounds remain
-        if (activeSoundsRef.current.length === 0) {
-          soundRef.current = freeSound(soundName);
-          setIsPlaying(false);
-        }
-      });
+          // A looped instance that has ended (or stopped) must be forgotten so
+          // resume() never revives it. Any remaining playing instance keeps
+          // isPlaying true.
+          setIsPlaying(activeSoundsRef.current.some((active) => !active.paused));
+
+          if (activeSoundsRef.current.length === 0) {
+            soundRef.current = freeSound(soundName);
+          }
+        });
+      }
 
       soundRef.current = howl;
       setIsLoaded(true);
@@ -77,8 +96,14 @@ export function useSound(soundName: SoundName, defaultOptions: SoundOptions = {}
         // Ensure audio context is unlocked before playing
         await unlockAudioContext();
 
+        // Sounds may have been disabled while unlocking the audio context.
+        if (!enabledRef.current) return;
+
         // Ensure the sound is loaded
         const howl = await ensureLoaded();
+
+        // Sounds may also have been disabled while the sound was loading.
+        if (!enabledRef.current) return;
 
         const loop = options.loop !== undefined ? options.loop : false;
         if (options.volume !== undefined) howl.volume(options.volume);
@@ -90,13 +115,13 @@ export function useSound(soundName: SoundName, defaultOptions: SoundOptions = {}
 
         if (loop) {
           // For looped sounds, we just track them but don't resolve
-          activeSoundsRef.current.push({ id, loop });
+          activeSoundsRef.current.push({ id, loop, paused: false });
           return;
         }
 
         // For non-looped sounds, return a promise that resolves when the sound ends
         return new Promise<void>((resolve) => {
-          activeSoundsRef.current.push({ id, loop, resolver: () => resolve() });
+          activeSoundsRef.current.push({ id, loop, paused: false, resolver: () => resolve() });
         });
       } catch (error) {
         console.error("Error playing sound:", error);
@@ -108,35 +133,60 @@ export function useSound(soundName: SoundName, defaultOptions: SoundOptions = {}
   );
 
   const stop = useCallback(() => {
-    if (!soundRef.current) return;
+    const howl = soundRef.current;
 
-    // Resolve any pending promises
+    // Resolve any pending promises, even if the Howl was already released
+    // (for example by the "end" handler), and clear all active records.
     activeSoundsRef.current.forEach((sound) => {
       if (sound.resolver) sound.resolver();
     });
-
-    soundRef.current.stop();
-    soundRef.current = freeSound(soundName);
     activeSoundsRef.current = [];
+
     setIsPlaying(false);
-  }, []);
+
+    if (!howl) return;
+
+    howl.stop();
+    soundRef.current = freeSound(soundName);
+  }, [soundName]);
 
   const pause = useCallback(() => {
     if (!soundRef.current) return;
 
     soundRef.current.pause();
+    // Mark every live instance as paused so resume() replays exactly these
+    // instances (and never instances that have already ended).
+    activeSoundsRef.current.forEach((sound) => {
+      sound.paused = true;
+    });
     setIsPlaying(false);
   }, []);
 
   const resume = useCallback(() => {
-    if (!soundRef.current || !enabled || activeSoundsRef.current.length === 0) return;
+    if (!enabledRef.current || !soundRef.current) return;
+
+    const howl = soundRef.current;
+    const pausedSounds = activeSoundsRef.current.filter((sound) => sound.paused);
+    if (pausedSounds.length === 0) return;
 
     // Try to unlock audio context before resuming
     unlockAudioContext().then(() => {
-      activeSoundsRef.current.forEach(({ id }) => soundRef.current?.play(id));
-      setIsPlaying(true);
+      // Sounds may have been disabled, stopped, or unmounted while unlocking.
+      if (!enabledRef.current || soundRef.current !== howl) return;
+
+      let resumedCount = 0;
+      pausedSounds.forEach((sound) => {
+        // Skip instances that were removed while we were waiting.
+        if (!sound.paused || !activeSoundsRef.current.includes(sound)) return;
+
+        howl.play(sound.id);
+        sound.paused = false;
+        resumedCount += 1;
+      });
+
+      if (resumedCount > 0) setIsPlaying(true);
     });
-  }, [enabled]);
+  }, []);
 
   useEffect(() => {
     if (!enabled && isPlaying) pause(); // Pause all sounds when disabled
@@ -144,19 +194,24 @@ export function useSound(soundName: SoundName, defaultOptions: SoundOptions = {}
 
   // Cleanup on unmount
   useEffect(() => {
-    preloadSounds([soundName]).then(() => setIsLoaded(true));
+    let cancelled = false;
+    preloadSounds([soundName]).then(() => {
+      if (!cancelled) setIsLoaded(true);
+    });
 
     return () => {
+      cancelled = true;
       setIsLoaded(false);
       setIsPlaying(false);
 
+      const howl = soundRef.current;
       activeSoundsRef.current.forEach((sound) => {
         if (sound.resolver) sound.resolver(); // Resolve any pending promises
       });
       activeSoundsRef.current = [];
 
-      if (soundRef.current) {
-        soundRef.current.stop();
+      if (howl) {
+        howl.stop();
         soundRef.current = freeSound(soundName);
       }
     };

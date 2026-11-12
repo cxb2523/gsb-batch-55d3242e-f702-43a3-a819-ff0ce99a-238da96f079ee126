@@ -120,6 +120,199 @@ describe('useSound', () => {
     expect(mockHowl.stop).toHaveBeenCalled();
     expect(freeSound).toHaveBeenCalled();
   });
+
+  it('pause() then resume() restarts a looped sound and restores isPlaying', async () => {
+    const { result } = await renderUseSound();
+
+    await act(async () => {
+      await result.current.play({ loop: true });
+    });
+    expect(mockHowl.play).toHaveBeenCalledTimes(1);
+    expect(result.current.isPlaying).toBe(true);
+
+    act(() => {
+      result.current.pause();
+    });
+    expect(result.current.isPlaying).toBe(false);
+
+    act(() => {
+      result.current.resume();
+    });
+    await act(async () => {});
+
+    expect(mockHowl.play).toHaveBeenCalledTimes(2);
+    expect(mockHowl.play).toHaveBeenLastCalledWith(1);
+    expect(result.current.isPlaying).toBe(true);
+  });
+
+  it('does not revive a looped instance that already ended before resume()', async () => {
+    const endCallbacks: Array<(id: number) => void> = [];
+    mockHowl.on.mockImplementation((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'end') endCallbacks.push(cb as (id: number) => void);
+    });
+
+    const { result } = await renderUseSound();
+    await act(async () => {
+      await result.current.play({ loop: true });
+    });
+    expect(result.current.isPlaying).toBe(true);
+
+    // Simulate the looped instance ending naturally.
+    act(() => {
+      endCallbacks.forEach((cb) => cb(1));
+    });
+    expect(result.current.isPlaying).toBe(false);
+    expect(freeSound).toHaveBeenCalled();
+
+    const playCallsBeforeResume = mockHowl.play.mock.calls.length;
+    act(() => {
+      result.current.resume();
+    });
+    await act(async () => {});
+
+    expect(mockHowl.play).toHaveBeenCalledTimes(playCallsBeforeResume);
+    expect(result.current.isPlaying).toBe(false);
+  });
+
+  it('pause/resume covers every looped instance and stop cleans up all of them', async () => {
+    mockHowl.play.mockReturnValueOnce(1).mockReturnValueOnce(2);
+
+    const { result } = await renderUseSound();
+    await act(async () => {
+      await result.current.play({ loop: true });
+    });
+    await act(async () => {
+      await result.current.play({ loop: true });
+    });
+    expect(mockHowl.play).toHaveBeenCalledTimes(2);
+    expect(result.current.isPlaying).toBe(true);
+
+    act(() => {
+      result.current.pause();
+    });
+    expect(result.current.isPlaying).toBe(false);
+
+    act(() => {
+      result.current.resume();
+    });
+    await act(async () => {});
+
+    // Both paused instances are replayed.
+    expect(mockHowl.play).toHaveBeenCalledTimes(4);
+    expect(mockHowl.play).toHaveBeenCalledWith(1);
+    expect(mockHowl.play).toHaveBeenCalledWith(2);
+    expect(result.current.isPlaying).toBe(true);
+
+    act(() => {
+      result.current.stop();
+    });
+    expect(result.current.isPlaying).toBe(false);
+    expect(mockHowl.stop).toHaveBeenCalledTimes(1);
+    expect(freeSound).toHaveBeenCalledTimes(1);
+
+    // Nothing remains to resume after stop.
+    const playCallsAfterStop = mockHowl.play.mock.calls.length;
+    act(() => {
+      result.current.resume();
+    });
+    await act(async () => {});
+    expect(mockHowl.play).toHaveBeenCalledTimes(playCallsAfterStop);
+    expect(result.current.isPlaying).toBe(false);
+  });
+
+  it('resume() produces no sound when sounds are disabled', async () => {
+    vi.mocked(isSoundEnabled).mockReturnValue(false);
+    const { result } = renderHook(() => useSound('ui/toggle_on'));
+    await act(async () => {});
+
+    await act(async () => {
+      await result.current.play({ loop: true });
+    });
+    expect(claimSound).not.toHaveBeenCalled();
+    expect(mockHowl.play).not.toHaveBeenCalled();
+    expect(result.current.isPlaying).toBe(false);
+
+    act(() => {
+      result.current.resume();
+    });
+    await act(async () => {});
+
+    expect(mockHowl.play).not.toHaveBeenCalled();
+    expect(result.current.isPlaying).toBe(false);
+  });
+
+  it('stop() resolves a pending non-looped play promise', async () => {
+    const { result } = await renderUseSound();
+
+    let pendingPlay: Promise<void>;
+    act(() => {
+      pendingPlay = result.current.play();
+    });
+    await act(async () => {});
+
+    act(() => {
+      result.current.stop();
+    });
+
+    await expect(pendingPlay!).resolves.toBeUndefined();
+  });
+
+  it('keeps isPlaying true while another looped instance is still playing', async () => {
+    const endCallbacks: Array<(id: number) => void> = [];
+    mockHowl.on.mockImplementation((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'end') endCallbacks.push(cb as (id: number) => void);
+    });
+    mockHowl.play.mockReturnValueOnce(1).mockReturnValueOnce(2);
+
+    const { result } = await renderUseSound();
+    await act(async () => {
+      await result.current.play({ loop: true });
+    });
+    await act(async () => {
+      await result.current.play({ loop: true });
+    });
+    expect(result.current.isPlaying).toBe(true);
+
+    act(() => {
+      endCallbacks.forEach((cb) => cb(1));
+    });
+    expect(result.current.isPlaying).toBe(true);
+    expect(freeSound).not.toHaveBeenCalled();
+
+    act(() => {
+      endCallbacks.forEach((cb) => cb(2));
+    });
+    expect(result.current.isPlaying).toBe(false);
+    expect(freeSound).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop() followed by unmount does not free the sound twice', async () => {
+    const { result, unmount } = await renderUseSound();
+    await triggerPlay(result);
+
+    act(() => {
+      result.current.stop();
+    });
+    unmount();
+
+    expect(freeSound).toHaveBeenCalledTimes(1);
+  });
+
+  it('unmount resolves pending play promises, clears state and frees sound', async () => {
+    const { result, unmount } = await renderUseSound();
+
+    let pendingPlay: Promise<void>;
+    act(() => {
+      pendingPlay = result.current.play();
+    });
+    await act(async () => {});
+
+    unmount();
+
+    await expect(pendingPlay!).resolves.toBeUndefined();
+    expect(mockHowl.stop).toHaveBeenCalledTimes(1);
+    expect(freeSound).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('useSoundOnChange', () => {
