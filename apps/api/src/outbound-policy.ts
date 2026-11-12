@@ -38,6 +38,37 @@ function isPrivateIp(address: string): boolean {
   return family === 0 || privateAddresses.check(normalized, family === 4 ? "ipv4" : "ipv6")
 }
 
+/**
+ * Stable, enumerated refusal reasons shared by every public-egress caller.
+ * These are fixed identifiers only: they must never embed resolved IPs,
+ * upstream proxy URLs, credentials, or any other request-specific detail.
+ */
+export const PUBLIC_EGRESS_REASON = {
+  /** Literal private/loopback/link-local target, or a hostname resolving only to such addresses. */
+  DESTINATION_PRIVATE: "destination_private",
+  /** A hostname resolved to a mix of public and private/loopback addresses. */
+  DESTINATION_MIXED_RESOLUTION: "destination_mixed_resolution",
+  /** DNS lookup failed or returned no usable addresses. */
+  DNS_RESOLUTION_FAILED: "dns_resolution_failed",
+} as const
+
+export type PublicEgressReason = (typeof PUBLIC_EGRESS_REASON)[keyof typeof PUBLIC_EGRESS_REASON]
+
+/**
+ * A policy refusal that carries a stable {@link PublicEgressReason} in addition
+ * to the legacy status code/message, so callers (e.g. the local egress proxy)
+ * can surface a machine-readable reason without changing URL-validation behaviour.
+ */
+export class PublicTargetError extends RequestValidationError {
+  constructor(
+    readonly reason: PublicEgressReason,
+    message: string,
+  ) {
+    super(message, 400)
+    this.name = "PublicTargetError"
+  }
+}
+
 export function parsePublicHttpUrl(rawUrl: string): { url: URL; hostname: string } {
   let url: URL
   try {
@@ -61,7 +92,10 @@ export function parsePublicHttpUrl(rawUrl: string): { url: URL; hostname: string
     hostname.endsWith(".local") ||
     (isIP(hostname) && isPrivateIp(hostname))
   ) {
-    throw new RequestValidationError("url must not target a private or local network", 400)
+    throw new PublicTargetError(
+      PUBLIC_EGRESS_REASON.DESTINATION_PRIVATE,
+      "url must not target a private or local network",
+    )
   }
 
   return { url, hostname }
@@ -78,10 +112,21 @@ export async function resolvePublicHostname(
   try {
     addresses = isIP(hostname) ? [{ address: hostname, family: isIP(hostname) }] : await lookupHost(hostname)
   } catch {
-    throw new RequestValidationError("url hostname could not be resolved", 400)
+    throw new PublicTargetError(PUBLIC_EGRESS_REASON.DNS_RESOLUTION_FAILED, "url hostname could not be resolved")
   }
-  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateIp(address))) {
-    throw new RequestValidationError("url must not target a private or local network", 400)
+  if (addresses.length === 0) {
+    throw new PublicTargetError(PUBLIC_EGRESS_REASON.DNS_RESOLUTION_FAILED, "url hostname could not be resolved")
+  }
+  const privateHits = addresses.filter(({ address }) => isPrivateIp(address))
+  if (privateHits.length > 0) {
+    // A purely private answer is a local/private target; a mixed answer is a
+    // distinct refusal so operators can tell rebind/mixed answers apart.
+    throw new PublicTargetError(
+      privateHits.length === addresses.length
+        ? PUBLIC_EGRESS_REASON.DESTINATION_PRIVATE
+        : PUBLIC_EGRESS_REASON.DESTINATION_MIXED_RESOLUTION,
+      "url must not target a private or local network",
+    )
   }
   return addresses.map(({ address }) => ({ address, family: isIP(address) }))
 }

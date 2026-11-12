@@ -2,16 +2,120 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { Socket } from "node:net"
 import { RequestValidationError } from "@trawl/tiers"
-import { type HostLookup, parsePublicHttpUrl, resolvePublicHostname } from "./outbound-policy"
+import {
+  type HostLookup,
+  PUBLIC_EGRESS_REASON,
+  type PublicEgressReason,
+  PublicTargetError,
+  parsePublicHttpUrl,
+  resolvePublicHostname,
+} from "./outbound-policy"
 import { connectTunnel } from "./proxy/upstreamTunnel"
 
-const MAX_CONNECTIONS = 128
+/**
+ * Maximum number of concurrently open egress connections. Over-limit requests
+ * fail fast with {@link EGRESS_DENY_REASON.CONCURRENCY_LIMITED} instead of
+ * queueing. The constant is exported so tests exercise the real limit.
+ */
+export const MAX_CONNECTIONS = 128
 const MAX_ROUTES = 512
 
 interface Options {
   lookup?: HostLookup
   connect?: typeof connectTunnel
   validateUpstream?: (proxy: string) => Promise<void>
+}
+
+/**
+ * The complete, fixed set of refusal reasons this proxy emits. Every value is a
+ * stable enum string: none are constructed from resolved IPs, upstream proxy
+ * URLs or credentials, so responses never leak internal topology.
+ */
+export const EGRESS_DENY_REASON = {
+  DESTINATION_PRIVATE: PUBLIC_EGRESS_REASON.DESTINATION_PRIVATE,
+  DESTINATION_MIXED_RESOLUTION: PUBLIC_EGRESS_REASON.DESTINATION_MIXED_RESOLUTION,
+  DNS_RESOLUTION_FAILED: PUBLIC_EGRESS_REASON.DNS_RESOLUTION_FAILED,
+  /** Proxy-Authorization is missing, malformed or fails authentication. */
+  PROXY_CREDENTIALS_INVALID: "proxy_credentials_invalid",
+  /** The in-flight connection limit (MAX_CONNECTIONS) has been reached. */
+  CONCURRENCY_LIMITED: "concurrency_limited",
+  /** Malformed request that is not one of the categorised refusals above. */
+  REQUEST_REJECTED: "request_rejected",
+  /** Dial/upstream failure after every validated public address was tried. */
+  DESTINATION_UNAVAILABLE: "destination_unavailable",
+} as const
+
+export type EgressDenyReason = (typeof EGRESS_DENY_REASON)[keyof typeof EGRESS_DENY_REASON]
+
+/** A refusal that already knows its stable reason; its status/body derive from DENY_RESPONSE. */
+export class EgressDenyError extends Error {
+  constructor(readonly reason: EgressDenyReason) {
+    super(reason)
+    this.name = "EgressDenyError"
+  }
+}
+
+/**
+ * Single source of truth mapping a fixed reason to its HTTP status and a
+ * constant, human-readable body. Bodies deliberately contain no request data.
+ */
+const DENY_RESPONSE: Readonly<Record<EgressDenyReason, { status: number; text: string }>> = {
+  [EGRESS_DENY_REASON.DESTINATION_PRIVATE]: {
+    status: 403,
+    text: "TRAWL public egress refused: target is a private or local network address",
+  },
+  [EGRESS_DENY_REASON.DESTINATION_MIXED_RESOLUTION]: {
+    status: 400,
+    text: "TRAWL public egress refused: hostname resolved to a mix of public and private addresses",
+  },
+  [EGRESS_DENY_REASON.DNS_RESOLUTION_FAILED]: {
+    status: 502,
+    text: "TRAWL public egress refused: hostname could not be resolved",
+  },
+  [EGRESS_DENY_REASON.PROXY_CREDENTIALS_INVALID]: {
+    status: 407,
+    text: "TRAWL public egress refused: valid proxy credentials are required",
+  },
+  [EGRESS_DENY_REASON.CONCURRENCY_LIMITED]: {
+    status: 503,
+    text: "TRAWL public egress refused: connection limit reached, retry later",
+  },
+  [EGRESS_DENY_REASON.REQUEST_REJECTED]: {
+    status: 400,
+    text: "TRAWL public egress refused: malformed proxy request",
+  },
+  [EGRESS_DENY_REASON.DESTINATION_UNAVAILABLE]: {
+    status: 502,
+    text: "TRAWL public egress refused: no public address could be reached",
+  },
+}
+
+function proxyStatusHeader(reason: EgressDenyReason): string {
+  return `trawl-public; error=${reason}`
+}
+
+/**
+ * Normalise any thrown error into a categorised refusal. Policy errors carry
+ * their own reason; everything else falls back to a fixed generic bucket so a
+ * failure message can never surface internal addresses or credentials.
+ */
+function classifyDeny(error: unknown): EgressDenyError {
+  if (error instanceof EgressDenyError) return error
+  if (error instanceof PublicTargetError) return new EgressDenyError(fromPolicyReason(error.reason))
+  if (error instanceof RequestValidationError && error.statusCode === 407)
+    return new EgressDenyError(EGRESS_DENY_REASON.PROXY_CREDENTIALS_INVALID)
+  if (error instanceof RequestValidationError) return new EgressDenyError(EGRESS_DENY_REASON.REQUEST_REJECTED)
+  return new EgressDenyError(EGRESS_DENY_REASON.DESTINATION_UNAVAILABLE)
+}
+
+/** Every outbound-policy reason is also a proxy denial reason (enforced by the Record lookup). */
+function fromPolicyReason(reason: PublicEgressReason): EgressDenyReason {
+  const mapped: Record<PublicEgressReason, EgressDenyReason> = {
+    [PUBLIC_EGRESS_REASON.DESTINATION_PRIVATE]: EGRESS_DENY_REASON.DESTINATION_PRIVATE,
+    [PUBLIC_EGRESS_REASON.DESTINATION_MIXED_RESOLUTION]: EGRESS_DENY_REASON.DESTINATION_MIXED_RESOLUTION,
+    [PUBLIC_EGRESS_REASON.DNS_RESOLUTION_FAILED]: EGRESS_DENY_REASON.DNS_RESOLUTION_FAILED,
+  }
+  return mapped[reason]
 }
 
 /** Local forwarding only: HTTPS stays end-to-end, and every connection uses an approved IP. */
@@ -55,13 +159,12 @@ export class PublicEgressProxy {
       const server = http.createServer({ maxHeaderSize: 16_384 }, (req, res) => {
         void this.forward(req, res).catch((error) => {
           if (res.headersSent) res.destroy()
-          else
-            res
-              .writeHead(this.status(error), { "proxy-status": "trawl-public; error=destination_unavailable" })
-              .end("Proxy request refused")
+          else this.denyResponse(res, classifyDeny(error))
         })
       })
-      server.maxConnections = MAX_CONNECTIONS
+      // No socket-level maxConnections: the pending-dial guard below enforces
+      // MAX_CONNECTIONS and produces an explicit, categorised 503 instead of
+      // silently dropping the next TCP connection.
       server.headersTimeout = 10_000
       server.requestTimeout = 0
       server.keepAliveTimeout = 5_000
@@ -72,12 +175,12 @@ export class PublicEgressProxy {
       server.on("connect", (req, socket, head) => {
         const client = socket as Socket
         client.pause()
-        void this.tunnel(req, client, head).catch((error) => this.refuse(client, this.status(error)))
+        void this.tunnel(req, client, head).catch((error) => this.refuse(client, classifyDeny(error)))
       })
       server.on("upgrade", (req, socket, head) => {
         const client = socket as Socket
         client.pause()
-        void this.upgrade(req, client, head).catch((error) => this.refuse(client, this.status(error)))
+        void this.upgrade(req, client, head).catch((error) => this.refuse(client, classifyDeny(error)))
       })
       server.on("clientError", (_error, socket) => socket.destroy())
       server.once("error", (error) => {
@@ -112,18 +215,44 @@ export class PublicEgressProxy {
       const upstream = Buffer.concat([decipher.update(token.subarray(28)), decipher.final()]).toString()
       return { upstream: upstream || undefined }
     } catch {
-      throw new RequestValidationError("Proxy authentication required", 407)
+      throw new EgressDenyError(EGRESS_DENY_REASON.PROXY_CREDENTIALS_INVALID)
     }
   }
 
-  private status(error: unknown): number {
-    return error instanceof RequestValidationError ? error.statusCode : 502
+  /** Write a categorised plain-HTTP refusal with a stable reason header and fixed body. */
+  private denyResponse(res: ServerResponse, denial: EgressDenyError): void {
+    const { status, text } = DENY_RESPONSE[denial.reason]
+    const headers: http.OutgoingHttpHeaders = {
+      "content-type": "text/plain; charset=utf-8",
+      "proxy-status": proxyStatusHeader(denial.reason),
+    }
+    if (status === 407) headers["proxy-authenticate"] = 'Basic realm="TRAWL"'
+    res.writeHead(status, headers).end(text)
   }
 
-  private refuse(socket: Socket, status: number): void {
+  /** Write a categorised refusal directly onto a CONNECT/Upgrade tunnel socket. */
+  private refuse(socket: Socket, denial: EgressDenyError): void {
     if (socket.destroyed) return
+    const { status, text } = DENY_RESPONSE[denial.reason]
+    const reasonPhrase =
+      status === 407
+        ? "Proxy Authentication Required"
+        : status === 403
+          ? "Forbidden"
+          : status === 503
+            ? "Service Unavailable"
+            : status === 502
+              ? "Bad Gateway"
+              : "Bad Request"
+    const body = Buffer.from(text, "utf8")
     socket.end(
-      `HTTP/1.1 ${status} Proxy request refused\r\n${status === 407 ? 'Proxy-Authenticate: Basic realm="TRAWL"\r\n' : ""}Connection: close\r\nContent-Length: 0\r\n\r\n`,
+      `HTTP/1.1 ${status} ${reasonPhrase}\r\n` +
+        `Content-Type: text/plain; charset=utf-8\r\n` +
+        `Proxy-Status: ${proxyStatusHeader(denial.reason)}\r\n` +
+        `${status === 407 ? 'Proxy-Authenticate: Basic realm="TRAWL"\r\n' : ""}` +
+        `Connection: close\r\n` +
+        `Content-Length: ${body.length}\r\n\r\n` +
+        text,
     )
   }
 
@@ -133,7 +262,9 @@ export class PublicEgressProxy {
     upstream: string | undefined,
     signal: AbortSignal,
   ): Promise<Socket> {
-    if (this.pending >= MAX_CONNECTIONS) throw new RequestValidationError("Public proxy is busy", 503)
+    // Fail fast: the limit is the existing MAX_CONNECTIONS constant and
+    // over-limit requests are rejected immediately rather than queued.
+    if (this.pending >= MAX_CONNECTIONS) throw new EgressDenyError(EGRESS_DENY_REASON.CONCURRENCY_LIMITED)
     this.pending++
     try {
       const addresses = await resolvePublicHostname(hostname, this.options.lookup)
@@ -183,8 +314,9 @@ export class PublicEgressProxy {
     try {
       ;({ upstream } = this.route(req))
     } catch (error) {
-      res.setHeader("proxy-authenticate", 'Basic realm="TRAWL"')
-      throw error
+      // 407 responses include Proxy-Authenticate via denyResponse.
+      this.denyResponse(res, classifyDeny(error))
+      return
     }
     const { url, hostname } = parsePublicHttpUrl(req.url ?? "")
     if (url.protocol !== "http:") throw new RequestValidationError("HTTPS requires CONNECT", 400)
@@ -214,7 +346,7 @@ export class PublicEgressProxy {
     )
     outbound.once("error", () => {
       if (res.headersSent) res.destroy()
-      else res.writeHead(502).end("Proxy request failed")
+      else this.denyResponse(res, new EgressDenyError(EGRESS_DENY_REASON.DESTINATION_UNAVAILABLE))
     })
     res.once("close", () => {
       outbound.destroy()
