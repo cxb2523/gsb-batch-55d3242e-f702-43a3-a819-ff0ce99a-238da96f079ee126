@@ -547,10 +547,26 @@ class TilePositionColumn extends ColumnData {
 // ─── TileManager ──────────────────────────────────────────────────────────────
 
 const MAX_TILE_CACHE = 50
+const MAX_TILE_FAILURES = 3
 const DOMAIN_CHANGE_THRESHOLD = 0.02  // 2% change triggers tile sync
 
+// Default loader. Kept injectable so tests (and non-browser callers) can
+// supply their own image-loading implementation without touching `Image`.
+function defaultLoadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error(`Failed to load tile: ${url}`))
+    img.src = url
+  })
+}
+
 class TileManager {
-  constructor({ regl, source, tileCrs, plotCrs, tessellation, xTexFns, yTexFns, imageTexFns, onLoad }) {
+  constructor({
+    regl, source, tileCrs, plotCrs, tessellation, xTexFns, yTexFns, imageTexFns, onLoad,
+    loadImage, imageLoader, loadCogData, warn,
+  }) {
     this.regl = regl
     this.source = source
     this.tileCrs = tileCrs
@@ -560,10 +576,19 @@ class TileManager {
     this._yTexFns = yTexFns
     this._imageTexFns = imageTexFns
     this.onLoad = onLoad
+    this._loadImage = loadImage ?? imageLoader ?? defaultLoadImage
+    this._loadCogData = loadCogData ?? fetchCogData
+    this._warn = warn ?? ((...args) => console.warn(...args))
 
     this.tiles = new Map()
+    // Most-recently-used order: index 0 is the eviction candidate.
     this.accessOrder = []
     this._neededKeys = new Set()
+    // Specs for the current view, retained so failed tiles can be retried
+    // without re-running the (potentially expensive) tile computation.
+    this._neededSpecs = new Map()
+    this._failureCounts = new Map()
+    this._abandonedKeys = new Set()
 
     this._lastXDomain = null
     this._lastYDomain = null
@@ -578,7 +603,10 @@ class TileManager {
 
   _domainChanged(xDomain, yDomain, viewport) {
     if (!this._lastXDomain || !this._lastYDomain) return true
-    const viewChanged = !!(viewport && this._lastViewport && (
+    // A canvas resize changes the zoom level even when the axis domain is
+    // identical, so the viewport is part of the change signature.
+    const viewChanged = !!(viewport && (
+      !this._lastViewport ||
       viewport.width !== this._lastViewport.width ||
       viewport.height !== this._lastViewport.height
     ))
@@ -628,7 +656,9 @@ class TileManager {
     }
 
     if (source.type === 'cog') {
-      const key = `cog:${tileBbox.minX.toFixed(1)},${tileBbox.minY.toFixed(1)},${tileBbox.maxX.toFixed(1)},${tileBbox.maxY.toFixed(1)}`
+      // The fetched resolution follows the canvas size, so it is part of the
+      // cache key: a resize with an unchanged domain still needs a new image.
+      const key = `cog:${tileBbox.minX.toFixed(1)},${tileBbox.minY.toFixed(1)},${tileBbox.maxX.toFixed(1)},${tileBbox.maxY.toFixed(1)}@${Math.round(viewport.width)}x${Math.round(viewport.height)}`
       return [{ key, bbox: tileBbox, type: 'cog', width: viewport.width, height: viewport.height }]
     }
 
@@ -690,8 +720,33 @@ class TileManager {
     return tiles
   }
 
+  _touchTile(key) {
+    const i = this.accessOrder.indexOf(key)
+    if (i >= 0) this.accessOrder.splice(i, 1)
+    this.accessOrder.push(key)
+  }
+
+  _syncTile(tileSpec) {
+    // A key that is already present (loading or loaded) must never trigger
+    // a second network request.
+    if (this.tiles.has(tileSpec.key)) {
+      this._touchTile(tileSpec.key)
+      return
+    }
+    if (this._abandonedKeys.has(tileSpec.key)) return
+    this._loadTile(tileSpec)
+  }
+
   syncTiles(xDomain, yDomain, viewport) {
-    if (!this._domainChanged(xDomain, yDomain, viewport)) return
+    if (!this._domainChanged(xDomain, yDomain, viewport)) {
+      // Even when the view is unchanged, update LRU order for visible tiles
+      // and give previously failed tiles another chance.  Retries stop once
+      // a key has been abandoned after MAX_TILE_FAILURES attempts.
+      for (const [key, spec] of this._neededSpecs) {
+        this._syncTile(spec)
+      }
+      return
+    }
 
     this._lastXDomain = xDomain.slice()
     this._lastYDomain = yDomain.slice()
@@ -699,11 +754,10 @@ class TileManager {
 
     const needed = this._computeNeededTiles(xDomain, yDomain, viewport)
     this._neededKeys = new Set(needed.map(t => t.key))
+    this._neededSpecs = new Map(needed.map(t => [t.key, t]))
 
     for (const tileSpec of needed) {
-      if (!this.tiles.has(tileSpec.key)) {
-        this._loadTile(tileSpec)
-      }
+      this._syncTile(tileSpec)
     }
   }
 
@@ -716,6 +770,18 @@ class TileManager {
     this.tiles.delete(key)
     const i = this.accessOrder.indexOf(key)
     if (i >= 0) this.accessOrder.splice(i, 1)
+  }
+
+  // Evict strictly in least-recently-used order.  Tiles still required by the
+  // current view are only skipped when another evictable tile exists, so a
+  // view containing more than MAX_TILE_CACHE tiles still renders correctly.
+  _enforceCacheLimit(protectedKey = null) {
+    while (this.tiles.size > MAX_TILE_CACHE) {
+      let idx = this.accessOrder.findIndex(key =>
+        key !== protectedKey && this.tiles.has(key) && !this._neededKeys.has(key))
+      if (idx < 0) break
+      this._evictTile(this.accessOrder[idx])
+    }
   }
 
   _rebuildArrays() {
@@ -738,26 +804,24 @@ class TileManager {
   }
 
   async _loadTile(tileSpec) {
+    // Guard against concurrent syncs scheduling the same key before the
+    // first request has settled.
+    if (this.tiles.has(tileSpec.key)) return
+
     this.tiles.set(tileSpec.key, { status: 'loading' })
-    this.accessOrder.push(tileSpec.key)
+    this._touchTile(tileSpec.key)
 
     try {
       let imgTex
       if (tileSpec.type === 'cog' || tileSpec.type === 'cogTiles') {
         const cogSource = tileSpec.type === 'cogTiles' ? { ...this.source, url: tileSpec.url } : this.source
-        const result = await fetchCogData(cogSource, tileSpec.bbox, tileSpec.width, tileSpec.height)
+        const result = await this._loadCogData(cogSource, tileSpec.bbox, tileSpec.width, tileSpec.height)
         if (!this.tiles.has(tileSpec.key)) return
         if (!result) throw new Error(`COG fetch returned no data for tile ${tileSpec.key}`)
         const format = result.bands >= 4 ? 'rgba' : 'rgb'
         imgTex = this.regl.texture({ data: result.data, width: result.width, height: result.height, format, type: 'uint8', flipY: false, min: 'linear', mag: 'linear' })
       } else {
-        const img = new Image()
-        img.crossOrigin = 'anonymous'
-        await new Promise((resolve, reject) => {
-          img.onload = resolve
-          img.onerror = () => reject(new Error(`Failed to load tile: ${tileSpec.url}`))
-          img.src = tileSpec.url
-        })
+        const img = await this._loadImage(tileSpec.url)
         if (!this.tiles.has(tileSpec.key)) return
         imgTex = this.regl.texture({ data: img, flipY: false, min: 'linear', mag: 'linear' })
       }
@@ -775,20 +839,19 @@ class TileManager {
       const xTex = uploadToTexture(this.regl, xArr)
       const yTex = uploadToTexture(this.regl, yArr)
 
+      this._failureCounts.delete(tileSpec.key)
       this.tiles.set(tileSpec.key, { status: 'loaded', imgTex, xTex, yTex })
+      this._touchTile(tileSpec.key)
 
       const neededKeys = this._neededKeys
       if (this.source.type === 'wms' || this.source.type === 'cog') {
+        // Single-image sources keep exactly the tile required by the current
+        // view; every older image must release its texture immediately.
         for (const key of [...this.tiles.keys()]) {
           if (key !== tileSpec.key && !neededKeys.has(key)) this._evictTile(key)
         }
-      } else if (this.tiles.size > MAX_TILE_CACHE) {
-        for (const key of this.accessOrder) {
-          if (key !== tileSpec.key && !neededKeys.has(key) && this.tiles.has(key)) {
-            this._evictTile(key)
-            if (this.tiles.size <= MAX_TILE_CACHE) break
-          }
-        }
+      } else {
+        this._enforceCacheLimit(tileSpec.key)
       }
 
       this._rebuildArrays()
@@ -797,7 +860,14 @@ class TileManager {
       this.tiles.delete(tileSpec.key)
       const i = this.accessOrder.indexOf(tileSpec.key)
       if (i >= 0) this.accessOrder.splice(i, 1)
-      console.warn(`[TileLayer] ${err.message}`)
+
+      // Do not log every failure: only report once a key is abandoned.
+      const failures = (this._failureCounts.get(tileSpec.key) ?? 0) + 1
+      this._failureCounts.set(tileSpec.key, failures)
+      if (failures >= MAX_TILE_FAILURES) {
+        this._abandonedKeys.add(tileSpec.key)
+        this._warn(`[TileLayer] Tile ${tileSpec.key} failed ${failures} consecutive times; giving up for this session (${err.message})`)
+      }
     }
   }
 
@@ -805,6 +875,9 @@ class TileManager {
     for (const key of [...this.tiles.keys()]) {
       this._evictTile(key)
     }
+    this._failureCounts.clear()
+    this._abandonedKeys.clear()
+    this._neededSpecs.clear()
   }
 }
 
@@ -973,4 +1046,4 @@ class TileLayerType extends LayerType {
 export const tileLayerType = new TileLayerType()
 registerLayerType('tile', tileLayerType)
 
-export { TileLayerType }
+export { TileLayerType, TileManager }
