@@ -81,6 +81,10 @@ async def test_migration_from_first_version(tmp_path):
     assert ("en", 1) in await db.languages(days=10_000)
     await db.touch_chat(3, "private", default_captions=True)
     assert (await db._all("SELECT imported FROM chats WHERE chat_id = 3"))[0][0] == 0
+    # The failure-attribution columns are added with safe defaults, so old jobs read back as "no failed attempt":
+    columns = {row[1]: (row[2], row[3], row[4]) for row in await db._all("PRAGMA table_info(jobs)")}
+    assert columns["first_error"] == ("TEXT", 0, None) and columns["first_route"] == ("TEXT", 0, None)
+    assert columns["retried"] == ("INTEGER", 1, "0")  # NOT NULL DEFAULT 0
     await db.close()
 
 
@@ -127,6 +131,25 @@ async def test_recent_results():
         if status != "queued":
             await db.finish_job(job)
     assert sorted(await db.recent_results(0), key=str) == sorted([("YouTube", None, 2), ("YouTube", "login", 1)], key=str)
+    await db.close()
+
+
+async def test_failures_by_site_keeps_first_failures_and_recoveries():
+    db = await DB.open(":memory:")
+
+    async def finish(**fields):
+        job = await db.add_job(make_job(**fields))
+        await db.finish_job(job)
+        return job
+
+    await finish(status="done", site="SoundCloud", first_error="blocked", first_route="fra1", retried=1)  # retried ok
+    await finish(status="failed", site="SoundCloud", error="network", first_error="blocked", first_route="fra1", retried=1)
+    await finish(status="failed", site="YouTube", error="unavailable")  # failed without a retry and without a recorded first attempt
+    await finish(status="timeout", site="YouTube", error="timeout")  # a job-level timeout likewise has no first_error
+    await finish(status="done", site="YouTube")  # plain success, no failed attempt
+    await finish(status="cancelled", site="YouTube", error="forbidden", first_error="forbidden")  # doesn't count
+    assert await db.failures_by_site(0) == [("SoundCloud", 1, 1, 2), ("YouTube", 2, 0, 2)]
+    assert await db.failures_by_site(db_now() + 1) == []
     await db.close()
 
 

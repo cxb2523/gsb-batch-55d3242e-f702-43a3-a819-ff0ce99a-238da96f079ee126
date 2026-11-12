@@ -3,6 +3,9 @@
 Timestamps are unix seconds, days are UTC 'YYYY-MM-DD'. Handy queries:
     sqlite3 scdlbot.sqlite3 "SELECT status, count(*) FROM jobs WHERE created_at > strftime('%s', 'now', '-1 day') GROUP BY 1"
     sqlite3 scdlbot.sqlite3 "SELECT day, count(*) FROM user_days GROUP BY 1 ORDER BY 1 DESC LIMIT 30"
+    # Failures of the last day by site, including downloads that only succeeded after a retry on another route:
+    sqlite3 scdlbot.sqlite3 "SELECT site, sum(error IS NOT NULL), sum(first_error IS NOT NULL AND error IS NULL) \
+        FROM jobs WHERE status IN ('done','partial','failed','timeout') AND created_at > strftime('%s','now','-1 day') GROUP BY 1"
 """
 
 import time
@@ -79,6 +82,9 @@ MIGRATIONS = (
     "UPDATE chats SET previous_mode = 'dl', mode = 'ask_video' WHERE (mode = 'dl' AND type != 'channel') OR (mode IS NULL AND type = 'private');",
     # Files each job sent by kind (audio, video, short, photo, text) as JSON, e.g. {"photo": 2, "video": 1}; jobs by time for /stats:
     "ALTER TABLE jobs ADD COLUMN kinds TEXT; CREATE INDEX jobs_by_time ON jobs (created_at);",
+    # Failure attribution of a download: the code and the route of its first failed attempt (NULL if the first one worked),
+    # and whether the job was tried again through another route or a login route before reaching its final status:
+    "ALTER TABLE jobs ADD COLUMN first_error TEXT; ALTER TABLE jobs ADD COLUMN first_route TEXT; ALTER TABLE jobs ADD COLUMN retried INTEGER NOT NULL DEFAULT 0;",
 )
 
 ACTIVE = ("queued", "running")
@@ -114,7 +120,12 @@ class Job:
     status: str
     wait_message_id: int | None = None
     mp3: bool = False  # convert audio to mp3 even when the original is m4a
-    route: str | None = None
+    route: str | None = None  # route of the last download attempt, if it was tried again
+    # Failure attribution: code and route of the first failed download attempt (both NULL if the first attempt worked),
+    # and 1 if the job was retried through another route or a login route before reaching its final status:
+    first_error: str | None = None
+    first_route: str | None = None
+    retried: int = 0
     id: int | None = None
     created_at: int = 0
     started_at: int | None = None
@@ -237,8 +248,8 @@ class DB:
     async def finish_job(self, job: Job) -> None:
         job.finished_at = now()
         await self._run(
-            "UPDATE jobs SET status = ?, error = ?, items = ?, bytes = ?, kinds = ?, finished_at = ?, route = ? WHERE id = ?",
-            (job.status, job.error, job.items, job.bytes, job.kinds, job.finished_at, job.route, job.id),
+            "UPDATE jobs SET status = ?, error = ?, items = ?, bytes = ?, kinds = ?, finished_at = ?, route = ?, first_error = ?, first_route = ?, retried = ? WHERE id = ?",
+            (job.status, job.error, job.items, job.bytes, job.kinds, job.finished_at, job.route, job.first_error, job.first_route, job.retried, job.id),
         )
         await self._run(
             "INSERT INTO daily (day, site, kind, status, chat_type, jobs, items, bytes) VALUES (?, ?, ?, ?, ?, 1, ?, ?) "
@@ -297,6 +308,21 @@ class DB:
             (since,),
         )
         return [(r[0], r[1], r[2]) for r in rows]
+
+    async def failures_by_site(self, since: int) -> list[tuple[str, int, int, int]]:
+        """Per site, for jobs created since then and already finished:
+        (site, jobs whose last attempt failed, jobs whose first attempt failed but a retry succeeded, jobs touched by any failure),
+        most failures first. Cancelled jobs (the bot was removed from the chat) don't count."""
+        rows = await self._all(
+            "SELECT site, "
+            "sum(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END), "
+            "sum(CASE WHEN first_error IS NOT NULL AND error IS NULL THEN 1 ELSE 0 END), "
+            "sum(CASE WHEN error IS NOT NULL OR first_error IS NOT NULL THEN 1 ELSE 0 END) "
+            "FROM jobs WHERE status IN ('done', 'partial', 'failed', 'timeout') AND created_at > ? GROUP BY site "
+            "HAVING sum(CASE WHEN error IS NOT NULL OR first_error IS NOT NULL THEN 1 ELSE 0 END) > 0 ORDER BY 4 DESC, 1",
+            (since,),
+        )
+        return [(r[0], r[1], r[2], r[3]) for r in rows]
 
     async def top_sites(self, since_day: str, limit: int = 10) -> list[tuple[str, int, int]]:
         rows = await self._all(

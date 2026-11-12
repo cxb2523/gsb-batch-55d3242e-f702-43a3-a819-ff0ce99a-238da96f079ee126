@@ -98,6 +98,10 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"  Jobs: {counts(statuses)}",
             f"  Files: {counts(kinds)}",
         ]
+    # Per site: failed jobs, and jobs whose first attempt failed but a retry through another route succeeded:
+    site_failures = await rt.db.failures_by_site(db.now() - 24 * 3600)
+    failure_lines = [f"  {site}: {failed} failed, {recovered} retried ok" for site, failed, recovered, _total in site_failures]
+    lines += ["<b>Failures 24h by site</b> (failed / retried ok):", *(failure_lines or ["  none"])]
     lines += [
         "<b>Top sites 7 days</b> (done / all):",
         *(f"  {site}: {done} / {count}" for site, count, done in sites),

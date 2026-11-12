@@ -106,6 +106,35 @@ async def test_stats_for_owner_only(env):
     text = bot.calls[-1][1][1]
     assert "30 days 1" in text and "App languages 30 days</b>: ru 100%" in text
     assert "<b>Last 24 hours</b>: 2 links from 1 users\n  Jobs: queued 2\n  Files: none" in text
+    assert "<b>Failures 24h by site</b> (failed / retried ok):\n  none" in text
+
+
+async def test_stats_lists_failures_by_site(env):
+    from scdlbot.db import Job
+
+    rt, bot, context = env
+    rt.cfg = Config(owner_id=7)
+
+    async def finish(**fields):
+        values = {
+            "chat_id": 5,
+            "chat_type": "private",
+            "user_id": 7,
+            "message_id": 10,
+            "url": "u",
+            "site": "SoundCloud",
+            "kind": "audio",
+            "captions": True,
+            "status": "queued",
+        }
+        job = await rt.db.add_job(Job(**(values | fields)))
+        await rt.db.finish_job(job)
+
+    await finish(status="failed", error="network", first_error="blocked", first_route="fra1", route="fin1", retried=1)
+    await finish(status="done", first_error="blocked", first_route="fra1", route="fin1", retried=1)
+    await handlers.stats_command(Update(2, message=message(Chat(7, Chat.PRIVATE), text="/stats", entities=[])), context)
+    text = bot.calls[-1][1][1]
+    assert "<b>Failures 24h by site</b> (failed / retried ok):\n  SoundCloud: 1 failed, 1 retried ok" in text
 
 
 async def test_mention_in_reply_downloads_now_even_in_ask_mode(env):

@@ -469,3 +469,70 @@ async def test_video_without_sound_through_every_route_goes_out_with_a_note(setu
     job = await run(download, site="Twitter", url="https://twitter.com/u/status/1", kind="video")
     assert (job.status, len(download.calls)) == ("done", 1)
     assert "without sound" not in bot.calls[-2][2]["caption"]
+
+
+# Failure attribution: site, route, error code and whether a retry happened, kept on the job and in its database row
+
+
+async def test_first_failure_then_another_route_succeeds_is_attributed(setup):
+    cfg, db, bot, queue, run = setup
+    two_routes(queue)
+    queue.routes.turns["SoundCloud"] = 1  # fra1 is tried first, fin1 is the other route
+    download = blocked_through("http://127.0.0.1:3187")  # fake yt-dlp output: 403 through the proxy, a file through the source IP
+    job = await run(download, site="SoundCloud", url="https://soundcloud.com/a/b")
+    # The final status follows the existing rules (done), but the first failure stays attributable:
+    assert job.status == "done" and job.error is None and job.route == "fin1"
+    assert (job.first_error, job.first_route, job.retried) == ("blocked", "fra1", 1)
+    row = dict((await db._all("SELECT site, route, error, first_error, first_route, retried FROM jobs WHERE id = ?", (job.id,)))[0])
+    assert row == {"site": "SoundCloud", "route": "fin1", "error": None, "first_error": "blocked", "first_route": "fra1", "retried": 1}
+
+
+def fails_differently_per_route():
+    """Fake yt-dlp output: the proxy route is rate-limited (blocked), the source IP can't connect (network)."""
+    calls = []
+
+    async def download(url, kind, job_dir: Path, cfg, extra=(), photos=False, mp3=False, **options):
+        calls.append(list(extra))
+        raise DownloadError(
+            "blocked" if "--proxy" in extra else "network",
+            "ERROR: [soundcloud] x: HTTP Error 429: Too Many Requests" if "--proxy" in extra else "ERROR: Unable to download webpage: Connection reset by peer",
+        )
+        yield  # keep it an async generator, like the real download() that jobs._download wraps in aclosing()
+
+    download.calls = calls
+    return download
+
+
+async def test_all_routes_fail_keeps_the_last_code_and_the_first_failure(setup):
+    cfg, db, bot, queue, run = setup
+    two_routes(queue)
+    queue.routes.turns["SoundCloud"] = 1  # fra1 first, then fin1: both fail, no third attempt
+    download = fails_differently_per_route()
+    job = await run(download, site="SoundCloud", url="https://soundcloud.com/a/b")
+    assert len(download.calls) == 2  # one retry only, never an endless loop
+    assert job.status == "failed"
+    assert (job.error, job.route) == ("network", "fin1")  # the last attempt's code and route win
+    assert (job.first_error, job.first_route, job.retried) == ("blocked", "fra1", 1)  # the first failure is still traceable
+    row = dict((await db._all("SELECT error, first_error, first_route, retried FROM jobs WHERE id = ?", (job.id,)))[0])
+    assert row == {"error": "network", "first_error": "blocked", "first_route": "fra1", "retried": 1}
+
+
+async def test_success_without_a_retry_has_no_first_failure(setup):
+    cfg, db, bot, queue, run = setup
+    job = await run(fake_download(1))  # the single default route works on the first attempt
+    assert (job.status, job.error) == ("done", None)
+    assert (job.first_error, job.first_route, job.retried) == (None, None, 0)
+    row = dict((await db._all("SELECT error, first_error, first_route, retried FROM jobs WHERE id = ?", (job.id,)))[0])
+    assert row == {"error": None, "first_error": None, "first_route": None, "retried": 0}
+
+
+async def test_failures_are_aggregated_by_site(setup):
+    cfg, db, bot, queue, run = setup
+    two_routes(queue)
+    queue.routes.turns["SoundCloud"] = 1
+    await run(blocked_through("http://127.0.0.1:3187"), site="SoundCloud", url="https://soundcloud.com/a/b")  # failed first, retried ok
+    await run(fails_differently_per_route(), site="SoundCloud", url="https://soundcloud.com/c/d")  # all routes failed
+    await run(fake_download(0, error="unavailable"), site="YouTube", url="https://youtu.be/y")  # not retried, still a failure
+    await run(fake_download(1), site="YouTube", url="https://youtu.be/z")  # plain success: no failed attempt
+    by_site = {site: (failed, recovered, total) for site, failed, recovered, total in await db.failures_by_site(0)}
+    assert by_site == {"SoundCloud": (1, 1, 2), "YouTube": (1, 0, 1)}

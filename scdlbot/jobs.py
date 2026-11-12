@@ -177,7 +177,18 @@ class JobQueue:
         observe.JOB_SECONDS.labels(job.kind).observe(time.monotonic() - started)
         if job.error:
             observe.DOWNLOAD_ERRORS.labels(job.error, site_label(job.site), job.route).inc()
-        log.info("Job %s %s in %.0fs via %s: %s, %d files, error %s", job.id, job.status, time.monotonic() - started, job.route, job.url, job.items, job.error)
+        retry_note = f", first {job.first_error} via {job.first_route}, retried" if job.retried else ""
+        log.info(
+            "Job %s %s in %.0fs via %s: %s, %d files, error %s%s",
+            job.id,
+            job.status,
+            time.monotonic() - started,
+            job.route,
+            job.url,
+            job.items,
+            job.error,
+            retry_note,
+        )
         if job.status != "cancelled":
             await self._report(job, total)
             await self._delete_wait_message(job)
@@ -198,6 +209,8 @@ class JobQueue:
                 total = await self._download(job, job_dir, sender, route, allow_silent=last_try)
             except DownloadError as exc:
                 self.routes.record(job.site, route.name, exc.code, str(exc))
+                if job.first_error is None:  # keep the code and route of the first failed attempt, even with no retry afterwards
+                    job.first_error, job.first_route = exc.code, route.name
                 if sender.sent or sender.failed or sender.album:
                     raise
                 other = None
@@ -224,6 +237,7 @@ class JobQueue:
                 job_dir.mkdir(parents=True)
                 route = other
                 job.route = route.name
+                job.retried = 1  # the conclusion took more than one attempt; the first failure stays in first_error/first_route
             else:
                 self.routes.record(job.site, route.name, None)
                 return total
