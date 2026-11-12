@@ -2,8 +2,11 @@ import { z } from "zod";
 import { Headers } from "node-fetch";
 import fetch from "node-fetch";
 import { getCrawlResults } from "./getCrawlResults.js";
+import { isRunning, unexpectedStatus } from "./jobStatus.js";
+import { crawlProgress } from "./jobProgress.js";
 
-const OLOSTEP_CRAWL_API_URL = `${process.env.OLOSTEP_API_URL ?? "https://api.olostep.com/v1"}/crawls`;
+const OLOSTEP_API_URL = process.env.OLOSTEP_API_URL ?? "https://api.olostep.com/v1";
+const OLOSTEP_CRAWL_API_URL = `${OLOSTEP_API_URL}/crawls`;
 
 export interface OlostepCrawlResponse {
 	id?: string;
@@ -24,7 +27,7 @@ export const createCrawl = {
 		"Use this when you need the content of many pages from one website, such as a docs section or a blog: " +
 		"it follows links from a start URL and scrapes each page it finds, up to `max_pages`. " +
 		"Waits up to `wait_for_completion_seconds` (default 45) and returns the pages if the crawl finishes in that time; " +
-		"otherwise returns a crawl_id to pass to get_crawl_results (not get_batch_results). " +
+		"otherwise returns a crawl_id, completed/total counts and a `cursor` to pass to get_crawl_results (not get_batch_results). " +
 		"For a known list of URLs use batch_scrape_urls; for one page use scrape_website.",
 	schema: {
 		url: z.string().url().optional().describe("Starting URL for the crawl."),
@@ -118,25 +121,72 @@ export const createCrawl = {
 			const waitSeconds = wait_for_completion_seconds ?? 45;
 			const crawlId = data.id ?? data.crawl_id;
 			if (waitSeconds > 0 && crawlId) {
+				const pollIntervalMs = 5_000;
 				const deadline = Date.now() + waitSeconds * 1000;
+				let lastStatus: Record<string, unknown> | null = null;
+
 				while (Date.now() < deadline) {
-					await new Promise((r) => setTimeout(r, 5_000));
-					const res = await getCrawlResults.handler(
-						{ crawl_id: crawlId, formats: [output_format], items_limit: Math.min(max_pages ?? 10, 20) },
-						apiKey,
+					// Do not overshoot a short wait by a whole poll interval.
+					const remainingMs = Math.max(0, deadline - Date.now());
+					await new Promise((r) => setTimeout(r, Math.min(pollIntervalMs, remainingMs)));
+
+					const statusRes = await fetch(
+						`${OLOSTEP_API_URL}/crawls/${encodeURIComponent(crawlId)}`,
+						{ method: "GET", headers },
 					);
-					// A failed crawl or status check won't recover by waiting longer.
-					if ("isError" in res && res.isError) return res;
-					let status = "";
-					try { status = String(JSON.parse(res.content[0].text).status ?? ""); } catch { /* keep polling */ }
-					if (status === "completed") return res;
+					if (!statusRes.ok) {
+						let errorDetails: unknown = null;
+						try {
+							errorDetails = await statusRes.json();
+						} catch {
+							// ignore
+						}
+						return {
+							isError: true,
+							content: [{
+								type: "text",
+								text: `Olostep API Error: ${statusRes.status} ${statusRes.statusText} while checking crawl "${crawlId}". Details: ${JSON.stringify(errorDetails)}`,
+							}],
+						};
+					}
+
+					const statusData = (await statusRes.json()) as Record<string, unknown>;
+					lastStatus = statusData;
+					const status = String(statusData.status || "").toLowerCase();
+
+					if (status === "completed") {
+						// Fetch and return the pages directly, so the caller doesn't need
+						// a second call for the common case.
+						return await getCrawlResults.handler(
+							{ crawl_id: crawlId, formats: [output_format], items_limit: Math.min(max_pages ?? 10, 20) },
+							apiKey,
+						);
+					}
+					// A failed crawl or an unrecognized status won't recover by waiting longer.
+					if (!isRunning(status)) return unexpectedStatus("crawl", { crawl_id: crawlId, ...statusData });
 				}
+
+				// Still running: report the upstream progress and where the caller can
+				// resume reading, so the job is not mistaken for a failure or restarted.
+				const progress = crawlProgress({ ...(data as Record<string, unknown>), ...(lastStatus ?? {}) });
+				const status = progress.status || String(data.status ?? "").toLowerCase();
 				return {
 					content: [{
 						type: "text",
 						text: JSON.stringify({
 							...data,
-							message: `Crawl still running after ${waitSeconds}s. get_crawl_results with crawl_id "${crawlId}" returns the pages once it finishes.`,
+							crawl_id: crawlId,
+							status,
+							pages_completed: progress.completed,
+							pages_total: progress.total,
+							completed_items: progress.completed,
+							total_items: progress.total,
+							cursor: progress.cursor,
+							message:
+								`Crawl is still ${status} after ${waitSeconds}s: ${progress.completed ?? 0} of ` +
+								`${progress.total ?? "an unknown number of"} pages completed. Continue with ` +
+								`get_crawl_results using crawl_id "${crawlId}" and cursor ${progress.cursor ?? 0}; ` +
+								"do not start a new crawl.",
 						}, null, 2),
 					}],
 				};

@@ -17,7 +17,8 @@
     "test:oauth-relay": "node tests/oauth-relay.mjs",
     "test:paging": "node --test tests/paging.test.mjs",
     "test:job-status": "node --test tests/job-status.test.mjs",
-    "test:page-content": "node --test tests/page-content.test.mjs"
+    "test:page-content": "node --test tests/page-content.test.mjs",
+    "test:resume": "node --test tests/resume-progress.test.mjs"
   },
   "files": [
     "build/**/*"

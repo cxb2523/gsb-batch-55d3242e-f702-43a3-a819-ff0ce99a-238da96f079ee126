@@ -4,6 +4,14 @@ All notable changes to the Olostep MCP Server will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- `batch_scrape_urls` and `create_crawl` return a progress summary when the wait times out: `status`, the upstream completed and total counts, and a `cursor` that resumes the corresponding listing. Passing this cursor to `get_batch_results` / `get_crawl_results` returns only the entries not seen yet, so a running job is not mistaken for a failure or started again.
+- A cursor past the job's upstream item/page count is now an error instead of an empty list.
+- Passing a crawl id to `get_batch_results` (or a batch id to `get_crawl_results`) now names the correct results tool.
+
+### Added
+- Local fake-upstream tests for timeout progress, cursor resumption, out-of-range cursors, crossed job ids, and immediate failure during a wait (`npm run test:resume`).
+
 ## [1.0.21] - 2026-11-11
 
 ### Added

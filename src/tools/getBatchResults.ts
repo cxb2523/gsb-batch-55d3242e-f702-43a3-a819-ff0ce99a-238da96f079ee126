@@ -3,6 +3,8 @@ import { Headers } from "node-fetch";
 import fetch from "node-fetch";
 import { isRunning, unexpectedStatus } from "./jobStatus.js";
 import { DEFAULT_MAX_CHARACTERS, shapePage } from "./pageContent.js";
+import { cursorOutOfRange, cursorOutOfRangeResult, numberField, rememberNextCursor } from "./jobProgress.js";
+import { kindFromId, kindFromStatus, probeOtherKind, wrongJobKindResult } from "./jobKind.js";
 
 const OLOSTEP_API_URL = process.env.OLOSTEP_API_URL ?? "https://api.olostep.com/v1";
 
@@ -12,6 +14,8 @@ interface BatchStatusResponse {
 	status?: string;
 	total_urls?: number;
 	completed_urls?: number;
+	total_items?: number;
+	total?: number;
 }
 
 interface BatchItem {
@@ -89,12 +93,21 @@ export const getBatchResults = {
 				Authorization: `Bearer ${apiKey}`,
 			});
 
+			// A batch_id that names a crawl belongs to the other tool.
+			if (kindFromId(batch_id) === "crawl") return wrongJobKindResult("batch", "crawl", batch_id);
+
 			const statusRes = await fetch(
 				`${OLOSTEP_API_URL}/batches/${encodeURIComponent(batch_id)}`,
 				{ method: "GET", headers },
 			);
 
 			if (!statusRes.ok) {
+				// A 404 can mean the id is a crawl: check the other resource once and
+				// steer the caller to get_crawl_results instead of a bare "not found".
+				if (statusRes.status === 404) {
+					const other = await probeOtherKind(batch_id, "batch", headers, OLOSTEP_API_URL);
+					if (other === "crawl") return wrongJobKindResult("batch", "crawl", batch_id);
+				}
 				let errorDetails: unknown = null;
 				try { errorDetails = await statusRes.json(); } catch { /* ignore */ }
 				return {
@@ -107,15 +120,19 @@ export const getBatchResults = {
 			}
 
 			const status = (await statusRes.json()) as BatchStatusResponse;
+			const resolvedId = status.id || status.batch_id || batch_id;
+			if (kindFromStatus(status as Record<string, unknown>) === "crawl") {
+				return wrongJobKindResult("batch", "crawl", batch_id);
+			}
 			const batchStatus = (status.status || "").toLowerCase();
 
 			if (batchStatus !== "completed") {
-				if (!isRunning(batchStatus)) return unexpectedStatus("batch", { batch_id: status.id || status.batch_id, ...status });
+				if (!isRunning(batchStatus)) return unexpectedStatus("batch", { batch_id: resolvedId, ...status });
 				return {
 					content: [{
 						type: "text",
 						text: JSON.stringify({
-							batch_id: status.id || status.batch_id,
+							batch_id: resolvedId,
 							status: status.status,
 							total_urls: status.total_urls,
 							completed_urls: status.completed_urls,
@@ -126,8 +143,14 @@ export const getBatchResults = {
 			}
 
 			const limit = items_limit ?? 20;
+			const startCursor = cursor ?? 0;
+			const totalUrls = numberField(status.total_urls, status.total_items, status.total);
+			if (cursorOutOfRange("batch", resolvedId, startCursor, totalUrls, limit)) {
+				return cursorOutOfRangeResult("batch", resolvedId, startCursor, totalUrls as number);
+			}
+
 			const itemsRes = await fetch(
-				`${OLOSTEP_API_URL}/batches/${encodeURIComponent(batch_id)}/items?cursor=${cursor ?? 0}&limit=${limit}`,
+				`${OLOSTEP_API_URL}/batches/${encodeURIComponent(batch_id)}/items?cursor=${startCursor}&limit=${limit}`,
 				{ method: "GET", headers },
 			);
 
@@ -137,7 +160,7 @@ export const getBatchResults = {
 					content: [{
 						type: "text",
 						text: JSON.stringify({
-							batch_id: status.id || status.batch_id,
+							batch_id: resolvedId,
 							status: "completed",
 							message: `Batch completed but fetching its items failed: ${itemsRes.status} ${itemsRes.statusText}. Call get_batch_results again to retry.`,
 						}, null, 2),
@@ -153,8 +176,9 @@ export const getBatchResults = {
 
 			// The API returns a cursor whenever a page is full, even if nothing is left, so the listing
 			// can end on an empty page. If the first page already holds every URL, there is nothing more.
-			const firstPageHasAll = !cursor && typeof status.total_urls === "number" && items.length >= status.total_urls;
+			const firstPageHasAll = startCursor === 0 && totalUrls !== null && items.length >= totalUrls;
 			const hasMore = !firstPageHasAll && items.length > 0 && itemsData.cursor !== undefined && itemsData.cursor !== null;
+			if (hasMore) rememberNextCursor("batch", resolvedId, limit, itemsData.cursor);
 
 			const results = await Promise.all(
 				items.map(async (item) => {
@@ -190,7 +214,7 @@ export const getBatchResults = {
 				content: [{
 					type: "text",
 					text: JSON.stringify({
-						batch_id: status.id || status.batch_id,
+						batch_id: resolvedId,
 						status: "completed",
 						total_urls: status.total_urls,
 						items_returned: results.length,

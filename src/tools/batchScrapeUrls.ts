@@ -3,6 +3,7 @@ import { Headers } from "node-fetch";
 import fetch from "node-fetch";
 import { getBatchResults } from "./getBatchResults.js";
 import { isRunning, unexpectedStatus } from "./jobStatus.js";
+import { batchProgress } from "./jobProgress.js";
 
 const OLOSTEP_API_URL = process.env.OLOSTEP_API_URL ?? "https://api.olostep.com/v1";
 
@@ -17,8 +18,8 @@ export const batchScrapeUrls = {
 		"Use this when you have a known list of URLs to scrape, such as URLs from a CSV or from search results " +
 		"(up to 100k in one batch). " +
 		"Waits up to `wait_for_completion_seconds` (default 45) and returns the content if the batch finishes in that time. " +
-		"Larger batches usually take 5-8 min and return a batch_id: get their content with get_batch_results, " +
-		"a set at a time, passing `next_cursor` for the rest. " +
+		"If it is still running, returns the batch_id plus completed/total counts and a `cursor`; continue with " +
+		"get_batch_results, passing that cursor to read only the results not seen yet. " +
 		"For one or a few URLs, scrape_website is faster; to discover a site's pages, use create_crawl.",
 	schema: {
 		urls: z
@@ -141,9 +142,12 @@ export const batchScrapeUrls = {
 			if (waitSeconds > 0 && batchId) {
 				const pollIntervalMs = 5_000;
 				const deadline = Date.now() + waitSeconds * 1000;
+				let lastStatus: Record<string, unknown> | null = null;
 
 				while (Date.now() < deadline) {
-					await new Promise((r) => setTimeout(r, pollIntervalMs));
+					// Do not overshoot a short wait by a whole poll interval.
+					const remainingMs = Math.max(0, deadline - Date.now());
+					await new Promise((r) => setTimeout(r, Math.min(pollIntervalMs, remainingMs)));
 
 					const statusRes = await fetch(
 						`${OLOSTEP_API_URL}/batches/${encodeURIComponent(batchId)}`,
@@ -162,25 +166,42 @@ export const batchScrapeUrls = {
 					}
 
 					const statusData = (await statusRes.json()) as Record<string, unknown>;
+					lastStatus = statusData;
 					const status = String(statusData.status || "").toLowerCase();
 
 					if (status === "completed") {
 						// Hand back the content directly instead of asking for a second call.
-						const totalUrls = Number(statusData.total_urls ?? 20) || 20;
+						const totalUrls = Number(statusData.total_urls);
+						const itemsLimit = Number.isFinite(totalUrls) && totalUrls > 0 ? Math.min(totalUrls, 20) : 20;
 						return await getBatchResults.handler(
-							{ batch_id: batchId, formats: [output_format], items_limit: Math.min(totalUrls, 20) },
+							{ batch_id: batchId, formats: [output_format], items_limit: itemsLimit },
 							apiKey,
 						);
 					}
 					if (!isRunning(status)) return unexpectedStatus("batch", statusData);
 				}
 
+				// Still running: report the upstream progress and where the caller can
+				// resume reading, so the job is not mistaken for a failure or restarted.
+				const progress = batchProgress({ ...data, ...(lastStatus ?? {}) });
+				const status = progress.status || String(data.status ?? "").toLowerCase();
 				return {
 					content: [{
 						type: "text",
 						text: JSON.stringify({
 							...data,
-							message: `Batch still processing after ${waitSeconds}s. Call get_batch_results with batch_id "${batchId}" to check again later.`,
+							batch_id: batchId,
+							status,
+							completed_urls: progress.completed,
+							total_urls: progress.total,
+							completed_items: progress.completed,
+							total_items: progress.total,
+							cursor: progress.cursor,
+							message:
+								`Batch is still ${status} after ${waitSeconds}s: ${progress.completed ?? 0} of ` +
+								`${progress.total ?? "an unknown number of"} URLs completed. Continue with ` +
+								`get_batch_results using batch_id "${batchId}" and cursor ${progress.cursor ?? 0}; ` +
+								"do not start a new batch for the same URLs.",
 						}, null, 2),
 					}],
 				};

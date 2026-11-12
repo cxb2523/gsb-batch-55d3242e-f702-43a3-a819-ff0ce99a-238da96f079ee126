@@ -3,6 +3,8 @@ import { Headers } from "node-fetch";
 import fetch from "node-fetch";
 import { isRunning, unexpectedStatus } from "./jobStatus.js";
 import { DEFAULT_MAX_CHARACTERS, shapePage } from "./pageContent.js";
+import { cursorOutOfRange, cursorOutOfRangeResult, numberField, rememberNextCursor } from "./jobProgress.js";
+import { kindFromId, kindFromStatus, probeOtherKind, wrongJobKindResult } from "./jobKind.js";
 
 const OLOSTEP_API_URL = process.env.OLOSTEP_API_URL ?? "https://api.olostep.com/v1";
 
@@ -16,6 +18,7 @@ interface CrawlStatusResponse {
 	pages_count?: number;
 	pages_completed?: number;
 	pages_total?: number;
+	total_pages?: number;
 	created?: string;
 }
 
@@ -106,12 +109,21 @@ export const getCrawlResults = {
 				Authorization: `Bearer ${apiKey}`,
 			});
 
+			// A crawl_id that names a batch belongs to the other tool.
+			if (kindFromId(crawl_id) === "batch") return wrongJobKindResult("crawl", "batch", crawl_id);
+
 			const statusRes = await fetch(
 				`${OLOSTEP_API_URL}/crawls/${encodeURIComponent(crawl_id)}`,
 				{ method: "GET", headers },
 			);
 
 			if (!statusRes.ok) {
+				// A 404 can mean the id is a batch: check the other resource once and
+				// steer the caller to get_batch_results instead of a bare "not found".
+				if (statusRes.status === 404) {
+					const other = await probeOtherKind(crawl_id, "crawl", headers, OLOSTEP_API_URL);
+					if (other === "batch") return wrongJobKindResult("crawl", "batch", crawl_id);
+				}
 				let errorDetails: unknown = null;
 				try { errorDetails = await statusRes.json(); } catch { /* ignore */ }
 				return {
@@ -124,8 +136,11 @@ export const getCrawlResults = {
 			}
 
 			const status = (await statusRes.json()) as CrawlStatusResponse;
-			const crawlStatus = (status.status || "").toLowerCase();
 			const resolvedId = status.id || status.crawl_id || crawl_id;
+			if (kindFromStatus(status as Record<string, unknown>) === "batch") {
+				return wrongJobKindResult("crawl", "batch", crawl_id);
+			}
+			const crawlStatus = (status.status || "").toLowerCase();
 
 			if (crawlStatus !== "completed") {
 				if (!isRunning(crawlStatus)) return unexpectedStatus("crawl", { crawl_id: resolvedId, ...status });
@@ -145,6 +160,10 @@ export const getCrawlResults = {
 
 			const limit = items_limit ?? 20;
 			const startCursor = cursor ?? 0;
+			const totalPages = numberField(status.pages_total, status.max_pages, status.total_pages);
+			if (cursorOutOfRange("crawl", resolvedId, startCursor, totalPages, limit)) {
+				return cursorOutOfRangeResult("crawl", resolvedId, startCursor, totalPages as number);
+			}
 			const params = new URLSearchParams({
 				cursor: String(startCursor),
 				limit: String(limit),
@@ -178,6 +197,7 @@ export const getCrawlResults = {
 
 			// The API returns a cursor until the listing is exhausted, which can end on an empty page.
 			const hasMore = pages.length > 0 && pagesData.cursor !== undefined && pagesData.cursor !== null;
+			if (hasMore) rememberNextCursor("crawl", resolvedId, limit, pagesData.cursor);
 
 			const results = await Promise.all(
 				pages.map(async (page) => {

@@ -531,6 +531,8 @@ Scrape up to 100k URLs in one batch. Perfect for large-scale data extraction. Ne
 
 - `batch_id`, `status`, `total_urls`, `created_at`, `formats`, `country`, `parser`, `urls`
 
+If `wait_for_completion_seconds` expires while the batch is still running, the response instead includes `status`, `completed_urls`, `total_urls`, and a `cursor`. Pass that cursor to `get_batch_results` to read only the entries not seen yet; do not submit the same URLs again.
+
 ### 5. Create Crawl (`create_crawl`)
 
 Start an **async** crawl that autonomously discovers and scrapes entire websites by following links. Returns a `crawl_id` — the crawl runs in the background and does **not** return content in this response. You must then call `get_crawl_results` with the `crawl_id` to poll status and retrieve the scraped pages (same two-step pattern as `batch_scrape_urls` + `get_batch_results`).
@@ -592,7 +594,7 @@ Retrieve the results of a previously submitted batch scrape job using its `batch
 
 - `batch_id`: The batch ID returned from `batch_scrape_urls` (required)
 - `items_limit`: Max items to retrieve content for per call, 1–100 (default: 20)
-- `cursor`: Pass `next_cursor` from the previous result to get the next pages (default: 0)
+- `cursor`: Pass `next_cursor` from the previous result to get the next pages (default: 0). A cursor past `total_urls` is rejected with an error.
 - `max_characters`: Max characters of content per URL (default: 20000). Longer pages are cut and link to their full text.
 
 Large batches return their pages a set at a time. When `has_more` is `true`, call again with `next_cursor` until you have every page.
@@ -629,6 +631,7 @@ Retrieve the status and scraped pages for an async crawl started with `create_cr
 #### Response includes:
 
 - **While in progress:** `crawl_id`, `status` (`in_progress`), `pages_completed`, `pages_total`, and a `message` prompting you to call again in ~10 seconds.
+- **After a timeout in `create_crawl`:** `crawl_id`, `status`, `pages_completed`, `pages_total`, and a `cursor`; pass that cursor to `get_crawl_results` to read only the pages not returned yet.
 - **When completed:** `crawl_id`, `status` (`completed`), `pages_returned`, `next_cursor`, `has_more`, and a `pages` array where each entry has `url`, `title`, `custom_id`, and the requested content fields (`markdown_content`, `html_content`, `json_content`, `text_content`).
 
 ### Older tool names
