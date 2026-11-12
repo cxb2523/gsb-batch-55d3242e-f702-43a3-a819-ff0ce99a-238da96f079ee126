@@ -1,10 +1,10 @@
 import getStroke from "perfect-freehand";
-import {
+import { WhiteboardItem } from "../../lib/item";
+import type {
   ExportedWhiteboardItem,
-  WhiteboardItem,
   WhiteboardItemType,
 } from "../../lib/item";
-import { DrawingContext, ResizeHandle } from "../../lib/types";
+import type { DrawingContext, ResizeHandle } from "../../lib/types";
 import { getSvgPathFromStroke } from "../../lib/svg";
 import { distance, distanceToSegment } from "../../lib/geometry";
 
@@ -151,15 +151,23 @@ export class PenItem extends WhiteboardItem<PenItemType> {
 
   /**
    * Get the bounding box of the item.
+   *
+   * The stroke is drawn with a line width of `size * zoom` (see `draw`), so
+   * the box has to reserve half of that same width on every side to actually
+   * cover the painted stroke. The margin is expressed in world units, just
+   * like the path itself. At `zoom = 1` this is exactly the historical
+   * behavior (`size / 2` on every side).
+   *
+   * @param zoom The current zoom level (defaults to 1).
    */
-  public override getBoundingBox(): {
+  public override getBoundingBox(zoom: number = 1): {
     x: number;
     y: number;
     width: number;
     height: number;
   } | null {
     const strokeWidth = this.options.size ?? 1;
-    const halfStrokeWidth = strokeWidth / 2;
+    const halfStrokeWidth = (strokeWidth * zoom) / 2;
 
     const xValues = this.path.map(({ x }) => x);
     const yValues = this.path.map(({ y }) => y);
@@ -245,9 +253,10 @@ export class PenItem extends WhiteboardItem<PenItemType> {
   public override relativeResizeOperation(
     dx: number,
     dy: number,
-    name: string
+    name: string,
+    zoom: number = 1
   ): Partial<PenItemType> | null {
-    const boundingBox = this.getBoundingBox();
+    const boundingBox = this.getBoundingBox(zoom);
     if (!boundingBox) {
       return null;
     }
@@ -272,8 +281,17 @@ export class PenItem extends WhiteboardItem<PenItemType> {
     }
   }
 
-  public override getResizeHandles(): ResizeHandle[] {
-    const boundingBox = this.getBoundingBox();
+  /**
+   * Resize handles, in world coordinates.
+   *
+   * The single handle sits on the bottom-right corner of the bounding box, so
+   * it is derived from the zoom-aware box and always matches what the
+   * renderer outlines at the current zoom level.
+   *
+   * @param zoom The current zoom level (defaults to 1).
+   */
+  public override getResizeHandles(zoom: number = 1): ResizeHandle[] {
+    const boundingBox = this.getBoundingBox(zoom);
     if (!boundingBox) {
       return [];
     }

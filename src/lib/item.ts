@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { DrawingContext, ResizeHandle } from "./types";
+import type { DrawingContext, ResizeHandle } from "./types";
 import { circleIntersectsRect } from "./geometry";
 
 /**
@@ -28,7 +28,7 @@ export interface WhiteboardItemInterface<T extends WhiteboardItemType> {
   partialUpdate(item: T): void;
   update(item: T): void;
   draw(context: DrawingContext): void;
-  getBoundingBox(): {
+  getBoundingBox(zoom?: number): {
     x: number;
     y: number;
     width: number;
@@ -41,9 +41,10 @@ export interface WhiteboardItemInterface<T extends WhiteboardItemType> {
   relativeResizeOperation(
     _dx: number,
     _dy: number,
-    _name: string
+    _name: string,
+    _zoom?: number
   ): Partial<T> | null;
-  getResizeHandles(): ResizeHandle[];
+  getResizeHandles(zoom?: number): ResizeHandle[];
   onRemove(): void;
 }
 
@@ -129,9 +130,18 @@ export abstract class WhiteboardItem<T extends WhiteboardItemType>
   }
 
   /**
-   * Get the bounding box of the item.
+   * Get the bounding box of the item, expressed in world coordinates.
+   *
+   * The optional `zoom` parameter is the current zoom level of the board.
+   * Items whose drawn outline depends on the zoom (e.g. strokes whose rendered
+   * width is `lineWidth * zoom`) use it so the returned box always covers the
+   * pixels that actually get painted; items whose box is pure geometry simply
+   * ignore it. It defaults to 1, which preserves the zoom-independent behavior
+   * of callers that do not have a camera at hand (exports, tests, …).
+   *
+   * @param zoom The current zoom level (defaults to 1).
    */
-  public getBoundingBox(): {
+  public getBoundingBox(_zoom: number = 1): {
     x: number;
     y: number;
     width: number;
@@ -207,12 +217,13 @@ export abstract class WhiteboardItem<T extends WhiteboardItemType>
   public relativeResizeOperation(
     _dx: number,
     _dy: number,
-    _name: string
+    _name: string,
+    _zoom: number = 1
   ): Partial<T> | null {
     return null;
   }
 
-  public getResizeHandles(): ResizeHandle[] {
+  public getResizeHandles(_zoom: number = 1): ResizeHandle[] {
     return [];
   }
 

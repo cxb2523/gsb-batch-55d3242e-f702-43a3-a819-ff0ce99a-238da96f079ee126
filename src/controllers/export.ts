@@ -316,7 +316,7 @@ export class ExportController {
     const roughCanvas = rough.canvas(canvas, { options: { seed: 42 } });
     const drawingContext: DrawingContext = { canvas: ctx, roughCanvas, coords };
     this.host.getItems().forEach((item) => {
-      const box = item.getBoundingBox();
+      const box = item.getBoundingBox(coords.getZoom());
       if (box && !rectsIntersect(box, region)) {
         return;
       }

@@ -185,15 +185,15 @@ export class CanvasRenderer {
       handles?: boolean;
     }
   ): void {
-    const boundingRect = item.getBoundingBox();
+    const coords = this.host.getCoordsContext();
+    const zoom = coords.getZoom();
+    const boundingRect = item.getBoundingBox(zoom);
     if (!boundingRect) {
       return;
     }
 
-    const coords = this.host.getCoordsContext();
     const { x, y, width, height } = boundingRect;
     const { x: coordX, y: coordY } = coords.convertToCanvas(x, y);
-    const zoom = coords.getZoom();
 
     const left = Math.round(coordX - BOX_PADDING) + 0.5;
     const top = Math.round(coordY - BOX_PADDING) + 0.5;
@@ -232,7 +232,7 @@ export class CanvasRenderer {
     const hoveredHandle = this.host.getHoveredResizeHandle();
 
     context.save();
-    item.getResizeHandles().forEach((handle) => {
+    item.getResizeHandles(coords.getZoom()).forEach((handle) => {
       const { x: handleX, y: handleY } = coords.convertToCanvas(
         handle.x,
         handle.y
@@ -291,7 +291,7 @@ export class CanvasRenderer {
     const selectedItemId = this.host.getSelectedItemId();
     this.host.getItems().forEach((item) => {
       if (item.getId() !== selectedItemId) {
-        const box = item.getBoundingBox();
+        const box = item.getBoundingBox(coords.getZoom());
         if (box && !rectsIntersect(box, visibleRect)) {
           return;
         }

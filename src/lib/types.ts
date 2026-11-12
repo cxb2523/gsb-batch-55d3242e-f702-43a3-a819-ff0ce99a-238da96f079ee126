@@ -1,6 +1,6 @@
-import { RoughCanvas as LocalRoughCanvas } from "roughjs/bin/canvas";
-import { Options as LocalRoughCanvasOptions } from "roughjs/bin/core";
-import { CoordsContext } from "./coords";
+import type { RoughCanvas as LocalRoughCanvas } from "roughjs/bin/canvas";
+import type { Options as LocalRoughCanvasOptions } from "roughjs/bin/core";
+import type { CoordsContext } from "./coords";
 
 /**
  * Interface for the drawing context.

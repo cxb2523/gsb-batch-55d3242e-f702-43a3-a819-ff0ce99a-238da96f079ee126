@@ -1,9 +1,9 @@
-import {
+import { WhiteboardItem } from "../../lib/item";
+import type {
   ExportedWhiteboardItem,
-  WhiteboardItem,
   WhiteboardItemType,
 } from "../../lib/item";
-import {
+import type {
   DrawingContext,
   Point,
   ResizeHandle,
@@ -202,15 +202,20 @@ export class ArrowItem extends WhiteboardItem<ArrowItemType> {
    *
    * It covers everything that gets drawn: the shaft, the arrowhead (which can
    * stick out well beyond the shaft, e.g. on both sides of a horizontal arrow)
-   * and half of the stroke width, which straddles the geometry on each side.
+   * and half of the rendered stroke width, which straddles the geometry on
+   * each side. The stroke is drawn with a width of `strokeWidth * zoom` (see
+   * `draw`), so that same effective half-width is reserved here, in world
+   * units. At `zoom = 1` the box is identical to the historical one.
+   *
+   * @param zoom The current zoom level (defaults to 1).
    */
-  public override getBoundingBox(): {
+  public override getBoundingBox(zoom: number = 1): {
     x: number;
     y: number;
     width: number;
     height: number;
   } | null {
-    const halfStrokeWidth = (this.options.strokeWidth ?? 1) / 2;
+    const halfStrokeWidth = ((this.options.strokeWidth ?? 1) * zoom) / 2;
     const points: Point[] = [
       { x: this.x1, y: this.y1 },
       { x: this.x2, y: this.y2 },
@@ -231,9 +236,12 @@ export class ArrowItem extends WhiteboardItem<ArrowItemType> {
   }
 
   /**
-   * An arrow is only "touched" when the eraser gets close to the shaft itself
-   * (the arrowhead sits at the end point, which the segment already covers),
-   * not merely to its bounding box.
+   * An arrow is only "touched" when the eraser gets close to one of the three
+   * segments that make up its geometry: the shaft and the two arrowhead
+   * barbs. Testing only the shaft would make the arrowhead tips impossible to
+   * erase, even though the bounding box (and thus the selection outline)
+   * covers them. The threshold keeps the existing `radius + half line width`
+   * semantics, all in world coordinates.
    */
   public override isHitByEraser(
     x: number,
@@ -241,12 +249,28 @@ export class ArrowItem extends WhiteboardItem<ArrowItemType> {
     radius: number
   ): boolean {
     const halfStroke = (this.options.strokeWidth ?? 1) / 2;
-    const dist = distanceToSegment(
-      { x, y },
-      { x: this.x1, y: this.y1 },
-      { x: this.x2, y: this.y2 }
+    const threshold = radius + halfStroke;
+    const point = { x, y };
+    const headPoints = this.getHeadPoints();
+
+    // Shaft.
+    const segments: [Point, Point][] = [
+      [
+        { x: this.x1, y: this.y1 },
+        { x: this.x2, y: this.y2 },
+      ],
+    ];
+
+    // Arrowhead barbs, from the tip back to each wing point. When the arrow
+    // is too short to define a direction there are no barbs, and the
+    // degenerate shaft segment still covers the single point.
+    headPoints.forEach((headPoint) => {
+      segments.push([{ x: this.x2, y: this.y2 }, headPoint]);
+    });
+
+    return segments.some(
+      ([a, b]) => distanceToSegment(point, a, b) <= threshold
     );
-    return dist <= radius + halfStroke;
   }
 
   /**
@@ -291,7 +315,8 @@ export class ArrowItem extends WhiteboardItem<ArrowItemType> {
   public override relativeResizeOperation(
     dx: number,
     dy: number,
-    name: string
+    name: string,
+    _zoom: number = 1
   ): Partial<ArrowItemType> | null {
     switch (name) {
       case "point-1":
@@ -309,7 +334,14 @@ export class ArrowItem extends WhiteboardItem<ArrowItemType> {
     }
   }
 
-  public override getResizeHandles(): ResizeHandle[] {
+  /**
+   * Resize handles at the two shaft endpoints, in world coordinates.
+   *
+   * The endpoints are part of the zoom-aware bounding box geometry (the box
+   * is built from them plus the head points and the half-stroke margin), so
+   * the handles stay consistent with the outlined box at every zoom level.
+   */
+  public override getResizeHandles(_zoom: number = 1): ResizeHandle[] {
     return [
       { x: this.x1, y: this.y1, name: "point-1" },
       { x: this.x2, y: this.y2, name: "point-2" },

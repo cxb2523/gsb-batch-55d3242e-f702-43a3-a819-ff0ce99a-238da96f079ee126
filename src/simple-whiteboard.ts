@@ -208,8 +208,9 @@ export class SimpleWhiteboard extends LitElement {
 
   getBoundingRect(
     item: WhiteboardItem<WhiteboardItemType>,
+    zoom?: number,
   ): { x: number; y: number; width: number; height: number } | null {
-    return item.getBoundingBox();
+    return item.getBoundingBox(zoom);
   }
 
   drawItemBox(

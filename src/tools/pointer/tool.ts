@@ -82,9 +82,10 @@ export class PointerTool extends WhiteboardTool<PointerItem> {
   ): WhiteboardItem<WhiteboardItemType> | null {
     const whiteboard = this.getSimpleWhiteboardInstance();
     const items = whiteboard.getItems();
+    const zoom = whiteboard.getCoordsContext().getZoom();
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
-      const boundingBox = item.getBoundingBox();
+      const boundingBox = item.getBoundingBox(zoom);
       if (boundingBox === null) {
         continue;
       }
@@ -115,6 +116,7 @@ export class PointerTool extends WhiteboardTool<PointerItem> {
   private handleMouseMoveThrottled(e: MouseEvent): void {
     const whiteboard = this.getSimpleWhiteboardInstance();
     const coordsContext = whiteboard.getCoordsContext();
+    const zoom = coordsContext.getZoom();
     const { x: whiteboardX, y: whiteboardY } = coordsContext.convertFromCanvas(
       e.offsetX,
       e.offsetY
@@ -137,7 +139,7 @@ export class PointerTool extends WhiteboardTool<PointerItem> {
     const handle =
       selectedItem && selectedItem.isResizable()
         ? this.resizeHandleMatch(
-            selectedItem.getResizeHandles(),
+            selectedItem.getResizeHandles(zoom),
             whiteboardX,
             whiteboardY
           )
@@ -146,7 +148,9 @@ export class PointerTool extends WhiteboardTool<PointerItem> {
 
     if (handle && selectedItem) {
       whiteboard.setHoveredItemId(null);
-      this.setCursor(resizeCursor(handle, selectedItem.getBoundingBox()));
+      this.setCursor(
+        resizeCursor(handle, selectedItem.getBoundingBox(zoom))
+      );
       return;
     }
 
@@ -208,7 +212,8 @@ export class PointerTool extends WhiteboardTool<PointerItem> {
       const partialUpdate = item.relativeResizeOperation(
         deltaX,
         deltaY,
-        this.resizeHandleName
+        this.resizeHandleName,
+        coordsContext.getZoom()
       );
       if (partialUpdate === null) {
         return;
@@ -260,7 +265,9 @@ export class PointerTool extends WhiteboardTool<PointerItem> {
     const currentSelectedItem = whiteboard.getSelectedItem();
 
     if (currentSelectedItem && currentSelectedItem.isResizable()) {
-      const resizeHandles = currentSelectedItem.getResizeHandles();
+      const resizeHandles = currentSelectedItem.getResizeHandles(
+        coordsContext.getZoom()
+      );
       const resizeHandle = this.resizeHandleMatch(
         resizeHandles,
         whiteboardX,
