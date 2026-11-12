@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import {
   activateSuper,
+  canActivateSuper,
   gobble,
   headTouches,
+  isSuper,
   loserOf,
   SUPER_DURATION,
+  SUPER_RECHARGE,
   superState,
 } from './wiggle-rules';
-import { createSnake, radiusFor, START_MASS } from './wiggle-snake';
+import { createSnake, lengthAtDeath, radiusFor, START_MASS } from './wiggle-snake';
 import {
   BOT_COUNT,
   createWorld,
@@ -87,6 +90,24 @@ describe("Alisa's rule", () => {
     expect(world.events).toEqual([{ type: 'gobble', eater, victim }]);
   });
 
+  it('freezes the player mass at death so the result length cannot drift', () => {
+    const world = emptyWorld();
+    const eater = snake(300, 0, 500);
+    const player = snake(120, 0, 0, 0, true);
+    world.player = player;
+    world.snakes = [eater, player];
+
+    gobble(world, eater, player);
+    expect(player.massAtDeath).toBe(120);
+    expect(lengthAtDeath(player)).toBe(120);
+
+    // Even if a later frame or a restart touched the old snake, the score keeps the snapshot.
+    player.mass = 999;
+    stepWorld(world, 0.1);
+    expect(player.massAtDeath).toBe(120);
+    expect(lengthAtDeath(player)).toBe(120);
+  });
+
   it('plays out in the world: a little bot bumping a big player gets gobbled', () => {
     const world = emptyWorld();
     const player = snake(300, 0, 0, 0, true);
@@ -135,6 +156,33 @@ describe('super button', () => {
     expect(player.alive).toBe(true);
   });
 
+  it('goes back to the normal big-eats-small rule when super ends', () => {
+    const { world, player, giant } = duel();
+    expect(activateSuper(world)).toBe(true);
+    world.time = world.superUntil;
+    expect(isSuper(world, player)).toBe(false);
+    expect(loserOf(world, player, giant)).toBe(player);
+    expect(loserOf(world, giant, player)).toBe(player);
+  });
+
+  it('ignores extra presses while active or still charging, without moving timers', () => {
+    const { world } = duel();
+    expect(activateSuper(world)).toBe(true);
+    const until = world.superUntil;
+    const readyAt = world.superReadyAt;
+
+    expect(activateSuper(world)).toBe(false);
+    expect(canActivateSuper(world)).toBe(false);
+    expect(world.superUntil).toBe(until);
+    expect(world.superReadyAt).toBe(readyAt);
+
+    world.time = until + SUPER_RECHARGE / 2;
+    expect(superState(world).ready).toBe(false);
+    expect(activateSuper(world)).toBe(false);
+    expect(world.superUntil).toBe(until);
+    expect(world.superReadyAt).toBe(readyAt);
+  });
+
   it('lasts a few seconds, then fills back up before it can fire again', () => {
     const { world } = duel();
     activateSuper(world);
@@ -150,9 +198,31 @@ describe('super button', () => {
     expect(superState(world)).toMatchObject({ ready: true, charge: 1 });
   });
 
-  it('does nothing without a living player', () => {
+  it('does nothing without a living player and leaves every timer alone', () => {
     const world = emptyWorld();
     expect(activateSuper(world)).toBe(false);
+
+    const deadPlayer = snake(50, 0, 0, 0, true);
+    deadPlayer.alive = false;
+    world.player = deadPlayer;
+    world.snakes = [deadPlayer];
+    // Even with a fully charged timer, a corpse cannot press the button.
+    world.superUntil = 0;
+    world.superReadyAt = 0;
+    expect(superState(world).ready).toBe(false);
+    expect(canActivateSuper(world)).toBe(false);
+    expect(activateSuper(world)).toBe(false);
+
+    world.time = 5;
+    world.superUntil = 9;
+    world.superReadyAt = 21;
+
+    expect(isSuper(world, deadPlayer)).toBe(false);
+    expect(superState(world).active).toBe(false);
+    expect(canActivateSuper(world)).toBe(false);
+    expect(activateSuper(world)).toBe(false);
+    expect(world.superUntil).toBe(9);
+    expect(world.superReadyAt).toBe(21);
   });
 });
 

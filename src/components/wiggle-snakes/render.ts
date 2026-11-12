@@ -1,3 +1,4 @@
+import type { Camera } from '@/lib/wiggle-camera';
 import { FOOD_COLORS } from '@/lib/wiggle-food';
 import { radiusFor, type Snake } from '@/lib/wiggle-snake';
 import { SKINS } from '@/lib/wiggle-skins';
@@ -5,7 +6,7 @@ import type { World } from '@/lib/wiggle-world';
 
 import { dot, drawSnake } from './draw-snake';
 
-export type Camera = { x: number; y: number; zoom: number };
+export type { Camera };
 export type Screen = { w: number; h: number; dpr: number };
 export type Assets = { dots: HTMLCanvasElement[]; floor: CanvasPattern | null };
 type View = { left: number; top: number; right: number; bottom: number };

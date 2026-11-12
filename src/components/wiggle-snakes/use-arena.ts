@@ -2,11 +2,18 @@
 
 import { useEffect, useRef, type RefObject } from 'react';
 
-import { radiusFor } from '@/lib/wiggle-snake';
+import { followCamera, type Camera } from '@/lib/wiggle-camera';
 import { SKINS } from '@/lib/wiggle-skins';
 import { createWorld, stepWorld, type World, type WorldEvent } from '@/lib/wiggle-world';
 
-import { createAssets, drawFrame, type Camera, type Screen } from './render';
+import { createAssets, drawFrame, type Screen } from './render';
+
+export {
+  cameraTarget,
+  followCamera,
+  largestAliveSnake,
+  selectCameraTarget,
+} from '@/lib/wiggle-camera';
 
 export type ArenaInput = { angle: number; boosting: boolean; steerId: number | null };
 type Callbacks = { onHud: (world: World) => void; onEvent: (event: WorldEvent) => void };
@@ -30,7 +37,7 @@ export function useArena(canvasRef: RefObject<HTMLCanvasElement | null>, callbac
     const world = createWorld(SKINS.length);
     worldRef.current = world;
     const assets = createAssets(ctx);
-    const cam: Camera = { x: 0, y: 0, zoom: 0.5 };
+    const cam: Camera = { x: 0, y: 0, zoom: 0.5, focusId: null };
     const screen: Screen = { w: 1, h: 1, dpr: 1 };
     const coarse = window.matchMedia('(pointer: coarse)').matches;
 
@@ -76,19 +83,4 @@ export function useArena(canvasRef: RefObject<HTMLCanvasElement | null>, callbac
   }, [canvasRef]);
 
   return { worldRef, inputRef };
-}
-
-/** Lock onto the player; on the title screen drift after the biggest bot instead. */
-function followCamera(cam: Camera, world: World, screen: Screen, dt: number) {
-  const { player } = world;
-  if (player && !player.alive) return;
-  const target = player ?? [...world.snakes].sort((a, b) => b.mass - a.mass)[0];
-  if (!target) return;
-  const head = target.body[0];
-  const follow = player ? 1 : Math.min(1, dt * 1.5);
-  cam.x += (head.x - cam.x) * follow;
-  cam.y += (head.y - cam.y) * follow;
-  const zoom =
-    (Math.min(screen.w, screen.h) / (450 + radiusFor(target.mass) * 18)) * (player ? 1 : 0.75);
-  cam.zoom += (zoom - cam.zoom) * Math.min(1, dt * 3);
 }

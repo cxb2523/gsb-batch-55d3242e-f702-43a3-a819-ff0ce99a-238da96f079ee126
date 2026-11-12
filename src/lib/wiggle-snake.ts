@@ -10,6 +10,8 @@ export type Snake = {
   angle: number;
   targetAngle: number;
   mass: number;
+  /** Set once when the snake dies, so the score cannot drift with later frames or a respawn. */
+  massAtDeath: number | null;
   boosting: boolean;
   alive: boolean;
   dropTimer: number;
@@ -27,6 +29,8 @@ export const BOOST_SPEED = 380;
 
 export const radiusFor = (mass: number) => Math.min(40, 10 + Math.sqrt(mass) * 0.9);
 export const segmentsFor = (mass: number) => Math.min(500, Math.round(10 + mass * 0.35));
+/** The score shown on the game-over card, frozen at the moment of death. */
+export const lengthAtDeath = (snake: Snake) => Math.round(snake.massAtDeath ?? snake.mass);
 /** Small snakes turn on a dime, big ones swing wide. */
 export const turnRateFor = (mass: number) => 2 + 30 / radiusFor(mass);
 
@@ -46,6 +50,7 @@ export function createSnake({ x, y, angle, mass, ...rest }: SnakeInit): Snake {
     angle,
     targetAngle: angle,
     mass,
+    massAtDeath: null,
     boosting: false,
     alive: true,
     dropTimer: 0,

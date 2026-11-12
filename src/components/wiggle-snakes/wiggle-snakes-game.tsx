@@ -11,8 +11,9 @@ import {
 
 import { trackEvent } from '@/lib/analytics';
 import { playGobble, playMunch, playOops, playSuper, unlockWiggleAudio } from '@/lib/wiggle-audio';
-import { loadBest, loadSkin, recordBest, saveSkin } from '@/lib/wiggle-skins';
 import { activateSuper, superState } from '@/lib/wiggle-rules';
+import { lengthAtDeath } from '@/lib/wiggle-snake';
+import { loadBest, loadSkin, recordBest, saveSkin } from '@/lib/wiggle-skins';
 import {
   spawnPlayer,
   standings,
@@ -68,7 +69,8 @@ export function WiggleSnakesGame() {
     }
     if (event.victim.isPlayer) {
       playOops();
-      const length = Math.round(event.victim.mass);
+      // The gobble froze the mass at death, so the result screen cannot drift afterwards.
+      const length = lengthAtDeath(event.victim);
       const record = length > loadBest();
       const topLength = recordBest(length);
       setBest(topLength);

@@ -7,22 +7,27 @@ export const SUPER_RECHARGE = 12;
 const RESPAWN_DELAY = 2;
 
 export const isSuper = (world: World, snake: Snake) =>
-  snake.isPlayer && world.time < world.superUntil;
+  snake.isPlayer && snake.alive && world.time < world.superUntil;
 
 export function superState(world: World) {
-  const active = world.time < world.superUntil;
+  const alivePlayer = Boolean(world.player?.alive);
+  const active = alivePlayer && world.time < world.superUntil;
   const waiting = Math.max(0, world.superReadyAt - world.time);
   return {
     active,
-    ready: !active && waiting === 0,
-    remaining: Math.max(0, world.superUntil - world.time),
+    ready: alivePlayer && !active && waiting === 0,
+    remaining: active ? Math.max(0, world.superUntil - world.time) : 0,
     charge: active ? 1 : 1 - Math.min(1, waiting / SUPER_RECHARGE),
   };
 }
 
 /** The big button on top: for a few seconds the player can gobble every snake it touches. */
+export function canActivateSuper(world: World) {
+  return superState(world).ready;
+}
+
 export function activateSuper(world: World) {
-  if (!world.player?.alive || !superState(world).ready) return false;
+  if (!canActivateSuper(world)) return false;
   world.superUntil = world.time + SUPER_DURATION;
   world.superReadyAt = world.superUntil + SUPER_RECHARGE;
   return true;
@@ -62,6 +67,8 @@ export function resolveContacts(world: World) {
 export function gobble(world: World, eater: Snake, victim: Snake) {
   const { rand } = world;
   victim.alive = false;
+  victim.massAtDeath = victim.mass;
+  victim.boosting = false;
   const r = radiusFor(victim.mass);
   const count = Math.max(6, Math.min(120, Math.round(victim.body.length / 3)));
   const value = (victim.mass * 0.8 + 4) / count;
