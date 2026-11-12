@@ -55,14 +55,15 @@
     var ox = win ? win.x : 0, oy = win ? win.y : 0;
     var PW = win ? win.w : Math.round(W * S), PH = win ? win.h : Math.round(H * S);
     var MA = new Float32Array(PW * PH), MS = new Float32Array(PW * PH), MR = new Float32Array(PW * PH);
-    var o = { PW: PW, PH: PH, S: S, MA: MA, MS: MS, MR: MR, x0: 0, y0: 0, w: 0, h: 0, thick: 0 };
+    var o = { PW: PW, PH: PH, S: S, MA: MA, MS: MS, MR: MR, x0: 0, y0: 0, w: 0, h: 0, thick: 0, laid: 0 };
 
     // Point the same scratch buffers at another scale / window origin.
     o.view = function (S2, x, y) { S = S2; ox = x; oy = y; o.S = S2; };
 
     // Rasterise one stroke into the scratch mask: alpha MA, shade MS, relief MR.
     // tA..tB limits it to part of its length, so the page can show the brush
-    // being dragged along the stroke. Returns the mask pixel count (0 = nothing).
+    // being dragged along the stroke. Returns the mask bounding-box area
+    // (0 = nothing); o.laid is the number of window pixels that got paint.
     o.mask = function (cx, cy, ang, L, Wd, bend, op, seed, tA, tB) {
       if (tA === undefined) { tA = 0; tB = 1; }
       var c = Math.cos(ang), s = Math.sin(ang), hw = Wd * 0.5;
@@ -75,7 +76,7 @@
       if (x0 < ox) x0 = ox; if (y0 < oy) y0 = oy;
       if (x1 > ox + PW) x1 = ox + PW; if (y1 > oy + PH) y1 = oy + PH;
       var w = x1 - x0, h = y1 - y0;
-      o.x0 = x0 - ox; o.y0 = y0 - oy; o.w = w; o.h = h;
+      o.x0 = x0 - ox; o.y0 = y0 - oy; o.w = w; o.h = h; o.laid = 0;
       if (w <= 0 || h <= 0) { o.w = o.h = 0; return 0; }
       var hairy = sm(1.5, 7, Wd);
       if (hairy > 0) hairs(seed, Wd);
@@ -116,7 +117,7 @@
             rg = (0.3 + 0.7 * tabS[fi]) * (1 - 0.7 * gap);
           }
           var en = av / hh; if (en > 0.55) { en = en > 0.95 ? 1 : (en - 0.55) * 2.5; rg += 0.45 * en * en * (3 - 2 * en); }
-          MA[k] = a * op; MS[k] = sh; MR[k] = rg;
+          MA[k] = a * op; MS[k] = sh; MR[k] = rg; o.laid++;
         }
       }
       return w * h;

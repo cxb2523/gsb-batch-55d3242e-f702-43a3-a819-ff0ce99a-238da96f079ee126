@@ -230,14 +230,15 @@
     var ox = win ? win.x : 0, oy = win ? win.y : 0;
     var PW = win ? win.w : Math.round(W * S), PH = win ? win.h : Math.round(H * S);
     var MA = new Float32Array(PW * PH), MS = new Float32Array(PW * PH), MR = new Float32Array(PW * PH);
-    var o = { PW: PW, PH: PH, S: S, MA: MA, MS: MS, MR: MR, x0: 0, y0: 0, w: 0, h: 0, thick: 0 };
+    var o = { PW: PW, PH: PH, S: S, MA: MA, MS: MS, MR: MR, x0: 0, y0: 0, w: 0, h: 0, thick: 0, laid: 0 };
 
     // Point the same scratch buffers at another scale / window origin.
     o.view = function (S2, x, y) { S = S2; ox = x; oy = y; o.S = S2; };
 
     // Rasterise one stroke into the scratch mask: alpha MA, shade MS, relief MR.
     // tA..tB limits it to part of its length, so the page can show the brush
-    // being dragged along the stroke. Returns the mask pixel count (0 = nothing).
+    // being dragged along the stroke. Returns the mask bounding-box area
+    // (0 = nothing); o.laid is the number of window pixels that got paint.
     o.mask = function (cx, cy, ang, L, Wd, bend, op, seed, tA, tB) {
       if (tA === undefined) { tA = 0; tB = 1; }
       var c = Math.cos(ang), s = Math.sin(ang), hw = Wd * 0.5;
@@ -250,7 +251,7 @@
       if (x0 < ox) x0 = ox; if (y0 < oy) y0 = oy;
       if (x1 > ox + PW) x1 = ox + PW; if (y1 > oy + PH) y1 = oy + PH;
       var w = x1 - x0, h = y1 - y0;
-      o.x0 = x0 - ox; o.y0 = y0 - oy; o.w = w; o.h = h;
+      o.x0 = x0 - ox; o.y0 = y0 - oy; o.w = w; o.h = h; o.laid = 0;
       if (w <= 0 || h <= 0) { o.w = o.h = 0; return 0; }
       var hairy = sm(1.5, 7, Wd);
       if (hairy > 0) hairs(seed, Wd);
@@ -291,7 +292,7 @@
             rg = (0.3 + 0.7 * tabS[fi]) * (1 - 0.7 * gap);
           }
           var en = av / hh; if (en > 0.55) { en = en > 0.95 ? 1 : (en - 0.55) * 2.5; rg += 0.45 * en * en * (3 - 2 * en); }
-          MA[k] = a * op; MS[k] = sh; MR[k] = rg;
+          MA[k] = a * op; MS[k] = sh; MR[k] = rg; o.laid++;
         }
       }
       return w * h;
@@ -742,7 +743,7 @@ var STROKES = "XHIkw3b6+D4AAAACFIu/x23//wYLBwEDoVcRTKT///lNJwECeY56f3n//3svIxQDb
   // cannot: it throws the pixels away and repaints that spot from the stroke
   // list at the loupe's own scale.
   var LP = 0, limg, lpx, Bz, Cz;
-  var lp = { cx: 300, cy: 240, zi: 6, key: '', keyT: 0, job: null, sharp: false, cap: '' };
+  var lp = { cx: 300, cy: 240, zi: 6, key: '', keyT: 0, job: null, sharp: false, cap: '', used: 0 };
   var mouse = { on: false, wx: 0, wy: 0 };
   function loupeBilinear(cx, cy, half) {
     var step = 2 * half / LP, x0w = cx - half, y0w = cy - half, k = 0;
@@ -768,16 +769,17 @@ var STROKES = "XHIkw3b6+D4AAAACFIu/x23//wYLBwEDoVcRTKT///lNJwECeY56f3n//3svIxQDb
     lp.job = { i: 0, upto: Math.min(N, Math.floor(pos)), part: curI === Math.floor(pos) ? doneT : 0, Sz: Sz, ox: ox, oy: oy,
                x0: cx - half, y0: cy - half, x1: cx + half, y1: cy + half, used: 0 };
   }
-  function jobPaint(i, tB) { Bz.paint(Cz, SX[i], SY[i], SA[i], SL[i], SW[i], SB[i], SO[i], i, SC[i * 3], SC[i * 3 + 1], SC[i * 3 + 2], 0, tB); }
+  // Repaint one stroke into the loupe window; true if it actually laid paint there.
+  function jobPaint(i, tB) { Bz.paint(Cz, SX[i], SY[i], SA[i], SL[i], SW[i], SB[i], SO[i], i, SC[i * 3], SC[i * 3 + 1], SC[i * 3 + 2], 0, tB); return Bz.laid > 0; }
   function jobStep(budget) {
     var j = lp.job, t0 = performance.now(), n = 0;
     for (; j.i < j.upto; j.i++) {
       var i = j.i, r = SL[i] * 0.68 + SW[i] * 0.5 + 3;
       if (SX[i] + r < j.x0 || SX[i] - r > j.x1 || SY[i] + r < j.y0 || SY[i] - r > j.y1) continue;
-      jobPaint(i, 1); j.used++;
+      if (jobPaint(i, 1)) j.used++;
       if ((++n & 3) === 0 && performance.now() - t0 > budget) { j.i++; return false; }
     }
-    if (j.part > 0 && j.upto < N) jobPaint(j.upto, j.part);
+    if (j.part > 0 && j.upto < N && jobPaint(j.upto, j.part)) j.used++;
     for (var y = 0, k = 0, q = 0; y < LP; y++) {
       var wy = (j.oy + y + 0.5) / j.Sz;
       for (var x = 0; x < LP; x++, k += 4, q += 3) {
@@ -792,13 +794,13 @@ var STROKES = "XHIkw3b6+D4AAAACFIu/x23//wYLBwEDoVcRTKT///lNJwECeY56f3n//3svIxQDb
   var capEl = $('loupeCap');
   function loupeFrame(dt, still, now) {
     if (compactNow) return;                    // the loupe is not on screen
-    var inspect = mouse.on, zoom = inspect ? lp.zi : 4, used = 0;
+    var inspect = mouse.on, zoom = inspect ? lp.zi : 4, cap;
     if (inspect) { lp.cx = mouse.wx; lp.cy = mouse.wy; }
     else {
       var gx = pos >= N ? 268 : bv.wx, gy = pos >= N ? 238 : bv.wy, e = 1 - Math.exp(-dt * (pos >= N ? 2.5 : 7));
       lp.cx += (clamp(gx, 0, W) - lp.cx) * e; lp.cy += (clamp(gy, 0, H) - lp.cy) * e;
     }
-    var half = 296 / zoom / DISP / 2, cap;
+    var half = 296 / zoom / DISP / 2;
     var zs = '×' + (zoom >= 10 ? zoom.toFixed(0) : zoom.toFixed(1).replace('.0', ''));
     if (!still) {
       lp.key = ''; lp.job = null; lp.sharp = false;
@@ -809,7 +811,7 @@ var STROKES = "XHIkw3b6+D4AAAACFIu/x23//wYLBwEDoVcRTKT///lNJwECeY56f3n//3svIxQDb
       if (key !== lp.key) { lp.key = key; lp.keyT = now; lp.job = null; lp.sharp = false; loupeBilinear(lp.cx, lp.cy, half); }
       else if (!lp.sharp) {
         if (!lp.job && (SYNC || now - lp.keyT > 90)) jobStart(lp.cx, lp.cy, half);
-        if (lp.job) { used = lp.job.used; if (jobStep(SYNC ? 1e9 : 9)) { lp.sharp = true; lp.used = lp.job.used; lp.job = null; } }
+        if (lp.job) { if (jobStep(SYNC ? 1e9 : 9)) { lp.sharp = true; lp.used = lp.job.used; lp.job = null; } }
       }
       cap = lp.sharp ? zs + ' · repainted from ' + fmt(lp.used) + ' strokes, not enlarged pixels' : zs + ' · repainting from the strokes…';
     }
@@ -1134,7 +1136,7 @@ var STROKES = "XHIkw3b6+D4AAAACFIu/x23//wYLBwEDoVcRTKT///lNJwECeY56f3n//3svIxQDb
   if (/[?&]light\b/.test(QS)) light(true);
   window.__mona = {
     seek: seek, replay: replay, light: light,
-    hover: function (wx, wy, zoom) { if (wx === undefined) { mouse.on = false; return; } mouse.on = true; mouse.wx = wx; mouse.wy = wy; if (zoom) lp.zi = zoom; },
+    hover: function (wx, wy, zoom) { if (wx === undefined) { mouse.on = false; return; } mouse.on = true; mouse.wx = wx; mouse.wy = wy; if (zoom) lp.zi = clamp(zoom, 3, 60); },
     state: function () { return { pos: pos, N: N, S: S, PW: PW, PH: PH, clock: clock, playing: playing, U: U, dpr: dpr, LP: LP, sharp: lp.sharp, lit: lit }; },
     checksum: function () { var d = ctx.getImageData(0, 0, PW, PH).data, s = 0; for (var i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] * 3 + d[i + 2] * 7; return s; }
   };

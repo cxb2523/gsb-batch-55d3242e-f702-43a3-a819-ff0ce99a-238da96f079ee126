@@ -214,7 +214,7 @@
   // cannot: it throws the pixels away and repaints that spot from the stroke
   // list at the loupe's own scale.
   var LP = 0, limg, lpx, Bz, Cz;
-  var lp = { cx: 300, cy: 240, zi: 6, key: '', keyT: 0, job: null, sharp: false, cap: '' };
+  var lp = { cx: 300, cy: 240, zi: 6, key: '', keyT: 0, job: null, sharp: false, cap: '', used: 0 };
   var mouse = { on: false, wx: 0, wy: 0 };
   function loupeBilinear(cx, cy, half) {
     var step = 2 * half / LP, x0w = cx - half, y0w = cy - half, k = 0;
@@ -240,16 +240,17 @@
     lp.job = { i: 0, upto: Math.min(N, Math.floor(pos)), part: curI === Math.floor(pos) ? doneT : 0, Sz: Sz, ox: ox, oy: oy,
                x0: cx - half, y0: cy - half, x1: cx + half, y1: cy + half, used: 0 };
   }
-  function jobPaint(i, tB) { Bz.paint(Cz, SX[i], SY[i], SA[i], SL[i], SW[i], SB[i], SO[i], i, SC[i * 3], SC[i * 3 + 1], SC[i * 3 + 2], 0, tB); }
+  // Repaint one stroke into the loupe window; true if it actually laid paint there.
+  function jobPaint(i, tB) { Bz.paint(Cz, SX[i], SY[i], SA[i], SL[i], SW[i], SB[i], SO[i], i, SC[i * 3], SC[i * 3 + 1], SC[i * 3 + 2], 0, tB); return Bz.laid > 0; }
   function jobStep(budget) {
     var j = lp.job, t0 = performance.now(), n = 0;
     for (; j.i < j.upto; j.i++) {
       var i = j.i, r = SL[i] * 0.68 + SW[i] * 0.5 + 3;
       if (SX[i] + r < j.x0 || SX[i] - r > j.x1 || SY[i] + r < j.y0 || SY[i] - r > j.y1) continue;
-      jobPaint(i, 1); j.used++;
+      if (jobPaint(i, 1)) j.used++;
       if ((++n & 3) === 0 && performance.now() - t0 > budget) { j.i++; return false; }
     }
-    if (j.part > 0 && j.upto < N) jobPaint(j.upto, j.part);
+    if (j.part > 0 && j.upto < N && jobPaint(j.upto, j.part)) j.used++;
     for (var y = 0, k = 0, q = 0; y < LP; y++) {
       var wy = (j.oy + y + 0.5) / j.Sz;
       for (var x = 0; x < LP; x++, k += 4, q += 3) {
@@ -264,13 +265,13 @@
   var capEl = $('loupeCap');
   function loupeFrame(dt, still, now) {
     if (compactNow) return;                    // the loupe is not on screen
-    var inspect = mouse.on, zoom = inspect ? lp.zi : 4, used = 0;
+    var inspect = mouse.on, zoom = inspect ? lp.zi : 4, cap;
     if (inspect) { lp.cx = mouse.wx; lp.cy = mouse.wy; }
     else {
       var gx = pos >= N ? 268 : bv.wx, gy = pos >= N ? 238 : bv.wy, e = 1 - Math.exp(-dt * (pos >= N ? 2.5 : 7));
       lp.cx += (clamp(gx, 0, W) - lp.cx) * e; lp.cy += (clamp(gy, 0, H) - lp.cy) * e;
     }
-    var half = 296 / zoom / DISP / 2, cap;
+    var half = 296 / zoom / DISP / 2;
     var zs = '×' + (zoom >= 10 ? zoom.toFixed(0) : zoom.toFixed(1).replace('.0', ''));
     if (!still) {
       lp.key = ''; lp.job = null; lp.sharp = false;
@@ -281,7 +282,7 @@
       if (key !== lp.key) { lp.key = key; lp.keyT = now; lp.job = null; lp.sharp = false; loupeBilinear(lp.cx, lp.cy, half); }
       else if (!lp.sharp) {
         if (!lp.job && (SYNC || now - lp.keyT > 90)) jobStart(lp.cx, lp.cy, half);
-        if (lp.job) { used = lp.job.used; if (jobStep(SYNC ? 1e9 : 9)) { lp.sharp = true; lp.used = lp.job.used; lp.job = null; } }
+        if (lp.job) { if (jobStep(SYNC ? 1e9 : 9)) { lp.sharp = true; lp.used = lp.job.used; lp.job = null; } }
       }
       cap = lp.sharp ? zs + ' · repainted from ' + fmt(lp.used) + ' strokes, not enlarged pixels' : zs + ' · repainting from the strokes…';
     }
@@ -606,7 +607,7 @@
   if (/[?&]light\b/.test(QS)) light(true);
   window.__mona = {
     seek: seek, replay: replay, light: light,
-    hover: function (wx, wy, zoom) { if (wx === undefined) { mouse.on = false; return; } mouse.on = true; mouse.wx = wx; mouse.wy = wy; if (zoom) lp.zi = zoom; },
+    hover: function (wx, wy, zoom) { if (wx === undefined) { mouse.on = false; return; } mouse.on = true; mouse.wx = wx; mouse.wy = wy; if (zoom) lp.zi = clamp(zoom, 3, 60); },
     state: function () { return { pos: pos, N: N, S: S, PW: PW, PH: PH, clock: clock, playing: playing, U: U, dpr: dpr, LP: LP, sharp: lp.sharp, lit: lit }; },
     checksum: function () { var d = ctx.getImageData(0, 0, PW, PH).data, s = 0; for (var i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] * 3 + d[i + 2] * 7; return s; }
   };
