@@ -18,7 +18,8 @@ export class ThickenPass extends Pass {
       uniforms: {
         tInput: { value: null },
         texelSize: { value: null },
-        thickness: { value: 0 },
+        // Continuous dilatation radius in texels (fractional values allowed).
+        thickness: { value: 0.0 },
       },
       vertexShader,
       fragmentShader,
@@ -35,6 +36,11 @@ export class ThickenPass extends Pass {
     );
   }
 
+  /**
+   * Set the dilatation radius in texels. Accepts any non-negative fractional
+   * value; the shader anti-aliases the sub-texel remainder so small thicknesses
+   * don't get rounded away.
+   */
   setThickness(w: number) {
     this.thickenMaterial.uniforms.thickness.value = w;
   }

@@ -3,6 +3,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 
 import { RenderOutlinePass } from "./effects/outline";
 import { ThickenPass } from "./effects/thicken";
+import { computeOutlineThickness, diagonal } from "./effects/thicken/thickness";
 import { FXAAPass } from "./effects/antialiasing";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
@@ -190,11 +191,35 @@ export class Renderer {
 
     this.camera.updateProjectionMatrix();
 
-    const width = right - left;
-    const height = top - bottom;
-    const maxDim = Math.sqrt(width * width + height * height);
-    // The camera was moved/updated, so recompute the thickness of the outline
-    this.thickenPass.setThickness((150 * window.devicePixelRatio) / maxDim);
+    // The projection matrix just changed, so the outline thickness must be
+    // recomputed and pushed to the thicken pass. The thickness is expressed in
+    // texels and scaled by the device pixel ratio so that the black line keeps
+    // a constant width in CSS pixels no matter how large the part is projected
+    // (zoom, rotation or window resize).
+    const projectedDiagonal = diagonal(right - left, top - bottom);
+    const frustumDiagonal = diagonal(
+      this.camera.right - this.camera.left,
+      this.camera.top - this.camera.bottom,
+    );
+    // The canvas backing store is sized in physical pixels by resizeCanvas();
+    // fall back to the CSS size times the device pixel ratio if the canvas
+    // hasn't been sized yet.
+    const pixelRatio = window.devicePixelRatio || 1;
+    const renderTargetWidth =
+      this.canvas.width || this.canvas.clientWidth * pixelRatio;
+    const renderTargetHeight =
+      this.canvas.height || this.canvas.clientHeight * pixelRatio;
+
+    this.thickenPass.setThickness(
+      computeOutlineThickness(
+        {
+          projected: projectedDiagonal,
+          frustum: frustumDiagonal,
+          renderTarget: diagonal(renderTargetWidth, renderTargetHeight),
+        },
+        pixelRatio,
+      ),
+    );
   }
 
   render() {
