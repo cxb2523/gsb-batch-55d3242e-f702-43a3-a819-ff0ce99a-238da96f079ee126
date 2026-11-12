@@ -73,23 +73,35 @@ class TraversalRequestPolicy:
             delay_seconds=_request_delay(robots),
         )
 
-    def prepare_request(self, url: str) -> None:
-        """Reject an out-of-policy URL and pace an accepted network request."""
+    def check_origin(self, url: str) -> None:
+        """Reject a URL that leaves the traversal origin."""
         if url_origin(url) != self.origin:
             raise RemoteFetchError(
                 f"Child redirect left the traversal origin: {url}.",
                 policy_rejection="origin",
             )
+
+    def check_robots(self, url: str) -> None:
+        """Reject a URL that the traversal origin's robots policy disallows."""
         if not self.robots.can_fetch(USER_AGENT, url):
             raise RemoteFetchError(
                 f"Robots policy disallows {url}.",
                 policy_rejection="robots",
             )
+
+    def wait_for_turn(self) -> None:
+        """Hold the request until the publisher's delay since the last response has elapsed."""
         if self.last_response_at is not None:
             # perf_counter has no 15.6 ms tick on Windows, unlike monotonic before Python 3.13.
             elapsed = time.perf_counter() - self.last_response_at
             if elapsed < self.delay_seconds:
                 time.sleep(self.delay_seconds - elapsed)
+
+    def prepare_request(self, url: str) -> None:
+        """Reject an out-of-policy URL and pace an accepted network request."""
+        self.check_origin(url)
+        self.check_robots(url)
+        self.wait_for_turn()
 
     def finish_request(self) -> None:
         """Start the next delay now that a response or failure has arrived."""
@@ -151,6 +163,19 @@ class ResponseAccounting:
                 output.write(chunk)
             chunks.append(chunk)
         return b"".join(chunks)
+
+    def check_budget_for_redirect(self) -> None:
+        """Raise when the aggregate budget is used up before the redirect target is requested."""
+        if self.aggregate_max_bytes is None:
+            return
+        if self.bytes_received < self.aggregate_max_bytes:
+            return
+        raise RemoteFetchError(
+            "Redirect response used the remaining aggregate content budget; "
+            "refusing to request its target.",
+            bytes_received=self.bytes_received,
+            reached_limit="aggregate",
+        )
 
     def _limit(self) -> tuple[int, Literal["page", "aggregate"]]:
         """Return how many bytes the next response may have, and which limit that is."""
@@ -225,20 +250,44 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         headers: HTTPMessage,
         newurl: str,
     ) -> urllib.request.Request | None:
+        # The response has arrived, so the publisher's next request delay starts now,
+        # also when a boundary check below refuses its target.
+        if self.request_policy is not None:
+            self.request_policy.finish_request()
+        # Boundary checks come first: an out-of-origin or downgraded target is refused
+        # before its response body is read or the next request can be sent.
+        url_origin(newurl)
+        check_no_downgrade(req.full_url, newurl)
+        if self.request_policy is not None:
+            self.request_policy.check_origin(newurl)
+        self._read_body(fp, headers)
+        if self.request_policy is not None:
+            self.request_policy.check_robots(newurl)
+        # A fully spent aggregate budget can't pay for the next response, so don't ask for it.
+        self.accounting.check_budget_for_redirect()
+        if self.request_policy is not None:
+            self.request_policy.wait_for_turn()
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    def _read_body(
+        self,
+        fp: IO[bytes],
+        headers: HTTPMessage | Message[str, str],
+    ) -> None:
+        """Count one redirect response body, retaining it when there is an artifact path."""
         if self.content_path is None:
             self.accounting.read(fp, headers)
         else:
             with self.content_path.open("wb") as output:
                 self.accounting.read(fp, headers, output)
-        check_no_downgrade(req.full_url, newurl)
-        if self.request_policy is not None:
-            self.request_policy.finish_request()
-            self.request_policy.prepare_request(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class _RobotsRedirectHandler(_SafeRedirectHandler):
-    """Apply one bounded body budget across a robots redirect chain."""
+    """Apply one origin and one bounded body budget across a robots redirect chain."""
+
+    def __init__(self, accounting: ResponseAccounting, origin: tuple[str, str, int]) -> None:
+        super().__init__(accounting)
+        self.origin = origin
 
     def redirect_request(
         self,
@@ -249,14 +298,12 @@ class _RobotsRedirectHandler(_SafeRedirectHandler):
         headers: HTTPMessage,
         newurl: str,
     ) -> urllib.request.Request | None:
-        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if self.accounting.bytes_received >= ROBOTS_MAX_BYTES:
+        if url_origin(newurl) != self.origin:
             raise RemoteFetchError(
-                "Robots policy exhausted its response-body budget during redirect.",
-                bytes_received=self.accounting.bytes_received,
-                reached_limit="aggregate",
+                f"Robots policy redirect left the traversal origin: {newurl}",
+                policy_rejection="origin",
             )
-        return redirected
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class _SharedHTTPSHandler(urllib.request.HTTPSHandler):
@@ -443,7 +490,8 @@ def fetch_robots_policy(
     )
     accounting = ResponseAccounting(ROBOTS_MAX_BYTES, ROBOTS_MAX_BYTES)
     opener = urllib.request.build_opener(
-        _RobotsRedirectHandler(accounting), _SharedHTTPSHandler()
+        _RobotsRedirectHandler(accounting, url_origin(robots_url)),
+        _SharedHTTPSHandler(),
     )
     request = urllib.request.Request(robots_url, headers={"User-Agent": USER_AGENT})
     try:
