@@ -1,8 +1,8 @@
-import type { ConfigDocument, SourceLocation } from '../types/index.js';
+import type { ConfigDocument, ConfigKind, SourceLocation } from '../types/index.js';
 import { scrubSecrets } from '../util/secrets.js';
 import { isRecord, shortHash, truncate } from '../util/text.js';
-import { isShellWrapper, matchCommandPatterns } from './command-patterns.js';
-import { resolveInterpolation } from './interpolation.js';
+import { isShellWrapper, matchCommandPatterns, type CommandPattern } from './command-patterns.js';
+import { interpolationSpans, resolveInterpolation } from './interpolation.js';
 import { commandLine, getMcpServers } from './mcp-model.js';
 import { getSettings, hookCommands, parsePermissionRule, stringsAt } from './settings-model.js';
 import { findingFor, type Rule, type RuleFinding } from './types.js';
@@ -18,6 +18,55 @@ interface CommandSource {
   /** True for permission allow rules, which pre-approve rather than run a command. */
   allowRule?: boolean;
   location?: SourceLocation | undefined;
+}
+
+interface RiskMatch {
+  pattern: CommandPattern;
+  index: number;
+  text: string;
+  /** True when the match only appears after static variable expansion. */
+  expanded: boolean;
+}
+
+/**
+ * Collects every distinct risk pattern a command exposes.
+ *
+ * The raw text and the statically expanded text are both matched. Each pattern
+ * id is reported at most once per source: a pattern already seen in literal
+ * text is not repeated when it matches again after expansion, but a pattern
+ * that only appears after expansion is still reported on its own. This means a
+ * command that is both a download-and-execute and a TLS-bypass yields two
+ * findings rather than being collapsed into one.
+ */
+function collectMatches(source: CommandSource, kind: ConfigKind): RiskMatch[] {
+  const rawMatches = matchCommandPatterns(source.text);
+  const spans = source.resolved === undefined ? [] : interpolationSpans(source.text, kind);
+  const insideInterpolation = (index: number): boolean =>
+    spans.some((span) => index >= span.start && index < span.end);
+
+  // Matches that start inside a `${...}` reference describe a default value,
+  // not literal command text, so they count as expansion-only findings.
+  const literal = rawMatches.filter((m) => !insideInterpolation(m.index));
+  const literalIds = new Set(literal.map((m) => m.pattern.id));
+  const matches: RiskMatch[] = literal.map((m) => ({ ...m, expanded: false }));
+
+  const expandedIds = new Set<string>();
+  if (source.resolved !== undefined) {
+    for (const m of matchCommandPatterns(source.resolved)) {
+      if (literalIds.has(m.pattern.id) || expandedIds.has(m.pattern.id)) continue;
+      expandedIds.add(m.pattern.id);
+      matches.push({ ...m, expanded: true });
+    }
+  }
+  // Do not lose a default-derived match when the expanded line no longer
+  // matches it (for example when a variable resolves to an opaque marker).
+  for (const m of rawMatches) {
+    if (!insideInterpolation(m.index)) continue;
+    if (literalIds.has(m.pattern.id) || expandedIds.has(m.pattern.id)) continue;
+    expandedIds.add(m.pattern.id);
+    matches.push({ ...m, expanded: true });
+  }
+  return matches;
 }
 
 function commandSources(doc: ConfigDocument): CommandSource[] {
@@ -118,13 +167,7 @@ export const riskyCommands: Rule = {
         const resolvedCommand = source.resolved
           ? truncate(scrubSecrets(source.resolved), 300)
           : undefined;
-        const rawIds = new Set(matchCommandPatterns(source.text).map((m) => m.pattern.id));
-        const matches = [
-          ...matchCommandPatterns(source.text).map((m) => ({ ...m, expanded: false })),
-          ...(source.resolved ? matchCommandPatterns(source.resolved) : [])
-            .filter((m) => !rawIds.has(m.pattern.id))
-            .map((m) => ({ ...m, expanded: true })),
-        ];
+        const matches = collectMatches(source, doc.kind);
         for (const match of matches) {
           const severity = source.prose ? match.pattern.proseSeverity : match.pattern.severity;
           const action = source.allowRule

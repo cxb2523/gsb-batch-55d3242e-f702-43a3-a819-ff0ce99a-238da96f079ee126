@@ -1,5 +1,32 @@
 import type { ConfigKind } from '../types/index.js';
 
+export interface InterpolationSpan {
+  start: number;
+  /** Index just past the closing brace. */
+  end: number;
+}
+
+/**
+ * Character ranges of the `${...}` references that `resolveInterpolation`
+ * would substitute. Used to tell a literal command fragment apart from text
+ * that only exists inside a variable default.
+ */
+export function interpolationSpans(text: string, kind: ConfigKind): InterpolationSpan[] {
+  const spans: InterpolationSpan[] = [];
+  const re =
+    kind === 'claude-mcp'
+      ? /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
+      : kind === 'cursor-mcp' || kind === 'vscode-mcp'
+        ? /\$\{([^}]+)\}/g
+        : undefined;
+  if (!re) return spans;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    spans.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return spans;
+}
+
 /**
  * Statically expands the variable references an MCP client would substitute
  * in a server's command line, so reviewers and rules see what will actually
