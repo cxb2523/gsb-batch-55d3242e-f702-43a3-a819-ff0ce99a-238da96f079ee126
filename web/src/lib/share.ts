@@ -38,6 +38,8 @@ export interface CircuitSettings {
 	logicFamily?: string;
 	sample?: number;
 	sweepCount?: number;
+	/** Edges per pixel at which the scope folds a logic lane into a pulse train. */
+	foldThreshold?: number;
 	analysis?: 'transient' | 'frequency';
 	acStart?: number;
 	acStop?: number;
@@ -297,6 +299,7 @@ function readSettings(raw: unknown): CircuitSettings {
 	if (typeof s.logicFamily === 'string') out.logicFamily = s.logicFamily;
 	if (isFiniteNumber(s.sample)) out.sample = s.sample;
 	if (isFiniteNumber(s.sweepCount)) out.sweepCount = s.sweepCount;
+	if (isFiniteNumber(s.foldThreshold) && s.foldThreshold > 0) out.foldThreshold = s.foldThreshold;
 	if (s.analysis === 'transient' || s.analysis === 'frequency') out.analysis = s.analysis;
 	if (isFiniteNumber(s.acStart) && s.acStart > 0) out.acStart = s.acStart;
 	if (isFiniteNumber(s.acStop) && s.acStop > 0) out.acStop = s.acStop;

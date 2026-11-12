@@ -19,6 +19,7 @@ import { contactControl, isHighAt } from './schematic/contacts';
 import { Acquisition } from './acquire';
 import type { Capture } from './capture';
 import { Trace, wireRef, type Step } from './trace';
+import { DEFAULT_FOLD_THRESHOLD } from './fold';
 import type { CircuitSettings, SharedCircuit } from './share';
 import { parseSubcircuits } from './spice';
 import { findBurnouts, type Burnout } from './schematic/led';
@@ -250,6 +251,8 @@ export interface DraftDocument {
 	logicFamily: string;
 	sample: number;
 	sweepCount: number;
+	/** Edges per pixel before a logic lane is drawn folded. */
+	foldThreshold: number;
 	channels: Record<string, { gain: number; offset: number }>;
 	levels: Array<{ block?: string; schematic: Schematic; probes: string[] }>;
 }
@@ -361,6 +364,25 @@ class AppState {
 	resetChannel(key: string): void {
 		delete this.channels[key];
 		this.channels = { ...this.channels };
+	}
+
+	/**
+	 * How many edges a logic lane may show per pixel before the scope folds it
+	 * into a pulse train.
+	 *
+	 * Measured against the visible window, not the whole run, so zooming in
+	 * reveals the real edges again. A display preference, but carried with the
+	 * circuit like the other run settings: opening someone's saved scope at your
+	 * own threshold would change the picture they were describing.
+	 */
+	foldThreshold = $state(DEFAULT_FOLD_THRESHOLD);
+
+	setFoldThreshold(value: number): void {
+		if (!Number.isFinite(value) || value <= 0) return;
+		// A lane cannot show a fraction of an edge in a fraction of a pixel, and
+		// past a few hundred the number stops describing anything a screen can
+		// resolve; keeping it here stops a stray keystroke from freezing the plot.
+		this.foldThreshold = Math.min(Math.max(value, 0.01), 1000);
 	}
 	stopTime = $state(DEFAULT_STOP_TIME);
 	/**
@@ -3075,6 +3097,7 @@ class AppState {
 			logicFamily: this.logicFamily,
 			sample: this.sample,
 			sweepCount: this.sweepCount,
+			foldThreshold: this.foldThreshold,
 			analysis: this.analysis,
 			acStart: this.acStart,
 			acStop: this.acStop
@@ -3100,6 +3123,10 @@ class AppState {
 				: DEFAULT_FAMILY;
 		this.sample = Math.max(0, Math.round(finite(settings.sample, 0)));
 		this.sweepCount = Math.min(Math.max(0, Math.round(finite(settings.sweepCount, 0))), 200);
+		this.foldThreshold = Math.min(
+			Math.max(positive(settings.foldThreshold, DEFAULT_FOLD_THRESHOLD), 0.01),
+			1000
+		);
 		this.analysis = settings.analysis === 'frequency' ? 'frequency' : 'transient';
 		this.acStart = positive(settings.acStart, DEFAULT_AC_START);
 		this.acStop = positive(settings.acStop, DEFAULT_AC_STOP);
@@ -3247,6 +3274,7 @@ class AppState {
 			logicFamily: this.logicFamily,
 			sample: this.sample,
 			sweepCount: this.sweepCount,
+			foldThreshold: this.foldThreshold,
 			channels: this.channels,
 			levels
 		}) as DraftDocument;

@@ -16,10 +16,11 @@ export default defineConfig({
 		conditions: ['browser']
 	},
 	test: {
-		// The suite lives in its own repository, mounted at `tests/` in the root
-		// of this one; see CONTRIBUTING.md. Without the mount there is nothing to
-		// run, and vitest says so rather than passing an empty suite.
-		include: ['../tests/web/**/*.test.ts'],
+		// Two suites: the pure-arithmetic tests kept in this repository, which run
+		// without the private mount, and the external suite at `tests/` in the root
+		// when the submodule is present. Local tests live here because the fold
+		// rule's boundary cases must be checkable by anyone who changes it.
+		include: ['tests/**/*.test.ts', '../tests/web/**/*.test.ts'],
 		// Nothing under test touches the DOM; jsdom costs seconds per run for nothing.
 		environment: 'node'
 	}

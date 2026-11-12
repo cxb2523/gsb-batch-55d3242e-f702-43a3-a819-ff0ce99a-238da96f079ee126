@@ -71,6 +71,10 @@ cargo test --workspace
 cd web && npm test          # the canvas engine, the router, the editor rules
 ```
 
+`web/tests/` also holds the pure-arithmetic tests that ship with this repository
+(the waveform fold rule, for one). `npm test` runs those too, so the parts that
+must be checkable by anyone changing them do not depend on the private mount.
+
 Clippy is `-D warnings` on purpose: a warning nobody is required to fix is a
 warning everybody stops reading.
 

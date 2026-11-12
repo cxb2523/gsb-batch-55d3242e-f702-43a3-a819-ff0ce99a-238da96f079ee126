@@ -70,6 +70,28 @@
 		}}
 		aria-label="Timebase: seconds across the screen"
 	/>
+	<!--
+		 A logic lane with more edges than a pixel can show is drawn as a pulse
+		 train rather than an unreadable smear. The knob is in the units the
+		 decision is made in — edges per pixel — so the number is something the
+		 reader can reason about; only shown where there is a logic lane to fold.
+	-->
+	{#if hasDigital}
+		<UnitField
+			prefix="fold"
+			unit="/px"
+			width="2.5rem"
+			title="Edges per pixel before a logic lane is drawn as a folded pulse train"
+			value={String(app.foldThreshold)}
+			commit={(text) => {
+				const parsed = Number(text);
+				if (text.trim() !== '' && Number.isFinite(parsed) && parsed > 0) {
+					app.setFoldThreshold(parsed);
+				}
+			}}
+			aria-label="Fold threshold: edges per pixel"
+		/>
+	{/if}
 {/if}
 
 <!--

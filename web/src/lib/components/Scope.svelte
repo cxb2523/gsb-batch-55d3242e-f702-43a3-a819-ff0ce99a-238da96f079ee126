@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { measure, measureBurst, measureLogic } from '$lib/measure';
-	import { firstAfter, levelAt } from '$lib/transitions';
+	import { levelAt } from '$lib/transitions';
 	import { DEPTH } from '$lib/capture';
 	import { logicFamily } from '$lib/schematic/logic';
 	import { app } from '$lib/state.svelte';
 	import { formatValue } from '$lib/units';
 	import { decimate, extent, ticks, timeLabel, visibleRange, wheelFactor } from '$lib/plot';
+	import { foldLane, pulseTrain } from '$lib/fold';
 	import type { Burst, DigitalTransition, LogicState } from '$lib/engine';
 	import BodePlot from './BodePlot.svelte';
 	import SignalsPanel from './scope/SignalsPanel.svelte';
@@ -179,6 +180,24 @@
 		const to = Math.max(held.now, width);
 		return { from: to - width, to };
 	});
+
+	/** Width available to the traces, in CSS pixels — what density is measured against. */
+	const plotWidth = $derived(Math.max(size.width - PADDING.left - PADDING.right, 10));
+
+	/**
+	 * Each logic lane's visible edges and whether they fit on this screen.
+	 *
+	 * Derived from the *current* span rather than remembered, so a pan or a zoom
+	 * re-decides the fold instead of carrying a verdict from the last window.
+	 * `foldLane` only reads; the recorded transitions are still there at
+	 * `start..end` for the moment the lane becomes resolvable again.
+	 */
+	const digitalLanes = $derived(
+		digitalTraces.map((trace) => ({
+			trace,
+			fold: foldLane(trace.events, span.from, span.to, plotWidth, app.foldThreshold)
+		}))
+	);
 
 	// A new acquisition is a new picture: whatever the last one was zoomed into
 	// belonged to a run that no longer exists.
@@ -526,7 +545,7 @@
 		// Digital lanes below the analog plot.
 		const labels: Array<{ text: string; y: number }> = [];
 		ctx.lineWidth = 1.8;
-		digitalTraces.forEach((trace, index) => {
+		digitalLanes.forEach(({ trace, fold }, index) => {
 			// Moved by its own knob, in half-lane steps, so two lanes can be laid
 			// over each other to compare edges — which is what moving a channel on a
 			// scope is for.
@@ -534,6 +553,41 @@
 			const top = plot.y + plot.h + index * lane + lane * 0.22 - shift;
 			const bottom = top + lane * 0.56;
 			ctx.strokeStyle = trace.colour;
+
+			if (fold.folded) {
+				// Too many edges for a column to resolve: say "switching here" with a
+				// synthetic pulse train instead of drawing lines that would merge into
+				// one smear. It is deliberately not the data — fixed screen-space
+				// spacing, translucency, and the lane label carries a `≈` — so nobody
+				// reads a period off it. Zooming back in takes the real edges below.
+				ctx.globalAlpha = 0.16;
+				ctx.fillStyle = trace.colour;
+				ctx.fillRect(plot.x, top, plot.w, bottom - top);
+				// Pulses on a baseline, not full-height strokes: a stroke that spans
+				// both levels is the very thing folding exists to avoid drawing.
+				ctx.globalAlpha = 0.9;
+				ctx.lineWidth = 1.4;
+				ctx.beginPath();
+				ctx.moveTo(plot.x, bottom);
+				for (const x of pulseTrain(plot.w)) {
+					const left = plot.x + x;
+					const right = Math.min(left + 2, plot.x + plot.w);
+					ctx.lineTo(left, bottom);
+					ctx.lineTo(left, top);
+					ctx.lineTo(right, top);
+					ctx.lineTo(right, bottom);
+				}
+				ctx.lineTo(plot.x + plot.w, bottom);
+				ctx.stroke();
+				ctx.textAlign = 'right';
+				ctx.textBaseline = 'middle';
+				ctx.fillText('≈', plot.x + plot.w - 4, (top + bottom) / 2);
+				ctx.globalAlpha = 1;
+				labels.push({ text: `${trace.label} ≈`, y: (top + bottom) / 2 });
+				return;
+			}
+
+			ctx.lineWidth = 1.8;
 			ctx.beginPath();
 
 			const levelY = (state: string) =>
@@ -545,13 +599,13 @@
 			// window, and left to the events alone its lane would simply be empty.
 			// Only the edges inside the window are drawn; the memory holds every
 			// edge of a long sweep, and walking them all for each frame was a frame
-			// that grew for as long as the run went on.
+			// that grew for as long as the run went on. `fold.start..fold.end` is
+			// exactly that half-open window, found by bisection above.
 			let previousY = levelY(levelAt(trace.events, from, trace.opening));
 			ctx.moveTo(toX(from), previousY);
 
-			for (let i = firstAfter(trace.events, from); i < trace.events.length; i++) {
+			for (let i = fold.start; i < fold.end; i++) {
 				const event = trace.events[i];
-				if (event.time > to) break;
 				const x = toX(event.time);
 				const y = levelY(event.state);
 				ctx.lineTo(x, previousY);
@@ -755,7 +809,21 @@
 			// And the logic lanes, which read nothing at all until now: a lane is two
 			// levels and a label, so "is that a one, and what is a one here" was a
 			// question the panel underneath the trace could not answer.
-			logic: digitalTraces.map((t) => {
+			//
+			// A folded lane has no honest level to report: the cursor is somewhere
+			// inside a span the screen admits it cannot resolve, and printing "1" or
+			// "0" there would be inventing an edge the display just refused to draw.
+			// So it says so, and points at the way back (zoom in).
+			logic: digitalLanes.map(({ trace: t, fold }) => {
+				if (fold.folded) {
+					return {
+						key: t.key,
+						label: t.label,
+						colour: t.colour,
+						text: '≈ folded — switching too fast to show a level',
+						folded: true
+					};
+				}
 				const state = levelAt(t.events, at, t.opening);
 				const volts =
 					state === 'high' ? family.v_high : state === 'low' ? family.v_low : null;
@@ -766,7 +834,8 @@
 					text:
 						state === 'high' || state === 'low'
 							? `${state === 'high' ? 1 : 0} (${formatValue(volts ?? 0, 3)}V)`
-							: state
+							: state,
+					folded: false
 				};
 			})
 		};
@@ -893,6 +962,8 @@
 			app.result,
 			traces,
 			digitalTraces,
+			digitalLanes,
+			app.foldThreshold,
 			range,
 			lanes,
 			visible,
@@ -963,7 +1034,14 @@
 					</span>
 				{/each}
 				{#each readout.logic as entry (entry.key)}
-					<span class="value" style:color={entry.colour}>{entry.label} = {entry.text}</span>
+					<span
+						class="value"
+						class:folded={entry.folded}
+						style:color={entry.colour}
+						title={entry.folded
+							? 'This lane has more edges than the window can resolve, so it is drawn as a pulse train. Zoom in to read the real levels.'
+							: undefined}>{entry.label} = {entry.text}</span
+					>
 				{/each}
 				{#if marker === null}
 					<span class="hint">shift-click to measure from a point</span>
@@ -1123,6 +1201,11 @@
 	.readout .hint {
 		opacity: 0.5;
 		font-style: italic;
+	}
+
+	.readout .folded {
+		font-style: italic;
+		opacity: 0.8;
 	}
 
 	.scope {

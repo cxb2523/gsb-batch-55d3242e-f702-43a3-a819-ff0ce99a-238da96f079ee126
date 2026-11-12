@@ -11,6 +11,19 @@ early entries point at those instead.
 
 ---
 
+## 12 November 2026 — Busy logic lanes fold into a pulse train
+
+**A logic lane too dense to read folds instead of smearing.** When a digital
+channel has more edges in the visible window than the screen can resolve — more
+than the fold threshold in edges per pixel — it is drawn as a pulse train with
+a `≈` marker rather than a wall of vertical lines. Panning or zooming decides
+again for the new window; zoom far enough in and every real edge comes back at
+its recorded time and level, unchanged. The threshold is set from the toolbar
+next to the timebase and travels with a link or a saved draft. A folded lane's
+readout says that it is folded instead of printing a level it cannot know.
+
+---
+
 ## 1 October 2026 — Editing and operating stop getting in each other's way
 
 **Switches are worked only while a run is going.** Stopped, a click on a switch,
