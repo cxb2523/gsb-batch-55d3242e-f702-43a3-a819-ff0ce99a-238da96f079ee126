@@ -478,6 +478,41 @@ export function createServer(browser = new BrowserController()): McpServer {
     async () => text((await browser.getStylesheets()).join('\n\n')),
   );
 
+  tool(
+    'collectPages',
+    {
+      title: 'Collect paginated list',
+      description:
+        'Walk a paginated list in one call: read every item matching selector on the current page, click nextSelector, repeat. ' +
+        'Returns { pages, totalItems, stoppedReason }. stoppedReason is "maxPages" (reached maxPages), "emptyPage" (a page had no matching items), ' +
+        '"noNext" (the next button is missing, invisible or not clickable) or "stalled" (the click left the URL and items unchanged). ' +
+        'Already collected pages are always retained.',
+      inputSchema: {
+        selector: selector.describe('Playwright selector for each item container; their text is collected per page'),
+        nextSelector: z
+          .string()
+          .min(1)
+          .describe('Playwright selector for the "next page" button clicked between pages'),
+        maxPages: z
+          .number()
+          .int()
+          .positive()
+          .default(5)
+          .describe('Maximum number of pages to collect, including the current page (default 5)'),
+        pageDelay: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe('Milliseconds to wait after each successful page turn (default 0)'),
+      },
+      // Reading data, but the next-button clicks change the page, so it is an action.
+      annotations: ACTION,
+    },
+    async ({ selector: itemSelector, nextSelector, maxPages, pageDelay }) =>
+      text(await browser.collectPages({ selector: itemSelector, nextSelector, maxPages, pageDelay })),
+  );
+
   // JavaScript and diagnostics
 
   tool(

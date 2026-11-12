@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `collectPages` tool: walks a paginated list in one call. It reads the text of every item matching a `selector` on each page, clicks a `nextSelector` to advance, and returns `{ pages, totalItems, stoppedReason }`. It always terminates — `maxPages` (default 5), `emptyPage` (a page with no matching items), `noNext` (the next button is missing, invisible or unclickable) or `stalled` (the click leaves the URL and items unchanged, so the page is not counted twice). Optional `pageDelay` waits after each page turn. Invalid arguments return a tool error instead of falling back to defaults.
+
 ## 3.0.0
 
 A rewrite on the official MCP TypeScript SDK. It fixes several tools that didn't work and removes duplicate tools.

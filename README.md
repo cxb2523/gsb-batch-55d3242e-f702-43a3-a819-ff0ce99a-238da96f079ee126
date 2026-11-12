@@ -70,6 +70,7 @@ The browser starts automatically on first use. Call `openBrowser` first only if 
 | Waiting | `waitForText`, `waitForSelector` |
 | Capture | `screenshot` |
 | Page content | `getPageInfo`, `getPageText`, `getPageSource`, `getElementContent`, `inspectElement`, `getElementHierarchy`, `getLinks`, `getImages`, `getForms`, `getMetaTags`, `getScripts`, `getStylesheets` |
+| Pagination | `collectPages` |
 | JavaScript and debugging | `executeJavaScript`, `getConsoleMessages`, `getNetworkRequests` |
 
 Parameters and behaviour for each tool are in **[docs/tools.md](docs/tools.md)**.

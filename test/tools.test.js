@@ -130,6 +130,101 @@ describe('waiting', () => {
   });
 });
 
+describe('collectPages', () => {
+  const itemSelector = '.item';
+  const nextSelector = '#next';
+
+  test('walks every page until the next button disappears (noNext)', async () => {
+    await mcp.call('navigate', { url: `${site.url}/pagination/page1.html` });
+    const result = await mcp.callJson('collectPages', { selector: itemSelector, nextSelector });
+    assert.equal(result.stoppedReason, 'noNext');
+    assert.equal(result.pages.length, 3);
+    assert.deepEqual(result.pages, [
+      ['Page 1 — Item A', 'Page 1 — Item B', 'Page 1 — Item C'],
+      ['Page 2 — Item D', 'Page 2 — Item E', 'Page 2 — Item F'],
+      ['Page 3 — Item G', 'Page 3 — Item H'],
+    ]);
+    assert.equal(result.totalItems, 8);
+  });
+
+  test('applies defaults (maxPages 5, pageDelay 0) when optional args are omitted', async () => {
+    await mcp.call('navigate', { url: `${site.url}/pagination/page1.html` });
+    const result = await mcp.callJson('collectPages', { selector: itemSelector, nextSelector });
+    assert.equal(result.pages.length, 3);
+    assert.equal(result.totalItems, 8);
+  });
+
+  test('stops at maxPages and reports "maxPages"', async () => {
+    await mcp.call('navigate', { url: `${site.url}/pagination/page1.html` });
+    const start = Date.now();
+    const result = await mcp.callJson('collectPages', {
+      selector: itemSelector,
+      nextSelector,
+      maxPages: 2,
+      pageDelay: 100,
+    });
+    assert.ok(Date.now() - start >= 100, 'pageDelay should be awaited after the page turn');
+    assert.equal(result.stoppedReason, 'maxPages');
+    assert.equal(result.pages.length, 2);
+    assert.deepEqual(result.pages[0], ['Page 1 — Item A', 'Page 1 — Item B', 'Page 1 — Item C']);
+    assert.deepEqual(result.pages[1], ['Page 2 — Item D', 'Page 2 — Item E', 'Page 2 — Item F']);
+    assert.equal(result.totalItems, 6);
+  });
+
+  test('records the empty page as [] and stops with "emptyPage"', async () => {
+    // The root fixture has no element matching .item.
+    await mcp.call('navigate', { url: `${site.url}/` });
+    const result = await mcp.callJson('collectPages', { selector: itemSelector, nextSelector });
+    assert.equal(result.stoppedReason, 'emptyPage');
+    assert.deepEqual(result.pages, [[]]);
+    assert.equal(result.totalItems, 0);
+  });
+
+  test('stops with "noNext" when the next button is invisible', async () => {
+    await mcp.call('navigate', { url: `${site.url}/pagination/stalled.html` });
+    const result = await mcp.callJson('collectPages', { selector: itemSelector, nextSelector: '#next-hidden' });
+    assert.equal(result.stoppedReason, 'noNext');
+    assert.equal(result.pages.length, 1);
+    assert.deepEqual(result.pages[0], ['Stuck — Item A', 'Stuck — Item B']);
+    assert.equal(result.totalItems, 2);
+  });
+
+  test('stops with "noNext" when the next selector matches nothing', async () => {
+    await mcp.call('navigate', { url: `${site.url}/pagination/page1.html` });
+    const result = await mcp.callJson('collectPages', { selector: itemSelector, nextSelector: '#does-not-exist' });
+    assert.equal(result.stoppedReason, 'noNext');
+    assert.equal(result.pages.length, 1);
+    assert.equal(result.totalItems, 3);
+  });
+
+  test('treats a click that leaves the URL and items unchanged as "stalled"', async () => {
+    await mcp.call('navigate', { url: `${site.url}/pagination/stalled.html` });
+    const result = await mcp.callJson('collectPages', { selector: itemSelector, nextSelector });
+    assert.equal(result.stoppedReason, 'stalled');
+    // The repeated page must not be counted a second time.
+    assert.equal(result.pages.length, 1);
+    assert.deepEqual(result.pages[0], ['Stuck — Item A', 'Stuck — Item B']);
+    assert.equal(result.totalItems, 2);
+  });
+
+  test('rejects invalid arguments with readable tool errors instead of applying defaults', async () => {
+    const cases = [
+      { args: { selector: '', nextSelector }, reason: /selector/ },
+      { args: { selector: itemSelector, nextSelector: '' }, reason: /nextSelector|selector/i },
+      { args: { selector: itemSelector, nextSelector, maxPages: 0 }, reason: /maxPages/ },
+      { args: { selector: itemSelector, nextSelector, maxPages: -3 }, reason: /maxPages/ },
+      { args: { selector: itemSelector, nextSelector, maxPages: 2.5 }, reason: /maxPages/ },
+      { args: { selector: itemSelector, nextSelector, pageDelay: -1 }, reason: /pageDelay/ },
+    ];
+    for (const { args, reason } of cases) {
+      const result = await mcp.client.callTool({ name: 'collectPages', arguments: args });
+      assert.equal(result.isError, true, `expected error for ${JSON.stringify(args)}`);
+      assert.match(result.content[0].text, /validation/i);
+      assert.match(result.content[0].text, reason);
+    }
+  });
+});
+
 describe('content extraction', () => {
   test('getPageText returns visible text', async () => {
     assert.match(await mcp.call('getPageText'), /Hello PlayMCP/);

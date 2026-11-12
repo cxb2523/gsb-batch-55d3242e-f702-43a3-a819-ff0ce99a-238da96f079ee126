@@ -166,6 +166,34 @@ Returns the screenshot as an image the model can see. If you give `path`, it als
 | `getScripts` | | Inline script source, and `// External script: <url>` for external ones |
 | `getStylesheets` | | Inline CSS, and `/* External stylesheet: <url> */` for linked ones |
 
+## Multi-page collection
+
+### `collectPages`
+
+Turns the read → click "next" → read loop into one call that always terminates and reports why it stopped. It starts on the current page, collects the visible text of every element matching `selector` into one string array per page, then clicks `nextSelector` to advance.
+
+| Parameter | Type | Default |
+| --- | --- | --- |
+| `selector` | string, required | Playwright selector for each item container |
+| `nextSelector` | string, required | Playwright selector for the "next page" button |
+| `maxPages` | positive integer | `5` |
+| `pageDelay` | non-negative integer, milliseconds | `0` — waited after each successful page turn |
+
+Returns `{ pages, totalItems, stoppedReason }`:
+
+- `pages` — an array of pages, each an array of the matched items' text, in collection order.
+- `totalItems` — sum of the item counts across every collected page.
+- `stoppedReason`, one of:
+
+| Reason | When |
+| --- | --- |
+| `maxPages` | `maxPages` pages were collected |
+| `emptyPage` | A page had no element matching `selector`; that page is recorded as `[]` and collection stops immediately |
+| `noNext` | The next button does not exist, is not visible, or clicking it fails (for example a timeout). Pages collected so far are kept |
+| `stalled` | After clicking, the URL is the same as the previous page **and** the items are identical. The repeated page is not counted again |
+
+Invalid arguments (an empty `selector` or `nextSelector`, a non-positive `maxPages`, or a negative `pageDelay`) come back as a tool error; defaults are never substituted for invalid values.
+
 ## JavaScript and debugging
 
 ### `executeJavaScript`

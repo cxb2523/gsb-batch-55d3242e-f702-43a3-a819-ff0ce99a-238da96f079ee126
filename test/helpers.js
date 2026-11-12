@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
+import { isAbsolute, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../dist/server.js';
 
@@ -13,17 +14,44 @@ const PIXEL = Buffer.from(
   'base64',
 );
 
+const CONTENT_TYPES = new Map([
+  ['.html', 'text/html'],
+  ['.png', 'image/png'],
+  ['.js', 'text/javascript'],
+  ['.css', 'text/css'],
+  ['.json', 'application/json'],
+]);
+
 /** Serves test/fixtures on a random local port. */
 export async function startFixtureServer() {
   const server = createHttpServer(async (req, res) => {
     const path = new URL(req.url, 'http://localhost').pathname;
     if (path === '/pixel.png') {
       res.writeHead(200, { 'content-type': 'image/png' }).end(PIXEL);
-    } else if (path === '/second.html') {
+      return;
+    }
+    if (path === '/second.html') {
       res.writeHead(200, { 'content-type': 'text/html' }).end('<title>Second</title><p>Second page</p>');
-    } else if (path === '/' || path === '/index.html') {
-      res.writeHead(200, { 'content-type': 'text/html' }).end(await readFile(`${fixtures}index.html`));
-    } else {
+      return;
+    }
+    if (path === '/' || path === '/index.html') {
+      res.writeHead(200, { 'content-type': 'text/html' }).end(await readFile(join(fixtures, 'index.html')));
+      return;
+    }
+
+    // Generic static serving for any other file under test/fixtures (e.g. /pagination/page1.html).
+    const relative = decodeURIComponent(path).replace(/^\/+/, '');
+    const filePath = normalize(isAbsolute(relative) ? relative : join(fixtures, relative));
+    const insideFixtures = filePath === fixtures || filePath.startsWith(fixtures.endsWith(sep) ? fixtures : fixtures + sep);
+    if (!insideFixtures) {
+      res.writeHead(403).end('forbidden');
+      return;
+    }
+    try {
+      const body = await readFile(filePath);
+      const ext = filePath.slice(filePath.lastIndexOf('.'));
+      res.writeHead(200, { 'content-type': CONTENT_TYPES.get(ext) ?? 'application/octet-stream' }).end(body);
+    } catch {
       res.writeHead(404).end('not found');
     }
   });

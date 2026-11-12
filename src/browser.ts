@@ -26,11 +26,28 @@ export interface HierarchyOptions {
   includeAttributes: boolean;
 }
 
+export interface CollectPagesOptions {
+  selector: string;
+  nextSelector: string;
+  maxPages: number;
+  pageDelay: number;
+}
+
+export type CollectPagesStoppedReason = 'maxPages' | 'emptyPage' | 'noNext' | 'stalled';
+
+export interface CollectPagesResult {
+  pages: string[][];
+  totalItems: number;
+  stoppedReason: CollectPagesStoppedReason;
+}
+
 export type DialogPolicy = { accept: boolean; promptText?: string };
 
 const MAX_BUFFERED_EVENTS = 1000;
 const DEFAULT_TIMEOUT = 10_000;
 const NAVIGATION_TIMEOUT = 30_000;
+// After clicking "next" we wait this long for a same-URL (SPA) re-render before deciding it stalled.
+const SETTLE_TIMEOUT = 2_000;
 
 /** Thrown for failures the caller can fix; `hint` is surfaced to the model. */
 export class BrowserError extends Error {
@@ -410,6 +427,90 @@ export class BrowserController {
       },
       { maxDepth, includeText, includeAttributes },
     );
+  }
+
+  /**
+   * Walks a paginated list starting on the current page: reads the text of every
+   * element matching `selector` on each page, then clicks `nextSelector` to continue.
+   * The loop always terminates, with the reason reported in `stoppedReason`.
+   */
+  async collectPages({ selector, nextSelector, maxPages, pageDelay }: CollectPagesOptions): Promise<CollectPagesResult> {
+    // Defence in depth: the MCP zod schema is the primary validation, but callers
+    // using BrowserController directly must get an explicit error instead of silent defaults.
+    if (typeof selector !== 'string' || selector.length === 0) {
+      throw new BrowserError('collectPages: "selector" must be a non-empty string');
+    }
+    if (typeof nextSelector !== 'string' || nextSelector.length === 0) {
+      throw new BrowserError('collectPages: "nextSelector" must be a non-empty string');
+    }
+    if (!Number.isInteger(maxPages) || maxPages <= 0) {
+      throw new BrowserError('collectPages: "maxPages" must be a positive integer');
+    }
+    if (!Number.isInteger(pageDelay) || pageDelay < 0) {
+      throw new BrowserError('collectPages: "pageDelay" must be a non-negative integer');
+    }
+
+    const page = await this.getPage();
+    const pages: string[][] = [];
+    let stoppedReason: CollectPagesStoppedReason | undefined;
+
+    while (pages.length < maxPages) {
+      const items = await page.locator(selector).allInnerTexts();
+      if (items.length === 0) {
+        // Record the empty page and stop immediately, so the gap is visible in the result.
+        pages.push([]);
+        stoppedReason = 'emptyPage';
+        break;
+      }
+      pages.push(items);
+
+      if (pages.length >= maxPages) {
+        stoppedReason = 'maxPages';
+        break;
+      }
+
+      const previousUrl = page.url();
+      const next = page.locator(nextSelector).first();
+
+      // A missing or invisible next button means there is nowhere to go.
+      try {
+        await next.waitFor({ state: 'visible' });
+      } catch {
+        stoppedReason = 'noNext';
+        break;
+      }
+
+      // Race the click against navigation: a full-page navigation would reject the
+      // click promise, while a same-URL (SPA) update resolves it.
+      const click = next.click();
+      const settle = page.waitForLoadState('domcontentloaded').then(
+        () => undefined,
+        () => undefined,
+      );
+      const outcome = await Promise.allSettled([click, settle]);
+      if (outcome[0].status === 'rejected') {
+        // Playwright throws for not-found, detached, hidden or timed-out clicks.
+        stoppedReason = 'noNext';
+        break;
+      }
+      // SPA pages don't navigate: give an in-page re-render a short, bounded chance.
+      if (page.url() === previousUrl) {
+        await page
+          .waitForLoadState('domcontentloaded', { timeout: SETTLE_TIMEOUT })
+          .catch(() => undefined);
+      }
+
+      const nextItems = await page.locator(selector).allInnerTexts();
+      if (page.url() === previousUrl && JSON.stringify(nextItems) === JSON.stringify(items)) {
+        // Same URL and identical content: the click did not turn the page.
+        stoppedReason = 'stalled';
+        break;
+      }
+
+      if (pageDelay > 0) await page.waitForTimeout(pageDelay);
+    }
+
+    return { pages, totalItems: pages.reduce((sum, current) => sum + current.length, 0), stoppedReason: stoppedReason! };
   }
 
   /**
