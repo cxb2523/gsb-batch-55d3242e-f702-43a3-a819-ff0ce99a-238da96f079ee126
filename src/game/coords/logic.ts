@@ -1,6 +1,32 @@
-import type { TCoordinate, TPlayerColour, TToken } from '../../types';
+import type { TCoordinate, TPlayerColour, TToken, TTokenAlignmentData } from '../../types';
 import { TOKEN_SAFE_COORDINATES } from '../tokens/constants';
 import { tokenPaths, expandedGeneralTokenPath, expandedTokenHomeEntryPath } from '../tokens/paths';
+
+export type TBoardDimensions = {
+  boardTileSize: number;
+  tokenHeight: number;
+  tokenWidth: number;
+};
+
+/**
+ * Pure coordinate-to-pixel conversion: positions a token so its centre lands on
+ * the tile centre, then shifts it by the alignment offset (expressed in tile
+ * units). Deterministic — the same coordinates, alignment data and board
+ * dimensions always yield the same pixel position.
+ */
+export function coordsToPosition(
+  coords: TCoordinate,
+  tokenAlignmentData: TTokenAlignmentData,
+  boardDimensions: TBoardDimensions
+): { x: number; y: number } {
+  const { boardTileSize, tokenHeight, tokenWidth } = boardDimensions;
+  const { xOffset, yOffset } = tokenAlignmentData;
+  const tileCenterX = coords.x * boardTileSize + boardTileSize / 2;
+  const tileCenterY = coords.y * boardTileSize + boardTileSize / 2;
+  const x = tileCenterX - tokenWidth / 2 + xOffset * boardTileSize;
+  const y = tileCenterY - tokenHeight / 2 + yOffset * boardTileSize;
+  return { x, y };
+}
 
 export function getDistanceInTokenPath(
   colour: TPlayerColour,

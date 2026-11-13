@@ -7,7 +7,7 @@ import { retrieveSaveFromStorage } from './storage';
 import { validateStoredState } from './validator';
 import type { RootState } from '../../state/store';
 import { initialState as initialDiceState } from '../../state/slices/diceSlice';
-import { defaultTokenAlignmentData, getTokenAlignmentData } from '../tokens/alignment';
+import { assignTokenAlignmentData, defaultTokenAlignmentData } from '../tokens/alignment';
 import { tokensWithCoord } from '../tokens/logic';
 import type { TResult } from '../../types/storage';
 
@@ -72,8 +72,8 @@ export const retrieveState = (currentState: RootState): TResult<RootState, strin
 
   for (const coord of uniqueCoords) {
     const tokensInCoord = tokensWithCoord(coord, newState.players.players);
-    const algData = getTokenAlignmentData(tokensInCoord.length);
-    tokensInCoord.forEach((t, i) => (t.tokenAlignmentData = algData[i]));
+    const assignments = assignTokenAlignmentData(tokensInCoord);
+    tokensInCoord.forEach((t, i) => (t.tokenAlignmentData = assignments[i].alignmentData));
   }
 
   for (const colour of data.playerFinishOrder) {

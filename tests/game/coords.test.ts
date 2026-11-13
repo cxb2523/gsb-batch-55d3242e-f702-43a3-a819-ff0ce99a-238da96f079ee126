@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   areCoordsEqual,
   areTokensOnOverlappingPaths,
+  coordsToPosition,
   getDistanceBetweenTokens,
   getDistanceInTokenPath,
   getHomeCoordForColour,
@@ -9,6 +10,7 @@ import {
   isCoordASafeSpot,
   isCoordInHomeEntryPathForColour,
 } from '../../src/game/coords/logic';
+import { defaultTokenAlignmentData } from '../../src/game/tokens/alignment';
 import { playerSequences } from '../../src/game/players/constants';
 import { tokenPaths } from '../../src/game/tokens/paths';
 import { TOKEN_SAFE_COORDINATES } from '../../src/game/tokens/constants';
@@ -129,6 +131,35 @@ describe('Test coords/logic', () => {
       const token2: TToken = { ...DUMMY_TOKEN, colour: 'red', coordinates: { x: 0, y: 8 } };
       expect(getDistanceBetweenTokens(token1, token2)).toBe(-1);
       expect(getDistanceBetweenTokens(token2, token1)).toBe(-1);
+    });
+  });
+  describe('coordsToPosition', () => {
+    const board = { boardTileSize: 40, tokenHeight: 32, tokenWidth: 20 };
+
+    it('centres the token on the tile when the alignment offsets are zero', () => {
+      expect(coordsToPosition({ x: 2, y: 3 }, defaultTokenAlignmentData, board)).toEqual({
+        x: 2 * 40 + 40 / 2 - 20 / 2,
+        y: 3 * 40 + 40 / 2 - 32 / 2,
+      });
+    });
+
+    it('shifts the token by the alignment offset scaled by the tile size', () => {
+      const position = coordsToPosition(
+        { x: 1, y: 1 },
+        { xOffset: 0.25, yOffset: -0.5, scaleFactor: 0.8 },
+        board
+      );
+      expect(position).toEqual({
+        x: 1 * 40 + 40 / 2 - 20 / 2 + 0.25 * 40,
+        y: 1 * 40 + 40 / 2 - 32 / 2 - 0.5 * 40,
+      });
+    });
+
+    it('returns a stable result for the same coordinate and alignment input', () => {
+      const alignment = { xOffset: -0.32, yOffset: 0.2, scaleFactor: 0.6 };
+      const first = coordsToPosition({ x: 6, y: 11 }, alignment, board);
+      const second = coordsToPosition({ x: 6, y: 11 }, alignment, board);
+      expect(first).toEqual(second);
     });
   });
   describe('getDistanceInTokenPath', () => {

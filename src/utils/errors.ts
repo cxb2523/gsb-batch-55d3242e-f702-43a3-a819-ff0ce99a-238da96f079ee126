@@ -19,4 +19,7 @@ export const ERRORS = {
     `Token with colour ${playerColour} and ID ${id} is already unlocked`,
   numberOfStepsNegative: () => `Number of steps cannot be negative`,
   gameEnded: () => 'Game has ended',
+  invalidTokenCountForAlignment: (count: number) =>
+    `Cannot spread tokens on one tile: the alignment table supports between 1 and 16 tokens on the same tile, received ${count}`,
+  tokensNotOnSameTile: () => 'All tokens must be on the same tile to be aligned',
 };

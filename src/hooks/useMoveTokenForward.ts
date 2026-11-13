@@ -8,6 +8,7 @@ import { useUpdateTokenPositionAndAlignment } from './useUpdateTokenPositionAndA
 import { deactivateAllTokens, getToken, setIsAnyTokenMoving } from '../state/slices/playersSlice';
 import { tokenMotionRegistry } from '../game/movement/tokenMotionRegistry';
 import { getGloballyUniqueTokenId } from '../game/tokens/logic';
+import { realignTokensAfterMove } from '../game/tokens/alignment';
 import { useCoordsToPosition } from './useCoordsToPosition';
 import { transitionStates } from '../game/tokens/constants';
 
@@ -29,6 +30,7 @@ export const useMoveTokenForward = () => {
       dispatch(setIsAnyTokenMoving(true));
       const entry = tokenMotionRegistry.get(getGloballyUniqueTokenId(colour, id));
       if (!entry) return;
+      const originCoords = { ...token.coordinates };
       entry.setExternallyAnimating(true);
       for (const coord of moveSequence) {
         updateTokenPositionAndAlignment({ colour, id, newCoords: coord, direction: 'forward' });
@@ -37,6 +39,15 @@ export const useMoveTokenForward = () => {
         await entry.animateTo(x, y, { duration: durationMs / 1000, ease: timingFn });
       }
       entry.setExternallyAnimating(false);
+      if (moveSequence.length !== 0) {
+        const playersState = store.getState().players;
+        realignTokensAfterMove(
+          playersState.players,
+          getToken(playersState, colour, id),
+          originCoords,
+          dispatch
+        );
+      }
       dispatch(setIsAnyTokenMoving(false));
     },
     [dispatch, store, updateTokenPositionAndAlignment, getPosition]
